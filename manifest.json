@@ -1,0 +1,19 @@
+{
+  "name": "QuickCric",
+  "short_name": "QuickCric",
+  "description": "Fast, zero-config cricket scoring",
+  "start_url": ".",
+  "scope": ".",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#0a1f1a",
+  "theme_color": "#0a1f1a",
+  "icons": [
+    {
+      "src": "icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}
