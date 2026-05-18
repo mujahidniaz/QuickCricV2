@@ -856,6 +856,7 @@ input { background: var(--paper); }
   text-underline-offset: 3px;
   font-weight: 500;
 }
+.foot-links .danger-link { color: var(--danger); }
 
 /* ===================== Modal ===================== */
 .modal-bg {
@@ -938,6 +939,58 @@ input { background: var(--paper); }
 }
 
 .btn-tall { padding: 18px 20px; font-size: 17px; min-height: 56px; }
+
+.abort-modal {
+  padding: 24px 20px calc(26px + env(safe-area-inset-bottom, 0px));
+  gap: 14px;
+  text-align: center;
+}
+.abort-modal h3 {
+  font-size: 22px;
+  font-weight: 800;
+  color: var(--danger);
+}
+.abort-modal p {
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--ink);
+  text-align: center;
+}
+.abort-modal .abort-warn-icon {
+  width: 56px;
+  height: 56px;
+  border-radius: 50%;
+  background: var(--danger-soft);
+  color: var(--danger);
+  font-size: 32px;
+  font-weight: 800;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin: 0 auto 4px;
+  border: 2px solid var(--danger);
+}
+.abort-modal .abort-summary {
+  background: var(--cream-deep);
+  border-radius: var(--radius);
+  padding: 12px 14px;
+  font-weight: 700;
+  font-size: 14px;
+  color: var(--ink);
+}
+.abort-modal .abort-summary .muted {
+  font-size: 12px;
+  color: var(--ink-faint);
+  font-weight: 600;
+  margin-top: 2px;
+}
+.abort-options {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 4px;
+}
+.abort-options .btn { flex: none; }
 
 /* ===================== Innings break / result ===================== */
 .break-screen, .result-screen {

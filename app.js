@@ -7,6 +7,7 @@ const STORE_INSTALL_DISMISSED = 'quickcric:install-dismissed';
 const STORE_DEVICE_ID = 'quickcric:device-id';
 const MAX_UNDO = 2;
 const POLL_INTERVAL_MS = 3000;
+const IN_PROGRESS_TTL_MS = 6 * 60 * 60 * 1000;
 
 const DEVICE_ID = (() => {
   let id = '';
@@ -65,7 +66,13 @@ const audio = {
   toggle() {
     this.enabled = !this.enabled;
     try { localStorage.setItem(STORE_AUDIO, this.enabled ? 'on' : 'off'); } catch {}
-    if (!this.enabled && 'speechSynthesis' in window) speechSynthesis.cancel();
+    if (!this.enabled) {
+      if ('speechSynthesis' in window) speechSynthesis.cancel();
+      if (this._cur) {
+        try { this._cur.pause(); this._cur.currentTime = 0; } catch {}
+        this._cur = null;
+      }
+    }
   },
 
   ensureCtx() {
@@ -105,12 +112,12 @@ const audio = {
   },
 
   fileForBall(d) {
-    if (d.wicket) return 'wicket';
+    if (d.wicket) return { name: 'wicket' };
     if (d.extra) return null;
-    if (d.runs === 6) return 'six';
-    if (d.runs === 4) return 'four';
-    if (d.runs === 2) return 'two';
-    if (d.runs === 0) return 'dot';
+    if (d.runs === 6) return { name: 'winner', maxSeconds: 2.5 };
+    if (d.runs === 4) return { name: 'four' };
+    if (d.runs === 2) return { name: 'two' };
+    if (d.runs === 0) return { name: 'dot' };
     return null;
   },
 
@@ -165,7 +172,7 @@ const audio = {
 
     const file = this.fileForBall(d);
     if (file) {
-      const played = await this.playFile(file);
+      const played = await this.playFile(file.name, file.maxSeconds);
       if (played) return;
     }
 
@@ -299,7 +306,7 @@ function showEventBanner(banner, ms = 1800) {
   clearTimeout(showEventBanner._t);
   showEventBanner._t = setTimeout(() => {
     state.eventBanner = null;
-    render();
+    document.querySelector('.event-banner')?.remove();
   }, ms);
   render();
 }
@@ -313,7 +320,10 @@ function showToast(msg, ms = 1500) {
   state.toast = msg;
   render();
   clearTimeout(showToast._t);
-  showToast._t = setTimeout(() => { state.toast = null; render(); }, ms);
+  showToast._t = setTimeout(() => {
+    state.toast = null;
+    document.querySelector('.toast')?.remove();
+  }, ms);
 }
 
 // ---------- Storage ----------
@@ -342,11 +352,32 @@ async function refreshHistory() {
     const remote = await window.QCDB.loadMatches();
     state.history = remote;
     saveHistory(remote);
+    purgeStaleInProgress();
   } catch (err) {
     console.warn('history fetch failed', err);
   } finally {
     state.loadingHistory = false;
     render();
+  }
+}
+
+function purgeStaleInProgress() {
+  const now = Date.now();
+  const stale = state.history.filter(m =>
+    m.status !== 'completed' && (now - (m.startedAt || 0)) > IN_PROGRESS_TTL_MS
+  );
+  if (stale.length === 0) return;
+  const staleIds = new Set(stale.map(m => m.id));
+  if (dbOn()) {
+    stale.forEach(m => {
+      window.QCDB.deleteMatch(m.id).catch(err => console.warn('stale cleanup failed', err));
+    });
+  }
+  state.history = state.history.filter(m => !staleIds.has(m.id));
+  saveHistory(state.history);
+  if (state.current && staleIds.has(state.current.id)) {
+    state.current = null;
+    saveCurrent(null);
   }
 }
 
@@ -735,6 +766,18 @@ async function loadSharedById(id) {
 // ---------- Renderers ----------
 function render() {
   const root = $('app');
+
+  const savedInputs = {};
+  root.querySelectorAll('input').forEach((input) => {
+    if (input.id) savedInputs[input.id] = input.value;
+  });
+  const focusedEl = document.activeElement;
+  const focusedId = (focusedEl && focusedEl.id && root.contains(focusedEl)) ? focusedEl.id : null;
+  let selStart = null, selEnd = null;
+  if (focusedId && focusedEl && 'selectionStart' in focusedEl) {
+    try { selStart = focusedEl.selectionStart; selEnd = focusedEl.selectionEnd; } catch {}
+  }
+
   let html = '';
   let view = state.shared ? 'view' : state.view;
   switch (view) {
@@ -758,8 +801,25 @@ function render() {
   if (state.toast) html += `<div class="toast">${esc(state.toast)}</div>`;
   root.innerHTML = html;
 
-  if (state.modal?.type === 'newBatter') $('new-batter-input')?.focus();
-  else if (state.modal?.type === 'newBowler') $('new-bowler-input')?.focus();
+  Object.entries(savedInputs).forEach(([id, value]) => {
+    if (!value) return;
+    const el = document.getElementById(id);
+    if (el && !el.value) el.value = value;
+  });
+
+  if (focusedId) {
+    const el = document.getElementById(focusedId);
+    if (el) {
+      el.focus();
+      if (selStart != null && selEnd != null) {
+        try { el.setSelectionRange(selStart, selEnd); } catch {}
+      }
+    }
+  } else if (state.modal?.type === 'newBatter') {
+    $('new-batter-input')?.focus();
+  } else if (state.modal?.type === 'newBowler') {
+    $('new-bowler-input')?.focus();
+  }
 }
 
 function renderHome() {
@@ -888,6 +948,7 @@ function renderInningsSetup() {
     <div class="screen">
       <div class="topbar">
         <div class="left">
+          <button class="icon-btn" data-action="back-from-innings-setup" aria-label="Back">←</button>
           <span class="title">${isFirst ? 'Innings 1' : 'Innings 2'}</span>
         </div>
         <div class="right"></div>
@@ -1006,6 +1067,7 @@ function renderScore() {
         </div>
         <div class="foot-links">
           <button data-action="end-innings">All out · end innings</button>
+          <button class="danger-link" data-action="abort-show">Abort match</button>
         </div>
       </div>
     </div>
@@ -1359,7 +1421,31 @@ function renderInstallModal() {
   `;
 }
 
+function renderAbortModal() {
+  const m = state.current;
+  if (!m) return '';
+  return `
+    <div class="modal-bg">
+      <div class="modal abort-modal">
+        <div class="abort-warn-icon">!</div>
+        <h3>Abort this match?</h3>
+        <p>This match will be permanently removed and <strong>cannot be recovered</strong>. The score will not be saved.</p>
+        <div class="abort-summary">
+          <div>${esc(m.teams.A)} vs ${esc(m.teams.B)}</div>
+          <div class="muted">${m.overs} overs · started ${fmtDate(m.startedAt)}</div>
+        </div>
+        <div class="abort-options">
+          <button class="btn btn-primary btn-tall" data-action="dont-abort">Don't abort · back to match</button>
+          <button class="btn btn-secondary btn-tall" data-action="abort-restart">Abort &amp; restart · same teams</button>
+          <button class="btn btn-danger btn-tall" data-action="abort-confirm">Abort · don't save</button>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
 function renderModal() {
+  if (state.modal.type === 'abort') return renderAbortModal();
   if (state.modal.type === 'install') return renderInstallModal();
   if (state.modal.type === 'newBatter') {
     return `
@@ -1490,7 +1576,68 @@ function handle(action, dataset) {
     case 'end-innings':
       if (confirm('End this innings now?')) { endInningsManually(); afterInningsEnd(); }
       break;
+    case 'abort-show':
+      state.modal = { type: 'abort' };
+      render();
+      break;
+    case 'dont-abort':
+      state.modal = null;
+      render();
+      break;
+    case 'abort-confirm': {
+      const m = state.current;
+      if (m) {
+        if (dbOn()) window.QCDB.deleteMatch(m.id).catch(err => console.warn(err));
+        state.history = state.history.filter(x => x.id !== m.id);
+        saveHistory(state.history);
+      }
+      state.current = null;
+      saveCurrent(null);
+      state.modal = null;
+      state.detail = null;
+      state.view = 'home';
+      render();
+      showToast('Match aborted');
+      break;
+    }
+    case 'abort-restart': {
+      const m = state.current;
+      if (!m) { state.modal = null; render(); break; }
+      const { A, B } = m.teams;
+      const overs = m.overs;
+      const battingFirst = m.battingFirst;
+      if (dbOn()) window.QCDB.deleteMatch(m.id).catch(err => console.warn(err));
+      state.history = state.history.filter(x => x.id !== m.id);
+      saveHistory(state.history);
+      state.current = null;
+      saveCurrent(null);
+      state.setup = { teamA: A, teamB: B, overs, battingFirst };
+      state.modal = null;
+      state.detail = null;
+      state.ball = emptyBall();
+      state.view = 'setup';
+      render();
+      showToast('Confirm setup, then Start match');
+      break;
+    }
     case 'start-next-innings': state.view = 'innings-setup'; render(); break;
+    case 'back-from-innings-setup': {
+      const m = state.current;
+      if (!m) { state.view = 'home'; render(); break; }
+      if (m.innings.length === 0) {
+        if (dbOn()) window.QCDB.deleteMatch(m.id).catch(() => {});
+        state.history = state.history.filter(x => x.id !== m.id);
+        saveHistory(state.history);
+        state.setup = { teamA: m.teams.A, teamB: m.teams.B, overs: m.overs, battingFirst: m.battingFirst };
+        state.current = null;
+        saveCurrent(null);
+        state.view = 'setup';
+      } else {
+        state.view = 'innings-break';
+      }
+      render();
+      break;
+    }
     case 'share': shareCurrent(); break;
     case 'toggle-audio': audio.toggle(); render(); break;
     case 'install-show':
@@ -1549,6 +1696,7 @@ async function init() {
 
   state.current = loadCurrent();
   state.history = loadHistory();
+  purgeStaleInProgress();
   state.view = 'home';
   render();
 
