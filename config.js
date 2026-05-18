@@ -14,5 +14,5 @@ window.QC_CONFIG = {
   SUPABASE_ANON_KEY: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im53ZnppdnpnZndydWhlZHhweXV2Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzkwMzc5MDcsImV4cCI6MjA5NDYxMzkwN30.0UI0ouSISdnkfx1Iw91hgEOCVaH9-zeHNbhLr_Tl3Qg',
 
   // Passcode required to delete a saved match. Change this to your own.
-  DELETE_PASSCODE: '1234'
+  DELETE_PASSCODE: '10315'
 };
