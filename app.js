@@ -4,8 +4,19 @@ const STORE_HIST = 'quickcric:matches';
 const STORE_CURRENT = 'quickcric:current';
 const STORE_AUDIO = 'quickcric:audio';
 const STORE_INSTALL_DISMISSED = 'quickcric:install-dismissed';
+const STORE_DEVICE_ID = 'quickcric:device-id';
 const MAX_UNDO = 2;
 const POLL_INTERVAL_MS = 3000;
+
+const DEVICE_ID = (() => {
+  let id = '';
+  try { id = localStorage.getItem(STORE_DEVICE_ID) || ''; } catch {}
+  if (!id) {
+    id = 'dev_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+    try { localStorage.setItem(STORE_DEVICE_ID, id); } catch {}
+  }
+  return id;
+})();
 
 const SIX_PHRASES = [
   'SIX! What a strike!',
@@ -76,7 +87,7 @@ const audio = {
     speechSynthesis.speak(u);
   },
 
-  async playFile(name) {
+  async playFile(name, maxSeconds) {
     if (!this.enabled) return false;
     try {
       if (this._cur) { try { this._cur.pause(); this._cur.currentTime = 0; } catch {} }
@@ -84,6 +95,11 @@ const audio = {
       a.volume = 0.8;
       this._cur = a;
       await a.play();
+      if (maxSeconds) {
+        setTimeout(() => {
+          try { if (!a.paused) { a.pause(); a.currentTime = 0; } } catch {}
+        }, maxSeconds * 1000);
+      }
       return true;
     } catch { return false; }
   },
@@ -182,7 +198,7 @@ const audio = {
 
   onMatchStart() {
     if (!this.enabled) return;
-    this.playFile('start').then(p => { if (!p) this.speak('Match starts now!'); });
+    this.playFile('start', 10).then(p => { if (!p) this.speak('Match starts now!'); });
   },
 
   onMatchWin(text) {
@@ -240,6 +256,8 @@ const state = {
   setup: { teamA: '', teamB: '', overs: 6, battingFirst: 'A' },
   loadingHistory: false,
   installTab: 'android',
+  historyFilter: 'all',
+  historyDate: '',
 };
 
 function emptyBall() { return { runs: null, extra: null, wicket: false }; }
@@ -254,6 +272,42 @@ const fmtOvers = (balls) => `${Math.floor(balls / 6)}.${balls % 6}`;
 const fmtDate = (ts) => new Date(ts).toLocaleDateString(undefined, { day: '2-digit', month: 'short', year: 'numeric' });
 const fmtRate = (runs, balls) => balls === 0 ? '0.00' : ((runs / balls) * 6).toFixed(2);
 const dbOn = () => !!(window.QCDB && window.QCDB.enabled);
+
+function buildEventBanner(d) {
+  if (d.wicket) {
+    const onExtra = d.extra ? `on a ${d.extra === 'wd' ? 'wide' : d.extra === 'nb' ? 'no ball' : d.extra}` : '';
+    return { kind: 'wicket', big: 'WICKET!', sub: onExtra || 'Out' };
+  }
+  if (d.runs === 6) return { kind: 'six', big: 'SIX!', sub: 'Maximum' };
+  if (d.runs === 4) return { kind: 'four', big: 'FOUR!', sub: 'Boundary' };
+  if (d.extra === 'wd') {
+    const total = 1 + d.runs;
+    return { kind: 'wide', big: 'WIDE', sub: `+${total} run${total > 1 ? 's' : ''}` };
+  }
+  if (d.extra === 'nb') {
+    const total = 1 + d.runs;
+    return { kind: 'nb', big: 'NO BALL', sub: `+${total} run${total > 1 ? 's' : ''} · free hit next` };
+  }
+  if (d.extra === 'lb') return { kind: 'lb', big: `LEG BYE${d.runs > 1 ? 'S' : ''}`, sub: `${d.runs} run${d.runs > 1 ? 's' : ''}` };
+  if (d.extra === 'b') return { kind: 'b', big: `BYE${d.runs > 1 ? 'S' : ''}`, sub: `${d.runs} run${d.runs > 1 ? 's' : ''}` };
+  if (d.runs === 0) return { kind: 'dot', big: 'DOT BALL', sub: 'No run' };
+  return { kind: 'runs', big: `${d.runs} RUN${d.runs > 1 ? 'S' : ''}`, sub: 'Off the bat' };
+}
+
+function showEventBanner(banner, ms = 1800) {
+  state.eventBanner = banner;
+  clearTimeout(showEventBanner._t);
+  showEventBanner._t = setTimeout(() => {
+    state.eventBanner = null;
+    render();
+  }, ms);
+  render();
+}
+
+function clearEventBanner() {
+  state.eventBanner = null;
+  clearTimeout(showEventBanner._t);
+}
 
 function showToast(msg, ms = 1500) {
   state.toast = msg;
@@ -319,6 +373,7 @@ function newInnings(batting, bowling) {
 function newMatch(teamA, teamB, overs, battingFirst) {
   return {
     id: uid(),
+    deviceId: DEVICE_ID,
     startedAt: Date.now(),
     endedAt: null,
     teams: { A: (teamA || '').trim() || 'Team A', B: (teamB || '').trim() || 'Team B' },
@@ -432,6 +487,7 @@ function recordBall(match, sel) {
   audio.onBall(d, wasFreeHit);
   if (!endNow && d.isLegalBall && inn.score.balls % 6 === 0) audio.onOverEnd();
   saveCurrent(match);
+  showEventBanner(buildEventBanner(d));
 }
 
 function undoBall(match) {
@@ -689,11 +745,16 @@ function render() {
     case 'innings-break': html = renderInningsBreak(); break;
     case 'result': html = renderDetail(); break;
     case 'history': html = renderHistory(); break;
+    case 'in-progress': html = renderInProgress(); break;
     case 'detail': html = renderDetail(); break;
     case 'view': html = renderSharedView(); break;
     default: html = renderHome();
   }
   if (state.modal) html += renderModal();
+  if (state.eventBanner) {
+    const b = state.eventBanner;
+    html += `<div class="event-banner kind-${esc(b.kind)}"><div class="big">${esc(b.big)}</div>${b.sub ? `<div class="sub">${esc(b.sub)}</div>` : ''}</div>`;
+  }
   if (state.toast) html += `<div class="toast">${esc(state.toast)}</div>`;
   root.innerHTML = html;
 
@@ -703,11 +764,15 @@ function render() {
 
 function renderHome() {
   const cur = state.current;
-  const items = state.history.filter(m => !cur || m.id !== cur.id).slice(0, 30);
+  const inProgressCount = state.history.filter(m => m.status !== 'completed').length;
+  const pastCount = state.history.filter(m => m.status === 'completed').length;
   return `
     <div class="screen">
       <div class="home-hero">
-        <h1>Quick<span class="accent">Cric</span></h1>
+        <div class="home-brand">
+          <img class="home-logo" src="icon.svg" alt="" aria-hidden="true" />
+          <h1 class="home-title">Quick<span class="accent">Cric</span></h1>
+        </div>
         <p>Tap a ball outcome. Skip the setup. Casual cricket scoring that gets out of your way.</p>
       </div>
       <div class="home-actions">
@@ -720,18 +785,24 @@ function renderHome() {
           <span>${cur ? 'Start new match' : 'Start a match'}</span>
           <span class="arrow">→</span>
         </button>
+        ${inProgressCount > 0 ? `
+          <button class="cta cta-secondary" data-action="in-progress">
+            <span>In-progress matches <span class="count">${inProgressCount}</span></span>
+            <span class="arrow">→</span>
+          </button>` : ''}
+        <button class="cta cta-secondary" data-action="history">
+          <span>
+            Past matches
+            ${state.loadingHistory ? `<span class="loading-dot"></span>` : pastCount > 0 ? `<span class="count">${pastCount}</span>` : ''}
+          </span>
+          <span class="arrow">→</span>
+        </button>
       </div>
       ${!dbOn() ? `
         <div class="config-warn">
           <strong>Cloud sync off.</strong> Open <code>config.js</code> and add your Supabase keys to enable share links and cross-device history.
         </div>` : ''}
-      <div class="section-label">
-        Past matches
-        ${state.loadingHistory ? `<span class="loading-dot"></span>` : ''}
-      </div>
-      ${items.length === 0
-        ? `<div class="empty">${state.loadingHistory ? 'Loading…' : 'No matches yet. Your first one shows up here when you finish.'}</div>`
-        : `<div class="match-list scroll">${items.map(matchCard).join('')}</div>`}
+      <div class="home-fill"></div>
       ${install.shouldShow() ? `
         <div class="install-banner">
           <button class="install-main" data-action="install-show">
@@ -1081,7 +1152,52 @@ function renderTopPerformers(m) {
   `;
 }
 
+const HISTORY_FILTERS = [
+  { id: 'all', label: 'All' },
+  { id: 'today', label: 'Today' },
+  { id: 'week', label: '7 days' },
+  { id: 'month', label: '30 days' },
+];
+
+function filterByDate(matches, filterId, customDate) {
+  if (filterId === 'custom' && customDate) {
+    const [y, mo, d] = customDate.split('-').map(Number);
+    const start = new Date(y, mo - 1, d).setHours(0, 0, 0, 0);
+    const end = start + 86400000;
+    return matches.filter(m => m.startedAt >= start && m.startedAt < end);
+  }
+  if (filterId === 'all') return matches;
+  const now = Date.now();
+  const DAY = 86400000;
+  if (filterId === 'today') {
+    const start = new Date(); start.setHours(0, 0, 0, 0);
+    return matches.filter(m => m.startedAt >= start.getTime());
+  }
+  if (filterId === 'week') return matches.filter(m => now - m.startedAt < 7 * DAY);
+  if (filterId === 'month') return matches.filter(m => now - m.startedAt < 30 * DAY);
+  if (filterId === 'year') {
+    const start = new Date(new Date().getFullYear(), 0, 1).getTime();
+    return matches.filter(m => m.startedAt >= start);
+  }
+  return matches;
+}
+
+function todayIso() {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+}
+
+function fmtDateLabel(iso) {
+  const [y, m, d] = iso.split('-').map(Number);
+  return new Date(y, m-1, d).toLocaleDateString(undefined, { day: '2-digit', month: 'short', year: 'numeric' });
+}
+
 function renderHistory() {
+  const filter = state.historyFilter;
+  const customDate = state.historyDate;
+  const completed = state.history.filter(m => m.status === 'completed');
+  const filtered = filterByDate(completed, filter, customDate);
+  const isCustom = filter === 'custom';
   return `
     <div class="screen">
       <div class="topbar">
@@ -1089,13 +1205,78 @@ function renderHistory() {
           <button class="icon-btn" data-action="back-home">←</button>
           <span class="title">Past matches</span>
         </div>
-        <div class="right"></div>
+        <div class="right">
+          ${state.loadingHistory ? `<span class="loading-dot light"></span>` : ''}
+        </div>
+      </div>
+      <div class="history-filters">
+        ${HISTORY_FILTERS.map(f => `
+          <button class="filter-chip ${filter === f.id ? 'active' : ''}" data-action="history-filter" data-filter="${f.id}">
+            ${esc(f.label)}
+          </button>
+        `).join('')}
+        <label class="filter-chip date-chip ${isCustom ? 'active' : ''}">
+          <span class="date-icon" aria-hidden="true">📅</span>
+          <span class="date-label">${isCustom && customDate ? esc(fmtDateLabel(customDate)) : 'Pick date'}</span>
+          <input id="history-date-input" type="date" value="${esc(customDate || '')}" max="${todayIso()}" />
+        </label>
+        ${isCustom ? `<button class="filter-chip clear-chip" data-action="history-filter" data-filter="all" aria-label="Clear date">×</button>` : ''}
+      </div>
+      <div class="scroll" style="padding: 12px 16px 16px;">
+        ${filtered.length === 0 ? `
+          <div class="empty">${completed.length === 0 ? 'No completed matches yet.' : 'No matches in this range.'}</div>
+        ` : `
+          <div class="history-count">${filtered.length} ${filtered.length === 1 ? 'match' : 'matches'}</div>
+          <div class="match-list" style="padding: 0;">${filtered.map(matchCard).join('')}</div>
+        `}
+      </div>
+    </div>
+  `;
+}
+
+function renderInProgress() {
+  const items = state.history.filter(m => m.status !== 'completed')
+    .sort((a, b) => b.startedAt - a.startedAt);
+  return `
+    <div class="screen">
+      <div class="topbar">
+        <div class="left">
+          <button class="icon-btn" data-action="back-home">←</button>
+          <span class="title">In-progress matches</span>
+        </div>
+        <div class="right">
+          ${state.loadingHistory ? `<span class="loading-dot light"></span>` : ''}
+        </div>
       </div>
       <div class="scroll" style="padding: 16px;">
-        ${state.history.length === 0
-          ? `<div class="empty">No matches yet.</div>`
-          : `<div class="match-list" style="padding: 0;">${state.history.map(matchCard).join('')}</div>`}
+        ${items.length === 0 ? `
+          <div class="empty">No matches in progress.</div>
+        ` : `
+          <div class="history-count">${items.length} ${items.length === 1 ? 'match' : 'matches'}</div>
+          <div class="match-list" style="padding: 0;">
+            ${items.map(inProgressCard).join('')}
+          </div>
+        `}
       </div>
+    </div>
+  `;
+}
+
+function inProgressCard(m) {
+  const sameDevice = m.deviceId === DEVICE_ID;
+  const i1 = m.innings[0], i2 = m.innings[1];
+  return `
+    <div class="match-card-wrap">
+      <button class="match-card in-progress" data-action="view-detail" data-match-id="${esc(m.id)}">
+        <div class="date">${fmtDate(m.startedAt)}</div>
+        <div class="teams">${esc(m.teams.A)} vs ${esc(m.teams.B)}</div>
+        ${i1 ? `<div class="innings-row"><span>${esc(m.teams[i1.batting])}</span><span>${i1.score.runs}/${i1.score.wickets} (${fmtOvers(i1.score.balls)})</span></div>` : ''}
+        ${i2 ? `<div class="innings-row"><span>${esc(m.teams[i2.batting])}</span><span>${i2.score.runs}/${i2.score.wickets} (${fmtOvers(i2.score.balls)})</span></div>` : ''}
+        <div class="result">In progress</div>
+      </button>
+      ${sameDevice
+        ? `<button class="resume-inline" data-action="resume-match" data-match-id="${esc(m.id)}">Resume <span>→</span></button>`
+        : `<div class="other-device-note">Started on another device · view only</div>`}
     </div>
   `;
 }
@@ -1183,11 +1364,14 @@ function renderModal() {
   if (state.modal.type === 'newBatter') {
     return `
       <div class="modal-bg">
-        <div class="modal">
+        <div class="modal name-modal">
           <h3>Next batter</h3>
           <p>A wicket fell. Who's coming in?</p>
-          <input id="new-batter-input" type="text" placeholder="Batter name" autocomplete="off" />
-          <button class="btn btn-primary" data-action="confirm-new-batter">Continue</button>
+          <div class="modal-field">
+            <label for="new-batter-input">Batter name</label>
+            <input id="new-batter-input" class="modal-input" type="text" placeholder="Type a name…" autocomplete="off" autocapitalize="words" enterkeyhint="done" />
+          </div>
+          <button class="btn btn-primary btn-tall" data-action="confirm-new-batter">Continue</button>
         </div>
       </div>
     `;
@@ -1198,12 +1382,19 @@ function renderModal() {
     const recent = [...new Set(inn.bowlers.map(b => b.name))].filter(n => n !== current);
     return `
       <div class="modal-bg">
-        <div class="modal">
+        <div class="modal name-modal">
           <h3>Next bowler</h3>
           <p>Over complete. Who's bowling next?</p>
-          ${recent.length ? `<div class="recents">${recent.map(n => `<button class="recent" data-action="recent-bowler" data-name="${esc(n)}">${esc(n)}</button>`).join('')}</div>` : ''}
-          <input id="new-bowler-input" type="text" placeholder="Bowler name" autocomplete="off" />
-          <button class="btn btn-primary" data-action="confirm-new-bowler">Continue</button>
+          ${recent.length ? `
+            <div class="recents-block">
+              <div class="recents-label">Previously bowled</div>
+              <div class="recents">${recent.map(n => `<button class="recent" data-action="recent-bowler" data-name="${esc(n)}">${esc(n)}</button>`).join('')}</div>
+            </div>` : ''}
+          <div class="modal-field">
+            <label for="new-bowler-input">Bowler name</label>
+            <input id="new-bowler-input" class="modal-input" type="text" placeholder="Type a name…" autocomplete="off" autocapitalize="words" enterkeyhint="done" />
+          </div>
+          <button class="btn btn-primary btn-tall" data-action="confirm-new-bowler">Continue</button>
         </div>
       </div>
     `;
@@ -1215,7 +1406,37 @@ function renderModal() {
 function handle(action, dataset) {
   switch (action) {
     case 'home': state.view = 'home'; state.detail = null; render(); break;
-    case 'history': state.view = 'history'; render(); break;
+    case 'history':
+      state.view = 'history';
+      state.historyFilter = 'all';
+      state.historyDate = '';
+      render();
+      if (dbOn()) refreshHistory();
+      break;
+    case 'in-progress':
+      state.view = 'in-progress';
+      render();
+      if (dbOn()) refreshHistory();
+      break;
+    case 'resume-match': {
+      const m = state.history.find(x => x.id === dataset.matchId);
+      if (!m) { showToast('Match not found'); break; }
+      if (m.deviceId !== DEVICE_ID) { showToast('Started on another device'); break; }
+      state.current = m;
+      saveCurrent(m);
+      state.detail = null;
+      const inn = m.innings[m.currentInnings];
+      if (!inn) state.view = 'innings-setup';
+      else if (inn.ended && m.currentInnings === 0) state.view = 'innings-break';
+      else state.view = 'score';
+      render();
+      break;
+    }
+    case 'history-filter':
+      state.historyFilter = dataset.filter;
+      if (dataset.filter !== 'custom') state.historyDate = '';
+      render();
+      break;
     case 'back-home':
       if (state.shared) {
         state.shared = null;
@@ -1261,7 +1482,10 @@ function handle(action, dataset) {
     case 'select-wkt': pickBall('wicket', true); break;
     case 'next-ball': commitBall(); break;
     case 'undo':
-      if (undoBall(state.current)) { state.ball = emptyBall(); render(); }
+      if (undoBall(state.current)) {
+        state.ball = emptyBall();
+        showEventBanner({ kind: 'undo', big: 'UNDO', sub: 'Last ball removed' }, 1300);
+      }
       break;
     case 'end-innings':
       if (confirm('End this innings now?')) { endInningsManually(); afterInningsEnd(); }
@@ -1287,16 +1511,21 @@ function handle(action, dataset) {
       if (m) { state.detail = m; state.view = 'detail'; render(); }
       break;
     }
-    case 'delete-match':
-      if (confirm('Delete this match?')) {
-        const id = dataset.matchId;
-        if (dbOn()) window.QCDB.deleteMatch(id).catch(err => console.warn(err));
-        state.history = state.history.filter(x => x.id !== id);
-        saveHistory(state.history);
-        state.detail = null;
-        state.view = 'home'; render();
-      }
+    case 'delete-match': {
+      const expected = (window.QC_CONFIG && window.QC_CONFIG.DELETE_PASSCODE) || '';
+      const code = prompt('Enter passcode to delete this match:');
+      if (code === null) break;
+      if (!expected) { showToast('No passcode configured'); break; }
+      if (code !== expected) { showToast('Wrong passcode'); break; }
+      const id = dataset.matchId;
+      if (dbOn()) window.QCDB.deleteMatch(id).catch(err => console.warn(err));
+      state.history = state.history.filter(x => x.id !== id);
+      saveHistory(state.history);
+      state.detail = null;
+      state.view = 'home'; render();
+      showToast('Match deleted');
       break;
+    }
   }
 }
 
@@ -1382,9 +1611,32 @@ document.addEventListener('DOMContentLoaded', () => {
     handle(action, t.dataset);
   });
 
+  app.addEventListener('keydown', (e) => {
+    if (e.key !== 'Enter') return;
+    if (e.target.id === 'new-batter-input') {
+      e.preventDefault();
+      app.querySelector('[data-action="confirm-new-batter"]')?.click();
+    } else if (e.target.id === 'new-bowler-input') {
+      e.preventDefault();
+      app.querySelector('[data-action="confirm-new-bowler"]')?.click();
+    }
+  });
+
   app.addEventListener('input', (e) => {
-    if (state.view !== 'setup') return;
-    if (e.target.id === 'team-a-input') state.setup.teamA = e.target.value;
-    if (e.target.id === 'team-b-input') state.setup.teamB = e.target.value;
+    if (state.view === 'setup') {
+      if (e.target.id === 'team-a-input') state.setup.teamA = e.target.value;
+      if (e.target.id === 'team-b-input') state.setup.teamB = e.target.value;
+    }
+    if (state.view === 'history' && e.target.id === 'history-date-input') {
+      const v = e.target.value;
+      if (v) {
+        state.historyDate = v;
+        state.historyFilter = 'custom';
+      } else {
+        state.historyDate = '';
+        state.historyFilter = 'all';
+      }
+      render();
+    }
   });
 });

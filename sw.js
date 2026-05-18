@@ -1,4 +1,4 @@
-const CACHE = 'quickcric-v2';
+const CACHE = 'quickcric-v15';
 const ASSETS = [
   './',
   'index.html',
