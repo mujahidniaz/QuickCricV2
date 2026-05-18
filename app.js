@@ -11,10 +11,10 @@ const IN_PROGRESS_TTL_MS = 6 * 60 * 60 * 1000;
 
 const DEVICE_ID = (() => {
   let id = '';
-  try { id = localStorage.getItem(STORE_DEVICE_ID) || ''; } catch {}
+  try { id = localStorage.getItem(STORE_DEVICE_ID) || ''; } catch { }
   if (!id) {
     id = 'dev_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
-    try { localStorage.setItem(STORE_DEVICE_ID, id); } catch {}
+    try { localStorage.setItem(STORE_DEVICE_ID, id); } catch { }
   }
   return id;
 })();
@@ -65,11 +65,11 @@ const audio = {
 
   toggle() {
     this.enabled = !this.enabled;
-    try { localStorage.setItem(STORE_AUDIO, this.enabled ? 'on' : 'off'); } catch {}
+    try { localStorage.setItem(STORE_AUDIO, this.enabled ? 'on' : 'off'); } catch { }
     if (!this.enabled) {
       if ('speechSynthesis' in window) speechSynthesis.cancel();
       if (this._cur) {
-        try { this._cur.pause(); this._cur.currentTime = 0; } catch {}
+        try { this._cur.pause(); this._cur.currentTime = 0; } catch { }
         this._cur = null;
       }
     }
@@ -97,14 +97,14 @@ const audio = {
   async playFile(name, maxSeconds) {
     if (!this.enabled) return false;
     try {
-      if (this._cur) { try { this._cur.pause(); this._cur.currentTime = 0; } catch {} }
+      if (this._cur) { try { this._cur.pause(); this._cur.currentTime = 0; } catch { } }
       const a = new Audio(`sounds/${name}.mp3`);
       a.volume = 0.8;
       this._cur = a;
       await a.play();
       if (maxSeconds) {
         setTimeout(() => {
-          try { if (!a.paused) { a.pause(); a.currentTime = 0; } } catch {}
+          try { if (!a.paused) { a.pause(); a.currentTime = 0; } } catch { }
         }, maxSeconds * 1000);
       }
       return true;
@@ -228,13 +228,13 @@ const install = {
   shouldShow() { return !this.dismissed && !this.isStandalone(); },
   dismiss() {
     this.dismissed = true;
-    try { localStorage.setItem(STORE_INSTALL_DISMISSED, '1'); } catch {}
+    try { localStorage.setItem(STORE_INSTALL_DISMISSED, '1'); } catch { }
   },
   defaultTab() { return this.isIOS() ? 'ios' : 'android'; },
   async tryNativePrompt() {
     if (!this.deferredPrompt) return false;
     this.deferredPrompt.prompt();
-    try { await this.deferredPrompt.userChoice; } catch {}
+    try { await this.deferredPrompt.userChoice; } catch { }
     this.deferredPrompt = null;
     this.dismiss();
     return true;
@@ -331,17 +331,17 @@ function loadHistory() {
   try { return JSON.parse(localStorage.getItem(STORE_HIST) || '[]'); } catch { return []; }
 }
 function saveHistory(arr) {
-  try { localStorage.setItem(STORE_HIST, JSON.stringify(arr)); } catch {}
+  try { localStorage.setItem(STORE_HIST, JSON.stringify(arr)); } catch { }
 }
 function loadCurrent() {
   try { return JSON.parse(localStorage.getItem(STORE_CURRENT) || 'null'); } catch { return null; }
 }
 function saveCurrent(m) {
   if (m) {
-    try { localStorage.setItem(STORE_CURRENT, JSON.stringify(m)); } catch {}
+    try { localStorage.setItem(STORE_CURRENT, JSON.stringify(m)); } catch { }
     if (dbOn()) window.QCDB.syncMatch(m);
   } else {
-    try { localStorage.removeItem(STORE_CURRENT); } catch {}
+    try { localStorage.removeItem(STORE_CURRENT); } catch { }
   }
 }
 
@@ -679,7 +679,7 @@ function shareCurrent() {
   if (dbOn()) {
     url = `${location.origin}${location.pathname}#m=${encodeURIComponent(m.id)}`;
     if (m === state.current) {
-      window.QCDB.upsertMatch(m).catch(() => {});
+      window.QCDB.upsertMatch(m).catch(() => { });
     }
   } else {
     const snap = clone(m); delete snap.undo; snap.shared = true;
@@ -775,7 +775,7 @@ function render() {
   const focusedId = (focusedEl && focusedEl.id && root.contains(focusedEl)) ? focusedEl.id : null;
   let selStart = null, selEnd = null;
   if (focusedId && focusedEl && 'selectionStart' in focusedEl) {
-    try { selStart = focusedEl.selectionStart; selEnd = focusedEl.selectionEnd; } catch {}
+    try { selStart = focusedEl.selectionStart; selEnd = focusedEl.selectionEnd; } catch { }
   }
 
   let html = '';
@@ -791,6 +791,7 @@ function render() {
     case 'in-progress': html = renderInProgress(); break;
     case 'detail': html = renderDetail(); break;
     case 'view': html = renderSharedView(); break;
+    case 'terms': html = renderTerms(); break;
     default: html = renderHome();
   }
   if (state.modal) html += renderModal();
@@ -812,7 +813,7 @@ function render() {
     if (el) {
       el.focus();
       if (selStart != null && selEnd != null) {
-        try { el.setSelectionRange(selStart, selEnd); } catch {}
+        try { el.setSelectionRange(selStart, selEnd); } catch { }
       }
     }
   } else if (state.modal?.type === 'newBatter') {
@@ -874,6 +875,84 @@ function renderHome() {
           </button>
           <button class="install-x" data-action="install-dismiss" aria-label="Dismiss">×</button>
         </div>` : ''}
+      <div class="home-foot">
+        <button class="foot-link" data-action="terms">Terms &amp; Conditions</button>
+        <a class="foot-link" href="https://www.linkedin.com/in/khamash/" target="_blank" rel="noopener noreferrer">Contact</a>
+      </div>
+    </div>
+  `;
+}
+
+function renderTerms() {
+  return `
+    <div class="screen">
+      <div class="topbar">
+        <div class="left">
+          <button class="icon-btn ghost" data-action="back-home">←</button>
+          <span class="title">Terms &amp; Conditions</span>
+        </div>
+        <div class="right"></div>
+      </div>
+      <div class="terms-body">
+        <p class="terms-updated">Last updated: 18 May 2026</p>
+
+        <p>QuickCric is a small, free, casual cricket scoring app. By opening or using this app you are taken to have read and agreed to these terms. If you do not agree, please stop using the app.</p>
+
+        <h2>1. What QuickCric is</h2>
+        <p>QuickCric lets you keep score of informal cricket matches. There is no account, no sign-up, and no profile. You type team names, tap ball outcomes, and the app records the match.</p>
+
+        <h2>2. No personal data collection</h2>
+        <p>We do not ask for, and we do not want, any personal data. We do not collect your name, email address, phone number, location, contacts, photos, or any identifier tied to you as a person.</p>
+        <p>You may type anything you like into team and player name fields while scoring &mdash; nicknames, jokes, single letters. We treat whatever you type as throwaway match labels, not as real-world identities, and we do not verify, profile, or contact anyone based on it. Please do not enter anyone&rsquo;s personal information that they have not agreed to share.</p>
+
+        <h2>3. What gets stored, and where</h2>
+        <p>To make the app work, the following is stored:</p>
+        <ul>
+          <li><strong>On your device</strong> &mdash; your current match and a cached list of recent matches are saved in your browser&rsquo;s local storage so you can close and reopen the app and pick up where you left off.</li>
+          <li><strong>A device identifier</strong> &mdash; a random ID generated by your browser the first time you open the app. It is not linked to you, your hardware, or any account. It is only used so the app knows which device originally started a match, so that the &ldquo;Resume&rdquo; button on that device works correctly.</li>
+          <li><strong>In the cloud (optional)</strong> &mdash; if the person who deployed this copy of QuickCric has configured a Supabase backend, the match scorecard (teams, runs, balls, wickets, the names you typed in) is sent there so the match can be opened on another device or shared via a link. No identifiers about you are sent &mdash; only the match data itself plus the random device ID described above.</li>
+        </ul>
+        <p>You can clear everything stored on your device at any time by clearing your browser&rsquo;s site data for this app, or by uninstalling the PWA. Doing so will end any in-progress match on this device.</p>
+
+        <h2>4. Shared / public data</h2>
+        <p>If cloud sync is enabled and you generate a share link, the match data behind that link is publicly readable by anyone who has the link. Matches are not private. Do not put anything in team or player name fields that you would not be comfortable showing publicly.</p>
+        <p>Because the backend is shared and unauthenticated, in principle any user of the same deployment can read, edit or delete any match stored in it. Treat the app as a casual scratchpad among friends, not as a system of record.</p>
+
+        <h2>5. No accounts, no logins, no recovery</h2>
+        <p>There is no user account, password, or login. There is also no way for us to recover a deleted match, restore data after you clear your browser, or transfer matches between devices other than through the share link feature described above.</p>
+
+        <h2>6. Offline use and PWA install</h2>
+        <p>QuickCric is a Progressive Web App and may be installed on your home screen. After the first load it works offline using a service worker cache. The service worker only caches the app&rsquo;s own files; it does not track you.</p>
+
+        <h2>7. Audio</h2>
+        <p>The score screen has an optional sound toggle. When enabled, the app uses your browser&rsquo;s built-in speech and audio features to play commentary and celebration sounds. No audio is recorded from your microphone &mdash; the app never requests microphone access.</p>
+
+        <h2>8. Third parties</h2>
+        <p>If cloud sync is configured for this deployment, match data is stored on Supabase (supabase.com), subject to Supabase&rsquo;s own terms and privacy policy. No advertising networks, analytics trackers, or social-media SDKs are embedded in the app.</p>
+
+        <h2>9. Acceptable use</h2>
+        <p>Please do not use QuickCric to store or share content that is unlawful, abusive, harassing, defamatory, hateful, infringing, or that contains other people&rsquo;s personal data without their consent. We may remove any match data from the shared backend at any time, without notice, if it appears to breach these terms.</p>
+
+        <h2>10. No warranty</h2>
+        <p>QuickCric is provided &ldquo;as is&rdquo; and &ldquo;as available&rdquo;, free of charge, with no warranties of any kind, express or implied. Scores, totals, run rates, and match results are calculated by the app from the inputs you tap; we do not guarantee they are accurate, complete, or fit for any particular purpose (including any official, competitive, or wagering use). Always sanity-check the scoreboard.</p>
+
+        <h2>11. Limitation of liability</h2>
+        <p>To the maximum extent permitted by law, the developers of QuickCric are not liable for any loss or damage arising from your use of, or inability to use, the app &mdash; including but not limited to lost matches, incorrect scores, disputes between players, missed celebrations, device issues, or data loss. Your sole remedy if you are unhappy with the app is to stop using it.</p>
+
+        <h2>12. Changes to the app and to these terms</h2>
+        <p>The app may change, break, lose features, or disappear entirely at any time. These terms may also be updated; the date at the top of this page reflects the latest version. Continued use of the app after a change means you accept the updated terms.</p>
+
+        <h2>13. Children</h2>
+        <p>The app is suitable for all ages. As no personal data is requested, no specific children&rsquo;s data protections are triggered, but parents and guardians should still supervise what their children type into any text field, here or elsewhere.</p>
+
+        <h2>14. Governing law</h2>
+        <p>These terms are interpreted under the laws applicable in the jurisdiction where the operator of this deployment resides. Nothing in these terms limits any rights you have under mandatory consumer-protection laws of your country of residence.</p>
+
+        <h2>15. Contact</h2>
+        <p>QuickCric is a personal/club-scale project. For any questions, concerns, or feedback, contact the developer Nashib on LinkedIn: <a class="terms-link" href="https://www.linkedin.com/in/khamash/" target="_blank" rel="noopener noreferrer">linkedin.com/in/khamash</a>.</p>
+
+        <p class="terms-foot">Thanks for playing. Now go hit a six.</p>
+      </div>
     </div>
   `;
 }
@@ -1054,13 +1133,13 @@ function renderScore() {
           <div class="extras-panel">
             <div class="heading">Extras</div>
             <div class="row">
-              ${['wd','nb','lb','b'].map(e => `<button class="extra-btn ${b.extra === e ? 'selected' : ''}" data-action="select-extra" data-extra="${e}">${e}</button>`).join('')}
+              ${['wd', 'nb', 'lb', 'b'].map(e => `<button class="extra-btn ${b.extra === e ? 'selected' : ''}" data-action="select-extra" data-extra="${e}">${e}</button>`).join('')}
             </div>
           </div>
         </div>
         <div class="runs-grid">
           <button class="run-btn dot ${b.runs === 0 ? 'selected' : ''}" data-action="select-run" data-runs="0">DOT</button>
-          ${[1,2,3,4,5,6].map(n => `<button class="run-btn ${b.runs === n ? 'selected' : ''}" data-action="select-run" data-runs="${n}">${n}</button>`).join('')}
+          ${[1, 2, 3, 4, 5, 6].map(n => `<button class="run-btn ${b.runs === n ? 'selected' : ''}" data-action="select-run" data-runs="${n}">${n}</button>`).join('')}
         </div>
         <div class="next-bar">
           <button class="next-ball" data-action="next-ball" ${canNext ? '' : 'disabled'}>Next ball</button>
@@ -1140,7 +1219,7 @@ function renderDetail() {
       </div>
       ${renderTopPerformers(m)}
       <div class="scorecard">
-        ${m.innings.map((inn, i) => renderInningsCard(m, inn, `Innings ${i+1}`)).join('')}
+        ${m.innings.map((inn, i) => renderInningsCard(m, inn, `Innings ${i + 1}`)).join('')}
       </div>
       ${isJustEnded ? `
         <div class="bottom-bar">
@@ -1246,12 +1325,12 @@ function filterByDate(matches, filterId, customDate) {
 
 function todayIso() {
   const d = new Date();
-  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
 
 function fmtDateLabel(iso) {
   const [y, m, d] = iso.split('-').map(Number);
-  return new Date(y, m-1, d).toLocaleDateString(undefined, { day: '2-digit', month: 'short', year: 'numeric' });
+  return new Date(y, m - 1, d).toLocaleDateString(undefined, { day: '2-digit', month: 'short', year: 'numeric' });
 }
 
 function renderHistory() {
@@ -1337,8 +1416,8 @@ function inProgressCard(m) {
         <div class="result">In progress</div>
       </button>
       ${sameDevice
-        ? `<button class="resume-inline" data-action="resume-match" data-match-id="${esc(m.id)}">Resume <span>→</span></button>`
-        : `<div class="other-device-note">Started on another device · view only</div>`}
+      ? `<button class="resume-inline" data-action="resume-match" data-match-id="${esc(m.id)}">Resume <span>→</span></button>`
+      : `<div class="other-device-note">Started on another device · view only</div>`}
     </div>
   `;
 }
@@ -1373,7 +1452,7 @@ function renderSharedView() {
       </div>
       ${renderTopPerformers(m)}
       <div class="scorecard">
-        ${m.innings.map((inn, i) => renderInningsCard(m, inn, `Innings ${i+1}`)).join('')}
+        ${m.innings.map((inn, i) => renderInningsCard(m, inn, `Innings ${i + 1}`)).join('')}
       </div>
     </div>
   `;
@@ -1492,6 +1571,7 @@ function renderModal() {
 function handle(action, dataset) {
   switch (action) {
     case 'home': state.view = 'home'; state.detail = null; render(); break;
+    case 'terms': state.view = 'terms'; render(); break;
     case 'history':
       state.view = 'history';
       state.historyFilter = 'all';
@@ -1625,7 +1705,7 @@ function handle(action, dataset) {
       const m = state.current;
       if (!m) { state.view = 'home'; render(); break; }
       if (m.innings.length === 0) {
-        if (dbOn()) window.QCDB.deleteMatch(m.id).catch(() => {});
+        if (dbOn()) window.QCDB.deleteMatch(m.id).catch(() => { });
         state.history = state.history.filter(x => x.id !== m.id);
         saveHistory(state.history);
         state.setup = { teamA: m.teams.A, teamB: m.teams.B, overs: m.overs, battingFirst: m.battingFirst };
