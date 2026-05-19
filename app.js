@@ -113,12 +113,33 @@ const audio = {
 
   fileForBall(d) {
     if (d.wicket) return { name: 'wicket' };
-    if (d.extra) return null;
+    if (d.extra && d.extra !== 'nb') return null;
     if (d.runs === 6) return { name: 'winner', maxSeconds: 2.5 };
     if (d.runs === 4) return { name: 'four' };
     if (d.runs === 2) return { name: 'two' };
-    if (d.runs === 0) return { name: 'dot' };
+    if (d.runs === 0 && !d.extra) return { name: 'dot' };
     return null;
+  },
+
+  playAfterCurrent(name, gapMs = 200) {
+    if (!this.enabled) return;
+    const cur = this._cur;
+    const play = () => this.playFile(name);
+    if (cur && !cur.ended && !cur.paused) {
+      let done = false;
+      const finish = () => {
+        if (done) return;
+        done = true;
+        cur.removeEventListener('ended', finish);
+        cur.removeEventListener('error', finish);
+        setTimeout(play, gapMs);
+      };
+      cur.addEventListener('ended', finish);
+      cur.addEventListener('error', finish);
+      setTimeout(finish, 5000);
+    } else {
+      setTimeout(play, gapMs);
+    }
   },
 
   beep(freq, duration, type = 'sine', volume = 0.08) {
@@ -171,14 +192,18 @@ const audio = {
     if (!this.enabled) return;
 
     const file = this.fileForBall(d);
+    let playedFile = false;
     if (file) {
-      const played = await this.playFile(file.name, file.maxSeconds);
-      if (played) return;
+      playedFile = await this.playFile(file.name, file.maxSeconds);
     }
 
-    if (d.wicket) this.thump();
-    else if (d.runs === 6) { this.fanfare(); this.cheer(0.7, 0.2); }
-    else if (d.runs === 4) this.cheer(0.5, 0.16);
+    if (!playedFile) {
+      if (d.wicket) this.thump();
+      else if (d.runs === 6) { this.fanfare(); this.cheer(0.7, 0.2); }
+      else if (d.runs === 4) this.cheer(0.5, 0.16);
+    }
+
+    if (d.extra === 'nb') this.playAfterCurrent('noball');
 
     let phrase = '';
     if (d.wicket) phrase = pickPhrase(WICKET_PHRASES);
@@ -198,9 +223,25 @@ const audio = {
 
   onOverEnd() {
     if (!this.enabled) return;
-    setTimeout(() => {
+    const playOver = () => {
       this.playFile('over').then(p => { if (!p) this.speak('End of the over'); });
-    }, 1600);
+    };
+    const cur = this._cur;
+    if (cur && !cur.ended && !cur.paused) {
+      let done = false;
+      const finish = () => {
+        if (done) return;
+        done = true;
+        cur.removeEventListener('ended', finish);
+        cur.removeEventListener('error', finish);
+        setTimeout(playOver, 300);
+      };
+      cur.addEventListener('ended', finish);
+      cur.addEventListener('error', finish);
+      setTimeout(finish, 5000);
+    } else {
+      setTimeout(playOver, 1200);
+    }
   },
 
   onMatchStart() {
@@ -265,6 +306,7 @@ const state = {
   installTab: 'android',
   historyFilter: 'all',
   historyDate: '',
+  showLastOver: false,
 };
 
 function emptyBall() { return { runs: null, extra: null, wicket: false }; }
@@ -668,6 +710,7 @@ function commitBall() {
   if (b.runs == null && !b.extra && !b.wicket) return;
   recordBall(state.current, { runs: b.runs ?? 0, extra: b.extra, wicket: b.wicket });
   state.ball = emptyBall();
+  state.showLastOver = false;
   afterBall();
 }
 
@@ -1068,10 +1111,22 @@ function renderScore() {
 
   const ballsInCurrentOver = inn.score.balls % 6;
   const currentOver = Math.floor(inn.score.balls / 6);
-  const overToShow = (ballsInCurrentOver === 0 && inn.score.balls > 0) ? currentOver - 1 : currentOver;
+  const liveOver = (ballsInCurrentOver === 0 && inn.score.balls > 0 && inn.needNewBowler) ? currentOver - 1 : currentOver;
+  const hasLastOver = liveOver >= 1;
+  const showingLast = state.showLastOver && hasLastOver;
+  const overToShow = showingLast ? liveOver - 1 : liveOver;
   const overBalls = inn.ballLog.filter(b => b.overNo === overToShow);
-  const overSlots = [];
-  for (let i = 0; i < 6; i++) overSlots[i] = overBalls[i] || null;
+  const legalCount = overBalls.filter(b => b.legal).length;
+  const remainingLegal = Math.max(0, 6 - legalCount);
+  const overSlots = [...overBalls, ...Array(remainingLegal).fill(null)];
+  let overRuns = 0;
+  let overWkts = 0;
+  for (const b of overBalls) {
+    const runs = Number(b.runs) || 0;
+    const extraRun = (b.extra === 'wd' || b.extra === 'nb') ? 1 : 0;
+    overRuns += runs + extraRun;
+    if (b.wicket === true) overWkts += 1;
+  }
 
   let targetPill = '';
   if (m.currentInnings === 1 && inn.target != null) {
@@ -1120,12 +1175,18 @@ function renderScore() {
         <div class="row"></div>
       </div>
       <div class="over-strip">
-        <div class="heading">This over</div>
-        <div class="balls">${overSlots.map(renderBallPill).join('')}</div>
+        <div class="over-strip-head">
+          <div class="heading">${showingLast ? 'Last over' : 'This over'}</div>
+          ${hasLastOver ? `<button class="over-toggle" data-action="toggle-last-over">${showingLast ? 'Show this over' : 'View last over'}</button>` : ''}
+        </div>
+        <div class="balls">
+          ${overSlots.map(renderBallPill).join('')}
+          ${showingLast ? `<div class="over-sum">${overRuns}/${overWkts}</div>` : ''}
+        </div>
       </div>
       ${inn.freeHit ? `<div class="free-hit-banner"><span class="fh-dot"></span>Free hit · next ball<span class="fh-dot"></span></div>` : ''}
       <div class="undo-row">
-        <button data-action="undo" ${canUndo ? '' : 'disabled'}>↶ Undo last ball</button>
+        ${showingLast ? '' : `<button data-action="undo" ${canUndo ? '' : 'disabled'}>↶ Undo last ball</button>`}
       </div>
       <div class="actions">
         <div class="input-cluster">
@@ -1647,6 +1708,10 @@ function handle(action, dataset) {
     case 'select-extra': pickBall('extra', dataset.extra); break;
     case 'select-wkt': pickBall('wicket', true); break;
     case 'next-ball': commitBall(); break;
+    case 'toggle-last-over':
+      state.showLastOver = !state.showLastOver;
+      render();
+      break;
     case 'undo':
       if (undoBall(state.current)) {
         state.ball = emptyBall();
