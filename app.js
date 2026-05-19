@@ -246,7 +246,7 @@ const audio = {
 
   onMatchStart() {
     if (!this.enabled) return;
-    this.playFile('start', 10).then(p => { if (!p) this.speak('Match starts now!'); });
+    this.playFile('start', 11.25).then(p => { if (!p) this.speak('Match starts now!'); });
   },
 
   onMatchWin(text) {
