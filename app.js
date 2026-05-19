@@ -48,6 +48,8 @@ const audio = {
   enabled: (() => { try { return localStorage.getItem(STORE_AUDIO) !== 'off'; } catch { return true; } })(),
   ctx: null,
   voice: null,
+  _gen: 0,
+  _synthEndTime: 0,
 
   init() {
     if (!('speechSynthesis' in window)) return;
@@ -67,12 +69,38 @@ const audio = {
     this.enabled = !this.enabled;
     try { localStorage.setItem(STORE_AUDIO, this.enabled ? 'on' : 'off'); } catch { }
     if (!this.enabled) {
+      this._gen++;
       if ('speechSynthesis' in window) speechSynthesis.cancel();
       if (this._cur) {
         try { this._cur.pause(); this._cur.currentTime = 0; } catch { }
         this._cur = null;
       }
     }
+  },
+
+  stopAll() {
+    this._gen++;
+    if ('speechSynthesis' in window) speechSynthesis.cancel();
+    if (this._cur) { try { this._cur.pause(); this._cur.currentTime = 0; } catch { } }
+  },
+
+  whenIdle(callback, gapMs = 200) {
+    if (!this.enabled) return;
+    const myGen = this._gen;
+    let elapsed = 0;
+    const check = () => {
+      if (myGen !== this._gen) return;
+      const speaking = 'speechSynthesis' in window && speechSynthesis.speaking;
+      const playing = this._cur && !this._cur.ended && !this._cur.paused;
+      const synthing = this._synthEndTime > performance.now();
+      if ((speaking || playing || synthing) && elapsed < 8000) {
+        elapsed += 120;
+        setTimeout(check, 120);
+      } else {
+        setTimeout(() => { if (myGen === this._gen) callback(); }, gapMs);
+      }
+    };
+    check();
   },
 
   ensureCtx() {
@@ -85,6 +113,8 @@ const audio = {
 
   speak(text, opts = {}) {
     if (!this.enabled || !('speechSynthesis' in window) || !text) return;
+    this._gen++;
+    if (this._cur) { try { this._cur.pause(); this._cur.currentTime = 0; } catch { } }
     speechSynthesis.cancel();
     const u = new SpeechSynthesisUtterance(text);
     if (this.voice) u.voice = this.voice;
@@ -94,9 +124,34 @@ const audio = {
     speechSynthesis.speak(u);
   },
 
+  speakThen(text, after, opts = {}) {
+    if (!this.enabled || !('speechSynthesis' in window) || !text) { after?.(); return; }
+    this._gen++;
+    const myGen = this._gen;
+    if (this._cur) { try { this._cur.pause(); this._cur.currentTime = 0; } catch { } }
+    speechSynthesis.cancel();
+    const u = new SpeechSynthesisUtterance(text);
+    if (this.voice) u.voice = this.voice;
+    u.rate = opts.rate ?? 1.1;
+    u.pitch = opts.pitch ?? 1;
+    u.volume = opts.volume ?? 1;
+    let done = false;
+    const finish = () => {
+      if (done) return;
+      done = true;
+      if (myGen === this._gen) after?.();
+    };
+    u.onend = finish;
+    u.onerror = finish;
+    speechSynthesis.speak(u);
+    setTimeout(finish, 6000);
+  },
+
   async playFile(name, maxSeconds) {
     if (!this.enabled) return false;
     try {
+      this._gen++;
+      if ('speechSynthesis' in window) speechSynthesis.cancel();
       if (this._cur) { try { this._cur.pause(); this._cur.currentTime = 0; } catch { } }
       const a = new Audio(`sounds/${name}.mp3`);
       a.volume = 0.8;
@@ -122,24 +177,7 @@ const audio = {
   },
 
   playAfterCurrent(name, gapMs = 200) {
-    if (!this.enabled) return;
-    const cur = this._cur;
-    const play = () => this.playFile(name);
-    if (cur && !cur.ended && !cur.paused) {
-      let done = false;
-      const finish = () => {
-        if (done) return;
-        done = true;
-        cur.removeEventListener('ended', finish);
-        cur.removeEventListener('error', finish);
-        setTimeout(play, gapMs);
-      };
-      cur.addEventListener('ended', finish);
-      cur.addEventListener('error', finish);
-      setTimeout(finish, 5000);
-    } else {
-      setTimeout(play, gapMs);
-    }
+    this.whenIdle(() => this.playFile(name), gapMs);
   },
 
   beep(freq, duration, type = 'sine', volume = 0.08) {
@@ -169,6 +207,10 @@ const audio = {
     if (!this.enabled) return;
     const ctx = this.ensureCtx();
     if (!ctx) return;
+    this._gen++;
+    this._synthEndTime = performance.now() + durSec * 1000;
+    if ('speechSynthesis' in window) speechSynthesis.cancel();
+    if (this._cur) { try { this._cur.pause(); this._cur.currentTime = 0; } catch { } }
     const buf = ctx.createBuffer(1, Math.floor(ctx.sampleRate * durSec), ctx.sampleRate);
     const data = buf.getChannelData(0);
     for (let i = 0; i < data.length; i++) {
@@ -191,26 +233,47 @@ const audio = {
   async onBall(d, freeHitWas) {
     if (!this.enabled) return;
 
+    if (d.wicket) {
+      const played = await this.playFile('wicket');
+      if (!played) this.speak(pickPhrase(WICKET_PHRASES));
+      return;
+    }
+
+    if (d.extra === 'nb') {
+      const freeHitPhrase = d.runs > 0
+        ? `No ball, ${d.runs} run${d.runs > 1 ? 's' : ''}. Free hit next ball.`
+        : 'No ball! Free hit coming up.';
+      const playNoballThenAnnounce = () => {
+        this.playFile('noball');
+        this.whenIdle(() => this.speak(freeHitPhrase), 500);
+      };
+      const runFile = (d.runs === 6) ? { name: 'winner', maxSeconds: 2.5 } :
+                      (d.runs === 4) ? { name: 'four' } :
+                      (d.runs === 2) ? { name: 'two' } : null;
+      if (runFile) {
+        this.playFile(runFile.name, runFile.maxSeconds);
+        this.whenIdle(playNoballThenAnnounce, 250);
+      } else {
+        playNoballThenAnnounce();
+      }
+      return;
+    }
+
+    if (d.runs === 0 && !d.extra) {
+      this.speakThen(pickPhrase(DOT_PHRASES), () => this.playFile('dot'));
+      return;
+    }
+
     const file = this.fileForBall(d);
-    let playedFile = false;
     if (file) {
-      playedFile = await this.playFile(file.name, file.maxSeconds);
+      const played = await this.playFile(file.name, file.maxSeconds);
+      if (played) return;
     }
-
-    if (!playedFile) {
-      if (d.wicket) this.thump();
-      else if (d.runs === 6) { this.fanfare(); this.cheer(0.7, 0.2); }
-      else if (d.runs === 4) this.cheer(0.5, 0.16);
-    }
-
-    if (d.extra === 'nb') this.playAfterCurrent('noball');
 
     let phrase = '';
-    if (d.wicket) phrase = pickPhrase(WICKET_PHRASES);
-    else if (d.runs === 6) phrase = pickPhrase(SIX_PHRASES);
+    if (d.runs === 6) phrase = pickPhrase(SIX_PHRASES);
     else if (d.runs === 4) phrase = pickPhrase(FOUR_PHRASES);
     else if (d.extra === 'wd') phrase = d.runs > 0 ? `Wide, ${d.runs + 1} runs` : 'Wide ball';
-    else if (d.extra === 'nb') phrase = d.runs > 0 ? `No ball, ${d.runs} runs. Free hit next ball.` : 'No ball! Free hit coming up.';
     else if (d.extra === 'lb') phrase = `${d.runs} leg ${d.runs > 1 ? 'byes' : 'bye'}`;
     else if (d.extra === 'b') phrase = `${d.runs} ${d.runs > 1 ? 'byes' : 'bye'}`;
     else if (d.runs === 0) phrase = pickPhrase(DOT_PHRASES);
@@ -223,37 +286,23 @@ const audio = {
 
   onOverEnd() {
     if (!this.enabled) return;
-    const playOver = () => {
+    this.whenIdle(() => {
       this.playFile('over').then(p => { if (!p) this.speak('End of the over'); });
-    };
-    const cur = this._cur;
-    if (cur && !cur.ended && !cur.paused) {
-      let done = false;
-      const finish = () => {
-        if (done) return;
-        done = true;
-        cur.removeEventListener('ended', finish);
-        cur.removeEventListener('error', finish);
-        setTimeout(playOver, 300);
-      };
-      cur.addEventListener('ended', finish);
-      cur.addEventListener('error', finish);
-      setTimeout(finish, 5000);
-    } else {
-      setTimeout(playOver, 1200);
-    }
+    }, 300);
   },
 
   onMatchStart() {
     if (!this.enabled) return;
-    this.playFile('start', 11.25).then(p => { if (!p) this.speak('Match starts now!'); });
+    this.whenIdle(() => {
+      this.playFile('start', 11.25).then(p => { if (!p) this.speak('Match starts now!'); });
+    }, 200);
   },
 
   onMatchWin(text) {
     if (!this.enabled) return;
-    this.playFile('winner').then(p => {
-      if (!p) { this.celebration(); setTimeout(() => this.speak(text, { rate: 1, pitch: 1.05 }), 700); }
-    });
+    this.whenIdle(() => {
+      this.playFile('winner').then(p => { if (!p) this.speak(text, { rate: 1, pitch: 1.05 }); });
+    }, 300);
   }
 };
 
