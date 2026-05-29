@@ -366,6 +366,7 @@ const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => (
 ));
 const clone = (o) => JSON.parse(JSON.stringify(o));
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+const genPin = () => String(Math.floor(1000 + Math.random() * 9000));
 const fmtOvers = (balls) => `${Math.floor(balls / 6)}.${balls % 6}`;
 const fmtDate = (ts) => new Date(ts).toLocaleDateString(undefined, { day: '2-digit', month: 'short', year: 'numeric' });
 const fmtRate = (runs, balls) => balls === 0 ? '0.00' : ((runs / balls) * 6).toFixed(2);
@@ -492,10 +493,12 @@ function newInnings(batting, bowling) {
     freeHit: false,
   };
 }
-function newMatch(teamA, teamB, overs, battingFirst) {
+function newMatch(teamA, teamB, overs, battingFirst, pin) {
   return {
     id: uid(),
     deviceId: DEVICE_ID,
+    scoringDeviceId: DEVICE_ID,
+    pin: pin || null,
     startedAt: Date.now(),
     endedAt: null,
     teams: { A: (teamA || '').trim() || 'Team A', B: (teamB || '').trim() || 'Team B' },
@@ -507,6 +510,10 @@ function newMatch(teamA, teamB, overs, battingFirst) {
     currentInnings: 0,
     undo: [],
   };
+}
+
+function canScore(m) {
+  return (m.scoringDeviceId !== undefined ? m.scoringDeviceId : m.deviceId) === DEVICE_ID;
 }
 
 // ---------- Scoring core ----------
@@ -642,8 +649,8 @@ function addBowler(inn, name) {
 }
 
 // ---------- Transitions ----------
-function startMatch(teamA, teamB, overs, battingFirst) {
-  state.current = newMatch(teamA, teamB, overs, battingFirst);
+function startMatch(teamA, teamB, overs, battingFirst, pin) {
+  state.current = newMatch(teamA, teamB, overs, battingFirst, pin);
   state.view = 'innings-setup';
   saveCurrent(state.current);
 }
@@ -779,20 +786,23 @@ function shareCurrent() {
     const b64 = btoa(unescape(encodeURIComponent(json)));
     url = `${location.origin}${location.pathname}#v=${b64}`;
   }
+  const pinSuffix = m.pin ? ` · Scoring PIN: ${m.pin}` : '';
+  const shareText = `QuickCric scorecard${pinSuffix}`;
   if (navigator.share) {
-    navigator.share({ title: 'QuickCric scorecard', url }).catch(() => copyShare(url));
+    navigator.share({ title: shareText, url }).catch(() => copyShare(url, m.pin));
   } else {
-    copyShare(url);
+    copyShare(url, m.pin);
   }
 }
-function copyShare(url) {
+function copyShare(url, pin) {
+  const text = pin ? `${url}\nScoring PIN: ${pin}` : url;
   if (navigator.clipboard) {
-    navigator.clipboard.writeText(url).then(
-      () => showToast('Link copied'),
-      () => prompt('Copy this link:', url)
+    navigator.clipboard.writeText(text).then(
+      () => showToast(pin ? `Link + PIN copied` : 'Link copied'),
+      () => prompt('Copy this link:', text)
     );
   } else {
-    prompt('Copy this link:', url);
+    prompt('Copy this link:', text);
   }
 }
 function parseSharedFromHash() {
@@ -1101,6 +1111,16 @@ function renderSetup() {
             ${presets.map(o => `<button class="chip ${s.overs === o ? 'selected' : ''}" data-action="overs-pick" data-overs="${o}">${o}</button>`).join('')}
           </div>
         </div>
+        <div class="field pin-field">
+          <label>Scoring PIN · share with anyone who should score from their device</label>
+          <div class="pin-row">
+            <input id="match-pin-input" class="pin-input" type="text" inputmode="numeric"
+              maxlength="4" pattern="[0-9]{4}" placeholder="····"
+              value="${esc(s.pin || '')}" autocomplete="off" />
+            <button class="pin-refresh" data-action="gen-pin" aria-label="Generate new PIN">⟳</button>
+          </div>
+          <div class="pin-hint">Anyone with this PIN can score from their device · leave blank to disable</div>
+        </div>
       </div>
       <div class="bottom-bar">
         <button class="btn btn-primary" data-action="start-match">Start match</button>
@@ -1207,6 +1227,7 @@ function renderScore() {
         <div class="score-line">${inn.score.runs}/${inn.score.wickets}</div>
         <div class="overs">${fmtOvers(inn.score.balls)} / ${m.overs}.0 overs</div>
         ${targetPill ? `<div class="target">${esc(targetPill)}</div>` : ''}
+        ${m.pin ? `<div class="pin-badge">PIN&thinsp;·&thinsp;${esc(m.pin)}</div>` : ''}
       </div>
       <div class="stats">
         <div class="row">
@@ -1514,7 +1535,7 @@ function renderInProgress() {
 }
 
 function inProgressCard(m) {
-  const sameDevice = m.deviceId === DEVICE_ID;
+  const scorer = canScore(m);
   const i1 = m.innings[0], i2 = m.innings[1];
   return `
     <div class="match-card-wrap">
@@ -1525,9 +1546,11 @@ function inProgressCard(m) {
         ${i2 ? `<div class="innings-row"><span>${esc(m.teams[i2.batting])}</span><span>${i2.score.runs}/${i2.score.wickets} (${fmtOvers(i2.score.balls)})</span></div>` : ''}
         <div class="result">In progress</div>
       </button>
-      ${sameDevice
+      ${scorer
       ? `<button class="resume-inline" data-action="resume-match" data-match-id="${esc(m.id)}">Resume <span>→</span></button>`
-      : `<div class="other-device-note">Started on another device · view only</div>`}
+      : m.pin
+        ? `<button class="resume-inline claim-scoring-btn" data-action="claim-scoring" data-match-id="${esc(m.id)}">Enter PIN to score <span>→</span></button>`
+        : `<div class="other-device-note">Started on another device · view only</div>`}
     </div>
   `;
 }
@@ -1559,6 +1582,9 @@ function renderSharedView() {
         <div class="label">${m.status === 'completed' ? 'Result' : 'Live'}</div>
         <div class="winner">${esc(m.result || liveSnapshotLine(m))}</div>
         <div class="margin">${fmtDate(m.startedAt)} · ${m.overs} overs</div>
+        ${m.status !== 'completed' && m.pin && !canScore(m)
+          ? `<button class="btn btn-primary shared-score-btn" data-action="claim-scoring" data-match-id="${esc(m.id)}" data-from-shared="1">Score this match →</button>`
+          : ''}
       </div>
       ${renderTopPerformers(m)}
       <div class="scorecard">
@@ -1674,6 +1700,24 @@ function renderModal() {
       </div>
     `;
   }
+  if (state.modal.type === 'claimPin') {
+    return `
+      <div class="modal-bg">
+        <div class="modal name-modal">
+          <h3>Enter Match PIN</h3>
+          <p>Enter the 4-digit PIN to claim scoring on this device.</p>
+          <div class="modal-field">
+            <label for="claim-pin-input">Match PIN</label>
+            <input id="claim-pin-input" class="modal-input pin-modal-input" type="text"
+              inputmode="numeric" maxlength="4" pattern="[0-9]{4}"
+              placeholder="····" autocomplete="off" enterkeyhint="done" />
+          </div>
+          <button class="btn btn-primary btn-tall" data-action="confirm-claim-pin" data-match-id="${esc(state.modal.matchId)}" data-from-shared="${state.modal.fromShared ? '1' : ''}">Claim scoring →</button>
+          <button class="btn btn-ghost" data-action="cancel-claim-pin">Cancel</button>
+        </div>
+      </div>
+    `;
+  }
   return '';
 }
 
@@ -1697,7 +1741,7 @@ function handle(action, dataset) {
     case 'resume-match': {
       const m = state.history.find(x => x.id === dataset.matchId);
       if (!m) { showToast('Match not found'); break; }
-      if (m.deviceId !== DEVICE_ID) { showToast('Started on another device'); break; }
+      if (!canScore(m)) { showToast(m.pin ? 'Enter PIN to score' : 'Started on another device'); break; }
       state.current = m;
       saveCurrent(m);
       state.detail = null;
@@ -1724,7 +1768,7 @@ function handle(action, dataset) {
       break;
     case 'new-match':
       state.view = 'setup';
-      state.setup = { teamA: '', teamB: '', overs: 6, battingFirst: 'A' };
+      state.setup = { teamA: '', teamB: '', overs: 6, battingFirst: 'A', pin: genPin() };
       render(); break;
     case 'resume': {
       const m = state.current;
@@ -1753,6 +1797,21 @@ function handle(action, dataset) {
       showToast(`${name} bats first`);
       break;
     }
+    case 'gen-pin':
+      state.setup.pin = genPin();
+      render(); break;
+    case 'claim-scoring': {
+      const matchId = dataset.matchId;
+      const fromShared = !!dataset.fromShared;
+      const m = fromShared ? state.shared : state.history.find(x => x.id === matchId);
+      if (!m) { showToast('Match not found'); break; }
+      if (!m.pin) { showToast('This match has no PIN'); break; }
+      if (canScore(m)) { showToast('You are already the scorer'); break; }
+      state.modal = { type: 'claimPin', matchId, fromShared };
+      render(); break;
+    }
+    case 'cancel-claim-pin':
+      state.modal = null; render(); break;
     case 'select-run': pickBall('runs', parseInt(dataset.runs, 10)); break;
     case 'select-extra': pickBall('extra', dataset.extra); break;
     case 'select-wkt': pickBall('wicket', true); break;
@@ -1805,7 +1864,7 @@ function handle(action, dataset) {
       saveHistory(state.history);
       state.current = null;
       saveCurrent(null);
-      state.setup = { teamA: A, teamB: B, overs, battingFirst };
+      state.setup = { teamA: A, teamB: B, overs, battingFirst, pin: genPin() };
       state.modal = null;
       state.detail = null;
       state.ball = emptyBall();
@@ -1910,10 +1969,12 @@ document.addEventListener('DOMContentLoaded', () => {
     if (action === 'start-match') {
       const a = $('team-a-input')?.value || '';
       const b = $('team-b-input')?.value || '';
+      const pin = ($('match-pin-input')?.value || '').trim();
       state.setup.teamA = a;
       state.setup.teamB = b;
       if (!a.trim() || !b.trim()) return showToast('Enter both team names');
-      startMatch(a, b, state.setup.overs, state.setup.battingFirst);
+      if (pin && !/^\d{4}$/.test(pin)) return showToast('PIN must be exactly 4 digits');
+      startMatch(a, b, state.setup.overs, state.setup.battingFirst, pin || null);
       render();
       return;
     }
@@ -1950,6 +2011,38 @@ document.addEventListener('DOMContentLoaded', () => {
       if (input) { input.value = t.dataset.name; input.focus(); }
       return;
     }
+    if (action === 'confirm-claim-pin') {
+      const pin = ($('claim-pin-input')?.value || '').trim();
+      const matchId = t.dataset.matchId;
+      const fromShared = !!t.dataset.fromShared;
+      const m = fromShared ? state.shared : state.history.find(x => x.id === matchId);
+      if (!m) { showToast('Match not found'); return; }
+      if (!pin) { showToast('Enter the PIN'); return; }
+      if (pin !== m.pin) { showToast('Wrong PIN · try again'); return; }
+      m.scoringDeviceId = DEVICE_ID;
+      if (dbOn()) window.QCDB.syncMatch(m);
+      state.modal = null;
+      if (fromShared) {
+        state.current = clone(m);
+        saveCurrent(state.current);
+        state.history = [state.current, ...state.history.filter(x => x.id !== state.current.id)];
+        saveHistory(state.history);
+        state.shared = null;
+        stopPolling();
+        history.replaceState(null, '', location.pathname);
+      } else {
+        saveHistory(state.history);
+        state.current = m;
+        saveCurrent(m);
+      }
+      const inn = state.current.innings[state.current.currentInnings];
+      if (!inn) state.view = 'innings-setup';
+      else if (inn.ended && state.current.currentInnings === 0) state.view = 'innings-break';
+      else state.view = 'score';
+      render();
+      showToast('Scoring claimed · you are now the scorer');
+      return;
+    }
     handle(action, t.dataset);
   });
 
@@ -1961,6 +2054,9 @@ document.addEventListener('DOMContentLoaded', () => {
     } else if (e.target.id === 'new-bowler-input') {
       e.preventDefault();
       app.querySelector('[data-action="confirm-new-bowler"]')?.click();
+    } else if (e.target.id === 'claim-pin-input') {
+      e.preventDefault();
+      app.querySelector('[data-action="confirm-claim-pin"]')?.click();
     }
   });
 
@@ -1968,6 +2064,7 @@ document.addEventListener('DOMContentLoaded', () => {
     if (state.view === 'setup') {
       if (e.target.id === 'team-a-input') state.setup.teamA = e.target.value;
       if (e.target.id === 'team-b-input') state.setup.teamB = e.target.value;
+      if (e.target.id === 'match-pin-input') state.setup.pin = e.target.value;
     }
     if (state.view === 'history' && e.target.id === 'history-date-input') {
       const v = e.target.value;
