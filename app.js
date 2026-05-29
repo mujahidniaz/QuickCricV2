@@ -347,6 +347,7 @@ const state = {
   history: [],
   detail: null,
   shared: null,
+  sharedScorecardOpen: undefined,
   ball: emptyBall(),
   modal: null,
   toast: null,
@@ -854,6 +855,7 @@ async function loadSharedById(id) {
       return;
     }
     state.shared = r.match;
+    state.sharedScorecardOpen = undefined;
     state.view = 'view';
     render();
     startPolling(id);
@@ -1295,6 +1297,70 @@ function renderBallPill(b) {
   return `<div class="${cls}">${esc(b.label)}</div>`;
 }
 
+function renderLivePanel(m) {
+  const inn = m.innings[m.currentInnings];
+  if (!inn || inn.ended) return '';
+
+  const striker = inn.batters[inn.striker];
+  const nonStriker = inn.batters[inn.nonStriker];
+  const bowler = inn.bowlers[inn.currentBowler];
+  const rate = fmtRate(inn.score.runs, inn.score.balls);
+
+  const ballsInCurrentOver = inn.score.balls % 6;
+  const currentOver = Math.floor(inn.score.balls / 6);
+  const liveOver = (ballsInCurrentOver === 0 && inn.score.balls > 0 && inn.needNewBowler)
+    ? currentOver - 1 : currentOver;
+  const overBalls = inn.ballLog.filter(b => b.overNo === liveOver);
+  const legalCount = overBalls.filter(b => b.legal).length;
+  const remainingLegal = Math.max(0, 6 - legalCount);
+  const overSlots = [...overBalls, ...Array(remainingLegal).fill(null)];
+  let overRuns = 0, overWkts = 0;
+  for (const b of overBalls) {
+    overRuns += (Number(b.runs) || 0) + ((b.extra === 'wd' || b.extra === 'nb') ? 1 : 0);
+    if (b.wicket === true) overWkts++;
+  }
+
+  const targetPill = (m.currentInnings === 1 && inn.target != null && inn.target - inn.score.runs > 0)
+    ? `Need ${inn.target - inn.score.runs} from ${(m.overs * 6) - inn.score.balls} balls` : '';
+
+  return `
+    <div class="live-panel">
+      <div class="hero">
+        <div class="team">${esc(m.teams[inn.batting])}${m.currentInnings === 1 ? ' · 2nd innings' : ''}</div>
+        <div class="rate">scoring at ${rate} per over</div>
+        <div class="score-line">${inn.score.runs}/${inn.score.wickets}</div>
+        <div class="overs">${fmtOvers(inn.score.balls)} / ${m.overs}.0 overs</div>
+        ${targetPill ? `<div class="target">${esc(targetPill)}</div>` : ''}
+      </div>
+      <div class="stats">
+        <div class="row">
+          <span class="name striker">${esc(striker?.name || '—')}</span>
+          <span class="figs">${striker?.runs ?? 0} (${striker?.balls ?? 0})</span>
+        </div>
+        <div class="row bowler-row">
+          <span class="name">${esc(bowler?.name || '—')}</span>
+          <span class="figs">${fmtOvers(bowler?.balls ?? 0)} · ${bowler?.runs ?? 0}/${bowler?.wickets ?? 0}</span>
+        </div>
+        <div class="row">
+          <span class="name">${esc(nonStriker?.name || '—')}</span>
+          <span class="figs">${nonStriker?.runs ?? 0} (${nonStriker?.balls ?? 0})</span>
+        </div>
+        <div class="row"></div>
+      </div>
+      <div class="over-strip">
+        <div class="over-strip-head">
+          <div class="heading">Over ${liveOver + 1}</div>
+        </div>
+        <div class="balls">
+          ${overSlots.map(renderBallPill).join('')}
+          ${overBalls.length >= 6 ? `<div class="over-sum">${overRuns}/${overWkts}</div>` : ''}
+        </div>
+      </div>
+      ${inn.freeHit ? `<div class="free-hit-banner"><span class="fh-dot"></span>Free hit · next ball<span class="fh-dot"></span></div>` : ''}
+    </div>
+  `;
+}
+
 function renderInningsBreak() {
   const m = state.current;
   const i1 = m.innings[0];
@@ -1364,7 +1430,7 @@ function renderDetail() {
   `;
 }
 
-function renderInningsCard(m, inn, title) {
+function renderInningsCard(m, inn, title, strikerIdx) {
   const teamName = m.teams[inn.batting];
   return `
     <div class="inn-card">
@@ -1375,10 +1441,10 @@ function renderInningsCard(m, inn, title) {
       <table>
         <thead><tr><th>Batter</th><th>R</th><th>B</th><th>4s</th><th>6s</th></tr></thead>
         <tbody>
-          ${inn.batters.map(b => `
-            <tr>
+          ${inn.batters.map((b, bi) => `
+            <tr${!b.out && bi === strikerIdx ? ' class="row-striker"' : ''}>
               <td>
-                <div>${esc(b.name)}</div>
+                <div>${esc(b.name)}${!b.out && bi === strikerIdx ? '<span class="striker-dot">•</span>' : ''}</div>
                 <div class="${b.out ? 'out' : 'not-out'}">${b.out ? 'out' : 'not out'}</div>
               </td>
               <td>${b.runs}</td>
@@ -1567,9 +1633,16 @@ function renderSharedView() {
       </div>
     `;
   }
+
+  const isLive = m.status !== 'completed';
+  const inn = m.innings[m.currentInnings];
+  const hasActiveInnings = isLive && !!inn && !inn.ended;
+  const defaultOpen = !isLive || !hasActiveInnings;
+  const scorecardOpen = state.sharedScorecardOpen !== undefined ? state.sharedScorecardOpen : defaultOpen;
+
   return `
     <div class="screen result-screen">
-      <div class="view-banner">${m.status === 'completed' ? 'Shared scorecard · read-only' : 'Live scorecard · updates every 3s'}</div>
+      <div class="view-banner">${isLive ? 'Live · updates every 3s' : 'Shared scorecard · read-only'}</div>
       <div class="topbar">
         <div class="left">
           <span class="title">${esc(m.teams.A)} vs ${esc(m.teams.B)}</span>
@@ -1578,18 +1651,42 @@ function renderSharedView() {
           <button class="icon-btn" data-action="back-home" title="Close">×</button>
         </div>
       </div>
-      <div class="result-banner">
-        <div class="label">${m.status === 'completed' ? 'Result' : 'Live'}</div>
-        <div class="winner">${esc(m.result || liveSnapshotLine(m))}</div>
-        <div class="margin">${fmtDate(m.startedAt)} · ${m.overs} overs</div>
-        ${m.status !== 'completed' && m.pin && !canScore(m)
-          ? `<button class="btn btn-primary shared-score-btn" data-action="claim-scoring" data-match-id="${esc(m.id)}" data-from-shared="1">Score this match →</button>`
-          : ''}
-      </div>
-      ${renderTopPerformers(m)}
-      <div class="scorecard">
-        ${m.innings.map((inn, i) => renderInningsCard(m, inn, `Innings ${i + 1}`)).join('')}
-      </div>
+
+      ${hasActiveInnings ? renderLivePanel(m) : `
+        <div class="result-banner">
+          <div class="label">${isLive ? 'Live' : 'Result'}</div>
+          <div class="winner">${esc(m.result || liveSnapshotLine(m))}</div>
+          <div class="margin">${fmtDate(m.startedAt)} · ${m.overs} overs</div>
+        </div>
+        ${!isLive ? renderTopPerformers(m) : ''}
+      `}
+
+      ${hasActiveInnings ? `
+        <div class="live-meta">
+          <span>${fmtDate(m.startedAt)} · ${m.overs} overs</span>
+          ${m.pin && !canScore(m)
+            ? `<button class="btn-inline-score" data-action="claim-scoring" data-match-id="${esc(m.id)}" data-from-shared="1">Score this match →</button>`
+            : ''}
+        </div>
+      ` : isLive && m.pin && !canScore(m) ? `
+        <div class="live-meta">
+          <button class="btn btn-primary shared-score-btn" data-action="claim-scoring" data-match-id="${esc(m.id)}" data-from-shared="1">Score this match →</button>
+        </div>
+      ` : ''}
+
+      ${m.innings.length > 0 ? `
+        <div class="scorecard-section">
+          <button class="scorecard-toggle" data-action="toggle-shared-scorecard">
+            <span>Full scorecard</span>
+            <span class="sc-arrow">${scorecardOpen ? '▴' : '▾'}</span>
+          </button>
+          ${scorecardOpen ? `
+            <div class="scorecard">
+              ${m.innings.map((i, idx) => renderInningsCard(m, i, `Innings ${idx + 1}`, idx === m.currentInnings && isLive ? inn?.striker : undefined)).join('')}
+            </div>
+          ` : ''}
+        </div>
+      ` : isLive ? `<div class="live-meta" style="justify-content: center; color: var(--ink-faint);">Match hasn't started yet</div>` : ''}
     </div>
   `;
 }
@@ -1757,9 +1854,20 @@ function handle(action, dataset) {
       if (dataset.filter !== 'custom') state.historyDate = '';
       render();
       break;
+    case 'toggle-shared-scorecard': {
+      const m = state.shared;
+      const isLive = m?.status !== 'completed';
+      const inn = m?.innings[m?.currentInnings];
+      const hasActive = isLive && !!inn && !inn.ended;
+      const defaultOpen = !isLive || !hasActive;
+      const current = state.sharedScorecardOpen !== undefined ? state.sharedScorecardOpen : defaultOpen;
+      state.sharedScorecardOpen = !current;
+      render(); break;
+    }
     case 'back-home':
       if (state.shared) {
         state.shared = null;
+        state.sharedScorecardOpen = undefined;
         stopPolling();
         history.replaceState(null, '', location.pathname);
       }

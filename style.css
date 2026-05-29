@@ -1244,6 +1244,63 @@ input { background: var(--paper); }
   opacity: 0.8;
 }
 
+/* Shared live view — live panel and scorecard toggle */
+.live-panel { display: flex; flex-direction: column; flex-shrink: 0; }
+
+.live-meta {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 10px 16px;
+  font-size: 12px;
+  color: var(--ink-faint);
+  background: var(--cream);
+  border-bottom: 1px solid var(--line-soft);
+  gap: 12px;
+}
+.btn-inline-score {
+  background: none;
+  border: none;
+  color: var(--accent);
+  font-size: 13px;
+  font-weight: 700;
+  padding: 0;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.scorecard-section { display: flex; flex-direction: column; }
+.scorecard-toggle {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  width: 100%;
+  padding: 14px 16px;
+  background: var(--cream-deep);
+  color: var(--ink);
+  font-size: 14px;
+  font-weight: 700;
+  border: none;
+  border-top: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+  cursor: pointer;
+  text-align: left;
+}
+.scorecard-toggle:active { background: var(--line); }
+.sc-arrow {
+  font-size: 10px;
+  color: var(--ink-faint);
+}
+
+/* Striker row in innings card scorecard */
+.inn-card .row-striker td:first-child { color: var(--striker); font-weight: 700; }
+.striker-dot {
+  color: var(--striker);
+  margin-left: 5px;
+  font-size: 10px;
+  vertical-align: middle;
+}
+
 .scorecard {
   padding: 16px 16px 24px;
   display: flex;
