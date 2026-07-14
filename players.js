@@ -19,10 +19,12 @@
 
   function newPlayer(name) {
     const n = (name || '').trim();
+    const now = Date.now();
     return {
-      id: 'p_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
+      id: 'p_' + now.toString(36) + Math.random().toString(36).slice(2, 6),
       name: n || 'Player',
-      createdAt: Date.now(),
+      createdAt: now,
+      updatedAt: now,
       batting: emptyBatting(),
       bowling: emptyBowling(),
     };
@@ -32,8 +34,26 @@
     try { return JSON.parse(localStorage.getItem(STORE) || '[]'); } catch { return []; }
   }
 
-  function save(players) {
+  function save(players, opts) {
+    const localOnly = !!(opts && opts.localOnly);
     try { localStorage.setItem(STORE, JSON.stringify(players)); } catch { }
+    if (!localOnly && window.QCDB?.enabled) window.QCDB.syncPlayers(players);
+  }
+
+  function merge(local, remote) {
+    const map = new Map();
+    for (const p of remote) map.set(p.id, p);
+    for (const p of local) {
+      const ex = map.get(p.id);
+      const pTs = p.updatedAt || p.createdAt || 0;
+      const exTs = ex ? (ex.updatedAt || ex.createdAt || 0) : -1;
+      if (!ex || pTs >= exTs) map.set(p.id, p);
+    }
+    return Array.from(map.values()).sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+  }
+
+  function touch(p) {
+    p.updatedAt = Date.now();
   }
 
   function findById(players, id) {
@@ -59,6 +79,9 @@
   function remove(players, id) {
     const next = players.filter(p => p.id !== id);
     save(next);
+    if (window.QCDB?.enabled) {
+      window.QCDB.deletePlayer(id).catch(err => console.warn('[QuickCric] player delete failed:', err.message));
+    }
     return next;
   }
 
@@ -225,6 +248,7 @@
       if (!bat.faced && !bowl.bowled) continue;
 
       touched.add(p.id);
+      touch(p);
       if (bat.faced) p.batting.matches += 1;
       if (bowl.bowled) p.bowling.matches += 1;
 
@@ -264,6 +288,7 @@
     STORE,
     load,
     save,
+    merge,
     add,
     remove,
     findById,

@@ -3,7 +3,7 @@
 //
 // Steps (one-time, ~3 minutes, no credit card):
 //   1. Sign up at https://supabase.com and create a new project.
-//   2. Open the SQL editor and paste the schema from CLAUDE.md (the "Supabase setup" block).
+//   2. Open the SQL editor and paste the schema from CLAUDE.md (matches + players tables).
 //   3. From Project Settings → API, copy the Project URL and the `anon` public key.
 //   4. Paste them below and reload.
 //

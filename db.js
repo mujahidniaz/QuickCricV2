@@ -65,6 +65,37 @@
     });
   }
 
+  function toPlayerRow(p) {
+    return {
+      id: p.id,
+      data: p,
+      updated_at: new Date(p.updatedAt || p.createdAt || Date.now()).toISOString()
+    };
+  }
+
+  async function upsertPlayers(players) {
+    if (!players.length) return;
+    return rest('players', {
+      method: 'POST',
+      prefer: 'resolution=merge-duplicates,return=minimal',
+      body: JSON.stringify(players.map(toPlayerRow))
+    });
+  }
+
+  async function loadPlayers() {
+    const rows = await rest(
+      'players?select=data&order=updated_at.desc'
+    );
+    return rows.map((r) => r.data);
+  }
+
+  async function deletePlayer(id) {
+    return rest(`players?id=eq.${encodeURIComponent(id)}`, {
+      method: 'DELETE',
+      prefer: 'return=minimal'
+    });
+  }
+
   // Debounce + coalesce upserts so we don't hammer the API mid-tap-storm.
   let pending = null;
   let inFlight = false;
@@ -93,12 +124,43 @@
     }
   }
 
+  let playersPending = null;
+  let playersInFlight = false;
+  let playersTimer = null;
+  function schedulePlayers(players) {
+    playersPending = players;
+    if (playersTimer) return;
+    playersTimer = setTimeout(flushPlayers, 400);
+  }
+  async function flushPlayers() {
+    playersTimer = null;
+    if (!playersPending || playersInFlight) {
+      if (playersPending) playersTimer = setTimeout(flushPlayers, 400);
+      return;
+    }
+    const list = playersPending;
+    playersPending = null;
+    playersInFlight = true;
+    try {
+      await upsertPlayers(list);
+    } catch (err) {
+      console.warn('[QuickCric] player sync failed:', err.message);
+    } finally {
+      playersInFlight = false;
+      if (playersPending) playersTimer = setTimeout(flushPlayers, 200);
+    }
+  }
+
   window.QCDB = {
     enabled,
     upsertMatch,
     loadMatches,
     loadMatch,
     deleteMatch,
-    syncMatch: schedule
+    syncMatch: schedule,
+    upsertPlayers,
+    loadPlayers,
+    deletePlayer,
+    syncPlayers: schedulePlayers
   };
 })();

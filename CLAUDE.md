@@ -29,24 +29,39 @@ QuickCric stores matches in Supabase so they're available across devices and can
 1. Create an account at https://supabase.com and start a new project (pick any region close to you).
 2. Open the **SQL editor** in the Supabase dashboard, paste the block below, and run it:
 
-   ```sql
-   create table if not exists matches (
-     id text primary key,
-     data jsonb not null,
-     status text not null default 'in_progress',
-     started_at timestamptz not null,
-     updated_at timestamptz not null default now()
-   );
+ ```sql
+ create table if not exists matches (
+ id text primary key,
+ data jsonb not null,
+ status text not null default 'in_progress',
+ started_at timestamptz not null,
+ updated_at timestamptz not null default now()
+ );
 
-   create index if not exists matches_updated_at_idx on matches (updated_at desc);
+ create index if not exists matches_updated_at_idx on matches (updated_at desc);
 
-   alter table matches enable row level security;
+ alter table matches enable row level security;
 
-   create policy "public select" on matches for select using (true);
-   create policy "public insert" on matches for insert with check (true);
-   create policy "public update" on matches for update using (true) with check (true);
-   create policy "public delete" on matches for delete using (true);
-   ```
+ create policy "public select" on matches for select using (true);
+ create policy "public insert" on matches for insert with check (true);
+ create policy "public update" on matches for update using (true) with check (true);
+ create policy "public delete" on matches for delete using (true);
+
+ create table if not exists players (
+ id text primary key,
+ data jsonb not null,
+ updated_at timestamptz not null default now()
+ );
+
+ create index if not exists players_updated_at_idx on players (updated_at desc);
+
+ alter table players enable row level security;
+
+ create policy "public select" on players for select using (true);
+ create policy "public insert" on players for insert with check (true);
+ create policy "public update" on players for update using (true) with check (true);
+ create policy "public delete" on players for delete using (true);
+ ```
 
 3. In **Project Settings → API**, copy the **Project URL** and the **anon public** key.
 4. Paste them into `config.js`:

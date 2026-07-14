@@ -495,6 +495,23 @@ async function refreshHistory() {
   }
 }
 
+async function refreshPlayers() {
+  if (!dbOn() || !window.QCPlayers) return;
+  try {
+    const remote = await window.QCDB.loadPlayers();
+    const local = loadPlayers();
+    const merged = window.QCPlayers.merge(local, remote);
+    window.QCPlayers.save(merged, { localOnly: true });
+    state.players = merged;
+    if (state.playerDetail) {
+      state.playerDetail = playerById(state.playerDetail.id);
+    }
+    if (dbOn()) window.QCDB.syncPlayers(merged);
+  } catch (err) {
+    console.warn('players fetch failed', err);
+  }
+}
+
 function purgeStaleInProgress() {
   const now = Date.now();
   const stale = state.history.filter(m =>
@@ -2422,7 +2439,10 @@ async function init() {
   state.view = 'home';
   render();
 
-  if (dbOn()) refreshHistory();
+  if (dbOn()) {
+    refreshHistory();
+    refreshPlayers().then(() => render());
+  }
 }
 
 document.addEventListener('DOMContentLoaded', () => {
