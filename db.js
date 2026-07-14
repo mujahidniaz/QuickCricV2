@@ -82,14 +82,43 @@
     });
   }
 
-  async function loadPlayers() {
+  const ROSTER_META_ID = '_quickcric:meta';
+
+  async function loadPlayersBundle() {
     const rows = await rest(
-      'players?select=data&order=updated_at.desc'
+      'players?select=id,data&order=updated_at.desc'
     );
-    return rows.map((r) => r.data);
+    const players = [];
+    let deletedNames = [];
+    for (const row of rows) {
+      if (row.id === ROSTER_META_ID) {
+        deletedNames = row.data?.deletedNames || [];
+        continue;
+      }
+      players.push(row.data);
+    }
+    return { players, deletedNames };
+  }
+
+  async function loadPlayers() {
+    const { players } = await loadPlayersBundle();
+    return players;
+  }
+
+  async function upsertRosterMeta(deletedNames) {
+    return rest('players', {
+      method: 'POST',
+      prefer: 'resolution=merge-duplicates,return=minimal',
+      body: JSON.stringify([{
+        id: ROSTER_META_ID,
+        data: { deletedNames, updatedAt: Date.now() },
+        updated_at: new Date().toISOString()
+      }])
+    });
   }
 
   async function deletePlayer(id) {
+    if (id === ROSTER_META_ID) return;
     return rest(`players?id=eq.${encodeURIComponent(id)}`, {
       method: 'DELETE',
       prefer: 'return=minimal'
@@ -160,7 +189,10 @@
     syncMatch: schedule,
     upsertPlayers,
     loadPlayers,
+    loadPlayersBundle,
+    upsertRosterMeta,
     deletePlayer,
-    syncPlayers: schedulePlayers
+    syncPlayers: schedulePlayers,
+    ROSTER_META_ID
   };
 })();

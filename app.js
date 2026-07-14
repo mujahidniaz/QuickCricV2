@@ -360,6 +360,8 @@ const state = {
   historyFilter: 'all',
   historyDate: '',
   showLastOver: false,
+  inningsManual: { striker: false, nonStriker: false, bowler: false },
+  inningsPick: { striker: null, nonStriker: null, bowler: null },
 };
 
 function emptyBall() { return { runs: null, extra: null, wicket: false }; }
@@ -470,6 +472,120 @@ function resolvePlayerId(name) {
   return window.QCPlayers.findByName(state.players, name)?.id || null;
 }
 
+function ensurePlayerInRoster(name, playerId = null) {
+  const trimmed = (name || '').trim();
+  if (!trimmed || !window.QCPlayers) return playerId || null;
+  if (playerId && playerById(playerId)) return playerId;
+  const existing = resolvePlayerId(trimmed);
+  if (existing) return existing;
+  const res = window.QCPlayers.add(state.players, trimmed);
+  if (res.error) return playerId || null;
+  state.players = res.players;
+  return res.player?.id || null;
+}
+
+function resetInningsPickers() {
+  state.inningsManual = { striker: false, nonStriker: false, bowler: false };
+  state.inningsPick = { striker: null, nonStriker: null, bowler: null };
+}
+
+function rosterForSide(match, side) {
+  const squad = squadPlayerIds(match, side);
+  if (squad.length) return squad.map(id => playerById(id)).filter(Boolean);
+  return state.players.slice();
+}
+
+function innPlayerMatch(b, player) {
+  return (player.id && b.playerId === player.id) ||
+    b.name.toLowerCase() === player.name.toLowerCase();
+}
+
+function batterOutInInnings(inn, player) {
+  return inn.batters.some(b => b.out && innPlayerMatch(b, player));
+}
+
+function batterNotOutOnField(inn, player) {
+  return inn.batters.some(b => !b.out && innPlayerMatch(b, player));
+}
+
+function isConsecutiveBowler(inn, player) {
+  if (!inn?.needNewBowler) return false;
+  const last = inn.bowlers[inn.currentBowler];
+  if (!last) return false;
+  return innPlayerMatch(last, player);
+}
+
+function pickerDisabledReason(inn, player, mode, opts = {}) {
+  if (mode === 'bat' && inn) {
+    if (batterOutInInnings(inn, player)) return 'Already out';
+    if (opts.blockOnField && batterNotOutOnField(inn, player)) return 'Already batting';
+  }
+  if (opts.excludeName && player.name.toLowerCase() === opts.excludeName.toLowerCase()) {
+    return 'Already selected';
+  }
+  if (mode === 'bowl' && inn && opts.blockConsecutive && isConsecutiveBowler(inn, player)) {
+    return 'Just bowled this over';
+  }
+  return null;
+}
+
+function renderPlayerPicker(opts) {
+  const {
+    label,
+    action,
+    players,
+    inn = null,
+    mode = 'bat',
+    manualKey = null,
+    inputId = null,
+    excludeName = '',
+    blockOnField = false,
+    blockConsecutive = false,
+    selected = null,
+    modalManual = false,
+  } = opts;
+  const list = players || [];
+  const showManual = manualKey ? state.inningsManual[manualKey] : modalManual;
+  const items = list.map(p => {
+    const reason = pickerDisabledReason(inn, p, mode, { excludeName, blockOnField, blockConsecutive });
+    const isSelected = selected && (selected.id === p.id ||
+      selected.name?.toLowerCase() === p.name.toLowerCase());
+    return `
+      <button type="button"
+        class="player-picker-chip${isSelected ? ' is-selected' : ''}${reason ? ' is-disabled' : ''}"
+        data-action="${reason ? '' : esc(action)}"
+        data-player-id="${esc(p.id)}"
+        data-player-name="${esc(p.name)}"
+        ${reason ? `disabled title="${esc(reason)}"` : ''}>
+        <span class="player-picker-chip-name">${esc(p.name)}</span>
+        ${reason ? `<span class="player-picker-chip-note">${esc(reason)}</span>` : ''}
+      </button>`;
+  }).join('');
+  const toggleAction = manualKey
+    ? `toggle-innings-manual`
+    : 'toggle-modal-manual';
+  const toggleField = manualKey ? ` data-field="${manualKey}"` : '';
+  return `
+    <div class="player-picker">
+      ${label ? `<label class="form-label small text-uppercase fw-bold text-muted">${esc(label)}</label>` : ''}
+      ${list.length ? `
+        <div class="player-picker-grid">${items}</div>
+      ` : `<p class="player-picker-empty">No saved players yet — add a new name below.</p>`}
+      ${!showManual ? `
+        <button type="button" class="btn btn-sm btn-link player-picker-new px-0" data-action="${toggleAction}"${toggleField}>
+          <i class="bi bi-plus-lg me-1"></i>Add new name
+        </button>
+      ` : ''}
+      ${inputId ? `
+        <div class="player-picker-manual${showManual ? '' : ' d-none'}">
+          <label class="form-label" for="${esc(inputId)}">Type a name</label>
+          <input id="${esc(inputId)}" class="form-control form-control-lg" type="text" placeholder="Enter name…" autocomplete="off" autocapitalize="words" />
+        </div>
+      ` : ''}
+    </div>
+  `;
+}
+
 function squadPlayerIds(match, side) {
   return match?.squads?.[side] || [];
 }
@@ -498,15 +614,23 @@ async function refreshHistory() {
 async function refreshPlayers() {
   if (!dbOn() || !window.QCPlayers) return;
   try {
-    const remote = await window.QCDB.loadPlayers();
+    const { players: remote, deletedNames } = await window.QCDB.loadPlayersBundle();
+    window.QCPlayers.applyDeletedNames(deletedNames);
     const local = loadPlayers();
     const merged = window.QCPlayers.merge(local, remote);
-    window.QCPlayers.save(merged, { localOnly: true });
-    state.players = merged;
+    const saved = window.QCPlayers.save(merged);
+    state.players = saved;
     if (state.playerDetail) {
       state.playerDetail = playerById(state.playerDetail.id);
     }
-    if (dbOn()) window.QCDB.syncPlayers(merged);
+    const blocked = new Set(
+      (deletedNames || []).map(n => window.QCPlayers.normalizeName(n)).filter(Boolean)
+    );
+    for (const p of remote) {
+      if (blocked.has(window.QCPlayers.normalizeName(p.name))) {
+        window.QCDB.deletePlayer(p.id).catch(() => {});
+      }
+    }
   } catch (err) {
     console.warn('players fetch failed', err);
   }
@@ -698,28 +822,49 @@ function undoBall(match) {
 }
 
 function addBatter(inn, name, playerId = null) {
+  const trimmed = (name || '').trim();
+  if (!trimmed) return false;
+  if (batterOutInInnings(inn, { id: playerId, name: trimmed })) {
+    showToast('That batter is already out');
+    return false;
+  }
+  if (batterNotOutOnField(inn, { id: playerId, name: trimmed })) {
+    showToast('Already batting');
+    return false;
+  }
+  playerId = ensurePlayerInRoster(trimmed, playerId);
   const idx = inn.batters.length;
-  inn.batters.push(newBatter(name, playerId));
+  inn.batters.push(newBatter(trimmed, playerId));
   if (inn.batters[inn.striker]?.out) inn.striker = idx;
   else if (inn.batters[inn.nonStriker]?.out) inn.nonStriker = idx;
   inn.needNewBatter = false;
+  return true;
 }
 
 function addBowler(inn, name, playerId = null) {
-  const trimmed = (name || '').trim().toLowerCase();
-  const existing = inn.bowlers.findIndex(b => b.name.toLowerCase() === trimmed);
+  const trimmed = (name || '').trim();
+  if (!trimmed) return false;
+  if (isConsecutiveBowler(inn, { id: playerId, name: trimmed })) {
+    showToast("Can't bowl consecutive overs");
+    return false;
+  }
+  playerId = ensurePlayerInRoster(trimmed, playerId);
+  const key = trimmed.toLowerCase();
+  const existing = inn.bowlers.findIndex(b => b.name.toLowerCase() === key);
   if (existing >= 0) {
     inn.currentBowler = existing;
     if (playerId && !inn.bowlers[existing].playerId) inn.bowlers[existing].playerId = playerId;
   } else {
     inn.currentBowler = inn.bowlers.length;
-    inn.bowlers.push(newBowler(name, playerId));
+    inn.bowlers.push(newBowler(trimmed, playerId));
   }
   inn.needNewBowler = false;
+  return true;
 }
 
 // ---------- Transitions ----------
 function goToMatchStart() {
+  resetInningsPickers();
   const useTeamPick = state.players.length > 0 && !state.setup.skipTeamPick;
   if (useTeamPick) {
     state.teamPick = { squads: { A: [], B: [] }, picking: 'A' };
@@ -730,6 +875,7 @@ function goToMatchStart() {
 }
 
 function startMatch(teamA, teamB, overs, battingFirst, pin, squads = null) {
+  resetInningsPickers();
   state.current = newMatch(teamA, teamB, overs, battingFirst, pin, squads);
   if (squads) {
     state.view = 'innings-setup';
@@ -741,6 +887,9 @@ function startMatch(teamA, teamB, overs, battingFirst, pin, squads = null) {
 
 function startInnings(strikerName, nonStrikerName, bowlerName, strikerId = null, nonStrikerId = null, bowlerId = null) {
   const m = state.current;
+  strikerId = ensurePlayerInRoster(strikerName, strikerId);
+  nonStrikerId = ensurePlayerInRoster(nonStrikerName, nonStrikerId);
+  bowlerId = ensurePlayerInRoster(bowlerName, bowlerId);
   const isFirst = m.innings.length === 0;
   const batting = isFirst ? m.battingFirst : (m.battingFirst === 'A' ? 'B' : 'A');
   const bowling = batting === 'A' ? 'B' : 'A';
@@ -810,10 +959,10 @@ function afterBall() {
   if (inn.ended) {
     afterInningsEnd();
   } else if (inn.needNewBatter) {
-    state.modal = { type: 'newBatter' };
+    state.modal = { type: 'newBatter', manual: false };
     render();
   } else if (inn.needNewBowler) {
-    state.modal = { type: 'newBowler' };
+    state.modal = { type: 'newBowler', manual: false };
     render();
   } else {
     render();
@@ -1279,8 +1428,6 @@ function renderInningsSetup() {
   const bowling = batting === 'A' ? 'B' : 'A';
   const team = m.teams[batting];
   const target = !isFirst ? m.innings[0].score.runs + 1 : null;
-  const batSquad = squadPlayerIds(m, batting);
-  const bowlSquad = squadPlayerIds(m, bowling);
   return `
     <div class="screen d-flex flex-column">
       ${renderTopbar(isFirst ? 'Innings 1' : 'Innings 2', { back: 'back-from-innings-setup' })}
@@ -1289,21 +1436,35 @@ function renderInningsSetup() {
         ${target ? `<p class="mb-0 opacity-75 small">Chasing ${target} in ${m.overs} overs</p>` : `<p class="mb-0 opacity-75 small">${m.overs} overs to bat</p>`}
       </div>
       <div class="setup-body flex-grow-1 overflow-auto px-3 py-4">
-        <div class="mb-3">
-          <label class="form-label small text-uppercase fw-bold text-muted">Striker</label>
-          ${renderPlayerChips(batSquad, 'pick-striker')}
-          <input id="striker-input" class="form-control form-control-lg" type="text" placeholder="First batter" autocomplete="off" />
-        </div>
-        <div class="mb-3">
-          <label class="form-label small text-uppercase fw-bold text-muted">Non-striker</label>
-          ${renderPlayerChips(batSquad, 'pick-non-striker')}
-          <input id="non-striker-input" class="form-control form-control-lg" type="text" placeholder="Second batter" autocomplete="off" />
-        </div>
-        <div class="mb-3">
-          <label class="form-label small text-uppercase fw-bold text-muted">Bowler</label>
-          ${renderPlayerChips(bowlSquad, 'pick-bowler')}
-          <input id="bowler-input" class="form-control form-control-lg" type="text" placeholder="Opening bowler" autocomplete="off" />
-        </div>
+        ${renderPlayerPicker({
+          label: 'Striker',
+          action: 'pick-striker',
+          players: rosterForSide(m, batting),
+          mode: 'bat',
+          manualKey: 'striker',
+          inputId: 'striker-input',
+          excludeName: state.inningsPick.nonStriker?.name || '',
+          selected: state.inningsPick.striker,
+        })}
+        ${renderPlayerPicker({
+          label: 'Non-striker',
+          action: 'pick-non-striker',
+          players: rosterForSide(m, batting),
+          mode: 'bat',
+          manualKey: 'nonStriker',
+          inputId: 'non-striker-input',
+          excludeName: state.inningsPick.striker?.name || '',
+          selected: state.inningsPick.nonStriker,
+        })}
+        ${renderPlayerPicker({
+          label: 'Bowler',
+          action: 'pick-bowler',
+          players: rosterForSide(m, bowling),
+          mode: 'bowl',
+          manualKey: 'bowler',
+          inputId: 'bowler-input',
+          selected: state.inningsPick.bowler,
+        })}
       </div>
       ${renderBottomBar('Start innings', 'start-innings')}
     </div>
@@ -1398,7 +1559,7 @@ function renderScore() {
           <button class="wkt-btn ${b.wicket ? 'selected' : ''}" data-action="select-wkt">WKT</button>
           <div class="extras-panel">
             <div class="heading">Extras</div>
-            <div class="row">
+            <div class="extras-btns">
               ${['wd', 'nb', 'lb', 'b'].map(e => `<button class="extra-btn ${b.extra === e ? 'selected' : ''}" data-action="select-extra" data-extra="${e}">${e}</button>`).join('')}
             </div>
           </div>
@@ -1634,24 +1795,6 @@ function todayIso() {
 function fmtDateLabel(iso) {
   const [y, m, d] = iso.split('-').map(Number);
   return new Date(y, m - 1, d).toLocaleDateString(undefined, { day: '2-digit', month: 'short', year: 'numeric' });
-}
-
-function renderPlayerChips(ids, action, excludeNames = []) {
-  const exclude = new Set(excludeNames.map(n => n.toLowerCase()));
-  const items = ids
-    .map(id => playerById(id))
-    .filter(p => p && !exclude.has(p.name.toLowerCase()));
-  if (!items.length) return '';
-  return `
-    <div class="player-chips-block mb-2">
-      <div class="form-text text-uppercase fw-bold mb-1">From squad</div>
-      <div class="d-flex flex-wrap gap-1">
-        ${items.map(p => `
-          <button type="button" class="btn btn-sm btn-outline-secondary rounded-pill" data-action="${esc(action)}" data-player-id="${esc(p.id)}" data-player-name="${esc(p.name)}">${esc(p.name)}</button>
-        `).join('')}
-      </div>
-    </div>
-  `;
 }
 
 function renderAwards(m) {
@@ -2066,28 +2209,37 @@ function renderAbortModal() {
 }
 
 function renderModal() {
+  if (!state.modal) return '';
   if (state.modal.type === 'abort') return renderAbortModal();
   if (state.modal.type === 'install') return renderInstallModal();
   if (state.modal.type === 'newBatter') {
     const inn = state.current.innings[state.current.currentInnings];
-    const onField = new Set(inn.batters.filter(b => !b.out).map(b => b.name.toLowerCase()));
-    const squad = squadPlayerIds(state.current, inn.batting);
-    return renderBsSheet('Next batter', "A wicket fell. Who's coming in?", `
-      ${renderPlayerChips(squad, 'pick-new-batter', [...onField])}
-      <label class="form-label" for="new-batter-input">Batter name</label>
-      <input id="new-batter-input" class="form-control form-control-lg" type="text" placeholder="Type a name…" autocomplete="off" autocapitalize="words" enterkeyhint="done" />
+    const batting = inn.batting;
+    return renderBsSheet('Next batter', "A wicket fell. Pick from your squad or add someone new.", `
+      ${renderPlayerPicker({
+        action: 'pick-new-batter',
+        players: rosterForSide(state.current, batting),
+        inn,
+        mode: 'bat',
+        blockOnField: true,
+        inputId: 'new-batter-input',
+        modalManual: state.modal.manual,
+      })}
     `, `<button type="button" class="btn btn-primary btn-lg w-100" data-action="confirm-new-batter">Continue</button>`);
   }
   if (state.modal.type === 'newBowler') {
     const inn = state.current.innings[state.current.currentInnings];
-    const current = inn.bowlers[inn.currentBowler]?.name;
-    const recent = [...new Set(inn.bowlers.map(b => b.name))].filter(n => n !== current);
-    const squad = squadPlayerIds(state.current, inn.bowling);
-    return renderBsSheet('Next bowler', 'Over complete. Who bowls next?', `
-      ${renderPlayerChips(squad, 'pick-new-bowler', recent)}
-      ${recent.length ? `<div class="mb-3"><div class="form-text fw-bold text-uppercase mb-1">Previously bowled</div><div class="d-flex flex-wrap gap-1">${recent.map(n => `<button type="button" class="btn btn-sm btn-outline-secondary rounded-pill" data-action="recent-bowler" data-name="${esc(n)}">${esc(n)}</button>`).join('')}</div></div>` : ''}
-      <label class="form-label" for="new-bowler-input">Bowler name</label>
-      <input id="new-bowler-input" class="form-control form-control-lg" type="text" placeholder="Type a name…" autocomplete="off" autocapitalize="words" enterkeyhint="done" />
+    const bowling = inn.bowling;
+    return renderBsSheet('Next bowler', 'Over complete. Pick the next bowler.', `
+      ${renderPlayerPicker({
+        action: 'pick-new-bowler',
+        players: rosterForSide(state.current, bowling),
+        inn,
+        mode: 'bowl',
+        blockConsecutive: true,
+        inputId: 'new-bowler-input',
+        modalManual: state.modal.manual,
+      })}
     `, `<button type="button" class="btn btn-primary btn-lg w-100" data-action="confirm-new-bowler">Continue</button>`);
   }
   if (state.modal.type === 'claimPin') {
@@ -2222,35 +2374,52 @@ function handle(action, dataset) {
     case 'pick-bowler':
     case 'pick-new-batter':
     case 'pick-new-bowler': {
-      const inputMap = {
-        'pick-striker': 'striker-input',
-        'pick-non-striker': 'non-striker-input',
-        'pick-bowler': 'bowler-input',
-        'pick-new-batter': 'new-batter-input',
-        'pick-new-bowler': 'new-bowler-input',
+      if (!dataset.playerName) break;
+      const pickMap = {
+        'pick-striker': ['striker-input', 'striker'],
+        'pick-non-striker': ['non-striker-input', 'nonStriker'],
+        'pick-bowler': ['bowler-input', 'bowler'],
       };
-      const input = $(inputMap[action]);
-      if (input) {
-        input.value = dataset.playerName || '';
-        input.dataset.playerId = dataset.playerId || '';
-        input.focus();
+      if (pickMap[action]) {
+        const [inputId, pickKey] = pickMap[action];
+        const input = $(inputId);
+        if (input) {
+          input.value = dataset.playerName || '';
+          input.dataset.playerId = dataset.playerId || '';
+        }
+        state.inningsPick[pickKey] = { name: dataset.playerName, id: dataset.playerId || null };
+        state.inningsManual[pickKey] = false;
+        render();
+        break;
       }
       if (action === 'pick-new-batter') {
-        addBatter(state.current.innings[state.current.currentInnings], dataset.playerName, dataset.playerId);
+        if (!addBatter(state.current.innings[state.current.currentInnings], dataset.playerName, dataset.playerId)) break;
         persistMatch(state.current);
         const inn = state.current.innings[state.current.currentInnings];
-        state.modal = inn.needNewBowler ? { type: 'newBowler' } : null;
+        state.modal = inn.needNewBowler ? { type: 'newBowler', manual: false } : null;
         render();
       } else if (action === 'pick-new-bowler') {
-        addBowler(state.current.innings[state.current.currentInnings], dataset.playerName, dataset.playerId);
+        if (!addBowler(state.current.innings[state.current.currentInnings], dataset.playerName, dataset.playerId)) break;
         persistMatch(state.current);
         state.modal = null;
-        render();
-      } else {
         render();
       }
       break;
     }
+    case 'toggle-innings-manual': {
+      const field = dataset.field;
+      if (field && state.inningsManual[field] !== undefined) {
+        state.inningsManual[field] = !state.inningsManual[field];
+        render();
+      }
+      break;
+    }
+    case 'toggle-modal-manual':
+      if (state.modal) {
+        state.modal.manual = !state.modal.manual;
+        render();
+      }
+      break;
     case 'resume': {
       const m = state.current;
       if (!m) { state.view = 'home'; render(); break; }
@@ -2354,7 +2523,11 @@ function handle(action, dataset) {
       showToast('Confirm setup, then Start match');
       break;
     }
-    case 'start-next-innings': state.view = 'innings-setup'; render(); break;
+    case 'start-next-innings':
+      resetInningsPickers();
+      state.view = 'innings-setup';
+      render();
+      break;
     case 'back-from-innings-setup': {
       const m = state.current;
       if (!m) { state.view = 'home'; render(); break; }
@@ -2431,6 +2604,9 @@ async function init() {
   state.current = loadCurrent();
   state.history = loadHistory();
   state.players = loadPlayers();
+  if (window.QCPlayers) {
+    state.players = window.QCPlayers.save(state.players, { localOnly: true });
+  }
   if (state.current) {
     state.history = [state.current, ...state.history.filter(x => x.id !== state.current.id)];
     saveHistory(state.history);
@@ -2440,8 +2616,9 @@ async function init() {
   render();
 
   if (dbOn()) {
+    await refreshPlayers();
+    render();
     refreshHistory();
-    refreshPlayers().then(() => render());
   }
 }
 
@@ -2468,51 +2645,50 @@ document.addEventListener('DOMContentLoaded', () => {
       return;
     }
     if (action === 'add-player') {
-      const name = $('new-player-input')?.value || '';
-      const res = window.QCPlayers.add(state.players, name);
-      if (res.error) return showToast(res.error);
-      state.players = res.players;
-      render();
-      showToast(`${res.player.name} added`);
+      (async () => {
+        if (dbOn()) await refreshPlayers();
+        const name = $('new-player-input')?.value || '';
+        const res = window.QCPlayers.add(state.players, name);
+        if (res.error) return showToast(res.error);
+        state.players = res.players;
+        render();
+        showToast(`${res.player.name} added`);
+      })();
       return;
     }
     if (action === 'start-innings') {
-      const s = $('striker-input')?.value || '';
-      const ns = $('non-striker-input')?.value || '';
-      const bw = $('bowler-input')?.value || '';
-      const sId = $('striker-input')?.dataset.playerId || null;
-      const nsId = $('non-striker-input')?.dataset.playerId || null;
-      const bwId = $('bowler-input')?.dataset.playerId || null;
-      if (!s.trim() || !ns.trim() || !bw.trim()) return showToast('Need both batters and the bowler');
+      const s = state.inningsPick.striker?.name || $('striker-input')?.value || '';
+      const ns = state.inningsPick.nonStriker?.name || $('non-striker-input')?.value || '';
+      const bw = state.inningsPick.bowler?.name || $('bowler-input')?.value || '';
+      const sId = state.inningsPick.striker?.id || $('striker-input')?.dataset.playerId || null;
+      const nsId = state.inningsPick.nonStriker?.id || $('non-striker-input')?.dataset.playerId || null;
+      const bwId = state.inningsPick.bowler?.id || $('bowler-input')?.dataset.playerId || null;
+      if (!s.trim() || !ns.trim() || !bw.trim()) return showToast('Pick both batters and a bowler');
       if (s.trim().toLowerCase() === ns.trim().toLowerCase()) return showToast('Striker and non-striker must differ');
       startInnings(s, ns, bw, sId, nsId, bwId);
+      resetInningsPickers();
       render();
       return;
     }
     if (action === 'confirm-new-batter') {
       const v = $('new-batter-input')?.value || '';
       const pid = $('new-batter-input')?.dataset.playerId || null;
-      if (!v.trim()) return showToast('Name required');
+      if (!v.trim()) return showToast('Pick a batter or type a name');
       const inn = state.current.innings[state.current.currentInnings];
-      addBatter(inn, v, pid);
+      if (!addBatter(inn, v, pid)) return;
       persistMatch(state.current);
-      state.modal = inn.needNewBowler ? { type: 'newBowler' } : null;
+      state.modal = inn.needNewBowler ? { type: 'newBowler', manual: false } : null;
       render();
       return;
     }
     if (action === 'confirm-new-bowler') {
       const v = $('new-bowler-input')?.value || '';
       const pid = $('new-bowler-input')?.dataset.playerId || null;
-      if (!v.trim()) return showToast('Name required');
-      addBowler(state.current.innings[state.current.currentInnings], v, pid);
+      if (!v.trim()) return showToast('Pick a bowler or type a name');
+      if (!addBowler(state.current.innings[state.current.currentInnings], v, pid)) return;
       persistMatch(state.current);
       state.modal = null;
       render();
-      return;
-    }
-    if (action === 'recent-bowler') {
-      const input = $('new-bowler-input');
-      if (input) { input.value = t.dataset.name; input.focus(); }
       return;
     }
     if (action === 'confirm-claim-pin') {

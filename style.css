@@ -1304,6 +1304,8 @@ input { background: var(--paper); }
   padding: 3px 0;
   font-variant-numeric: tabular-nums;
   min-height: 20px;
+  margin-left: 0;
+  margin-right: 0;
 }
 .stats .row .name { font-weight: 700; }
 .stats .row .name.striker { color: var(--striker); }
@@ -1443,15 +1445,23 @@ input { background: var(--paper); }
   flex-direction: column;
   gap: 8px;
   min-height: 0;
+  min-width: 0;
   justify-content: space-between;
 }
 
-.input-cluster { display: grid; grid-template-columns: auto 1fr; gap: 8px; align-items: stretch; }
+.input-cluster {
+  display: grid;
+  grid-template-columns: 60px minmax(0, 1fr);
+  gap: 6px;
+  align-items: stretch;
+  min-width: 0;
+}
 
 .wkt-btn {
-  width: 72px;
+  width: 60px;
+  min-width: 60px;
   height: 100%;
-  min-height: 80px;
+  min-height: 72px;
   border-radius: var(--radius);
   background: var(--danger-soft);
   color: var(--danger);
@@ -1472,43 +1482,60 @@ input { background: var(--paper); }
 .extras-panel {
   background: var(--paper);
   border-radius: var(--radius);
-  padding: 8px 10px 10px;
+  padding: 6px 6px 8px;
   display: flex;
   flex-direction: column;
   justify-content: center;
-  gap: 6px;
+  gap: 4px;
   border: 1px solid var(--line-soft);
   box-shadow: var(--shadow-1);
+  min-width: 0;
+  width: 100%;
 }
 .extras-panel .heading { font-size: 9px; text-transform: uppercase; letter-spacing: 1.4px; color: var(--ink-faint); text-align: center; font-weight: 800; }
-.extras-panel .row { display: flex; gap: 6px; }
+.extras-panel .extras-btns {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 3px;
+  min-width: 0;
+  width: 100%;
+  margin: 0;
+}
 
 .extra-btn {
-  flex: 1;
-  height: 38px;
+  width: 100%;
+  min-width: 0;
+  height: 34px;
+  padding: 0;
   background: var(--cream-deep);
   border-radius: 999px;
   font-weight: 800;
-  font-size: 12px;
+  font-size: 11px;
   color: var(--ink);
   border: 1.5px solid transparent;
   text-transform: lowercase;
-  letter-spacing: 0.04em;
+  letter-spacing: 0;
   transition: all 0.15s var(--ease-out);
 }
 .extra-btn.selected { background: var(--ink); color: var(--accent); box-shadow: var(--shadow-1); }
 
-.runs-grid { display: grid; grid-template-columns: auto repeat(6, 1fr); gap: 8px; }
+.runs-grid {
+  display: grid;
+  grid-template-columns: 44px repeat(6, minmax(0, 1fr));
+  gap: 6px;
+  min-width: 0;
+}
 
 .run-btn {
-  height: 52px;
-  width: 52px;
+  height: 48px;
+  width: 100%;
+  max-width: 52px;
   border-radius: 50%;
   background: var(--paper);
   color: var(--ink);
   font-family: var(--font-score);
   font-weight: 400;
-  font-size: 19px;
+  font-size: 18px;
   border: 1.5px solid var(--line-soft);
   font-variant-numeric: tabular-nums;
   box-shadow: var(--shadow-1);
@@ -1928,6 +1955,63 @@ input { background: var(--paper); }
 .team-pick-bar .btn-ghost { order: 2; }
 
 /* Player chips in scoring */
+.player-picker { margin-bottom: 1.1rem; }
+.player-picker-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.5rem;
+  margin-bottom: 0.35rem;
+}
+.player-picker-chip {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.15rem;
+  text-align: left;
+  padding: 0.7rem 0.75rem;
+  background: var(--paper);
+  border: 1.5px solid var(--line-soft);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-1);
+  min-height: 52px;
+  transition: border-color 0.15s, transform 0.15s;
+}
+.player-picker-chip:active:not(:disabled) { transform: scale(0.98); }
+.player-picker-chip.is-selected {
+  border-color: var(--green-mid);
+  background: rgba(19, 93, 64, 0.08);
+  box-shadow: 0 0 0 1px rgba(19, 93, 64, 0.15);
+}
+.player-picker-chip.is-disabled {
+  opacity: 0.55;
+  background: var(--line-soft);
+  cursor: not-allowed;
+}
+.player-picker-chip-name {
+  font-weight: 700;
+  font-size: 0.9rem;
+  color: var(--ink);
+  line-height: 1.2;
+}
+.player-picker-chip-note {
+  font-size: 0.65rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--ink-faint);
+}
+.player-picker-empty {
+  font-size: 0.85rem;
+  color: var(--ink-faint);
+  margin: 0 0 0.35rem;
+}
+.player-picker-new {
+  font-weight: 700;
+  color: var(--green-mid);
+  text-decoration: none;
+}
+.player-picker-manual { margin-top: 0.35rem; }
+
 .player-chips-block { margin-bottom: 8px; }
 .player-chips-label { font-size: 11px; color: var(--ink-faint); margin-bottom: 6px; text-transform: uppercase; letter-spacing: 0.04em; }
 .player-chips { display: flex; flex-wrap: wrap; gap: 6px; }
