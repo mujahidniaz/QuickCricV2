@@ -345,13 +345,16 @@ const state = {
   view: 'home',
   current: null,
   history: [],
+  players: [],
+  playerDetail: null,
   detail: null,
   shared: null,
   sharedScorecardOpen: undefined,
   ball: emptyBall(),
   modal: null,
   toast: null,
-  setup: { teamA: '', teamB: '', overs: 6, battingFirst: 'A' },
+  setup: { teamA: '', teamB: '', overs: 6, battingFirst: 'A', pin: '', skipTeamPick: false },
+  teamPick: { squads: { A: [], B: [] }, picking: 'A' },
   loadingHistory: false,
   installTab: 'android',
   historyFilter: 'all',
@@ -438,6 +441,44 @@ function saveCurrent(m) {
   }
 }
 
+function persistMatch(m) {
+  if (!m) return;
+  saveCurrent(m);
+  state.history = [m, ...state.history.filter(x => x.id !== m.id)];
+  saveHistory(state.history);
+}
+
+function loadPlayers() {
+  return window.QCPlayers ? window.QCPlayers.load() : [];
+}
+
+function savePlayersList(arr) {
+  if (window.QCPlayers) window.QCPlayers.save(arr);
+  state.players = arr;
+}
+
+function playerById(id) {
+  return state.players.find(p => p.id === id) || null;
+}
+
+function playerName(id) {
+  return playerById(id)?.name || '';
+}
+
+function resolvePlayerId(name) {
+  if (!window.QCPlayers) return null;
+  return window.QCPlayers.findByName(state.players, name)?.id || null;
+}
+
+function squadPlayerIds(match, side) {
+  return match?.squads?.[side] || [];
+}
+
+function availableForPick() {
+  const picked = new Set([...state.teamPick.squads.A, ...state.teamPick.squads.B]);
+  return state.players.filter(p => !picked.has(p.id));
+}
+
 async function refreshHistory() {
   if (!dbOn()) return;
   state.loadingHistory = true;
@@ -475,11 +516,17 @@ function purgeStaleInProgress() {
 }
 
 // ---------- Match factories ----------
-function newBatter(name) {
-  return { name: (name || '').trim() || 'Batter', runs: 0, balls: 0, fours: 0, sixes: 0, out: false, dismissal: null };
+function newBatter(name, playerId = null) {
+  const pid = playerId || resolvePlayerId(name);
+  return {
+    name: (name || '').trim() || 'Batter',
+    playerId: pid,
+    runs: 0, balls: 0, fours: 0, sixes: 0, out: false, dismissal: null,
+  };
 }
-function newBowler(name) {
-  return { name: (name || '').trim() || 'Bowler', balls: 0, runs: 0, wickets: 0 };
+function newBowler(name, playerId = null) {
+  const pid = playerId || resolvePlayerId(name);
+  return { name: (name || '').trim() || 'Bowler', playerId: pid, balls: 0, runs: 0, wickets: 0 };
 }
 function newInnings(batting, bowling) {
   return {
@@ -494,7 +541,7 @@ function newInnings(batting, bowling) {
     freeHit: false,
   };
 }
-function newMatch(teamA, teamB, overs, battingFirst, pin) {
+function newMatch(teamA, teamB, overs, battingFirst, pin, squads = null) {
   return {
     id: uid(),
     deviceId: DEVICE_ID,
@@ -503,6 +550,8 @@ function newMatch(teamA, teamB, overs, battingFirst, pin) {
     startedAt: Date.now(),
     endedAt: null,
     teams: { A: (teamA || '').trim() || 'Team A', B: (teamB || '').trim() || 'Team B' },
+    squads: squads || { A: [], B: [] },
+    awards: null,
     overs,
     battingFirst,
     status: 'in_progress',
@@ -616,7 +665,7 @@ function recordBall(match, sel) {
 
   audio.onBall(d, wasFreeHit);
   if (!endNow && d.isLegalBall && inn.score.balls % 6 === 0) audio.onOverEnd();
-  saveCurrent(match);
+  persistMatch(match);
   showEventBanner(buildEventBanner(d));
 }
 
@@ -627,50 +676,67 @@ function undoBall(match) {
   match.currentInnings = snap.currentInnings;
   match.status = snap.status;
   match.result = snap.result;
-  saveCurrent(match);
+  persistMatch(match);
   return true;
 }
 
-function addBatter(inn, name) {
+function addBatter(inn, name, playerId = null) {
   const idx = inn.batters.length;
-  inn.batters.push(newBatter(name));
+  inn.batters.push(newBatter(name, playerId));
   if (inn.batters[inn.striker]?.out) inn.striker = idx;
   else if (inn.batters[inn.nonStriker]?.out) inn.nonStriker = idx;
   inn.needNewBatter = false;
 }
 
-function addBowler(inn, name) {
-  const existing = inn.bowlers.findIndex(b => b.name.toLowerCase() === (name || '').trim().toLowerCase());
-  if (existing >= 0) inn.currentBowler = existing;
-  else {
+function addBowler(inn, name, playerId = null) {
+  const trimmed = (name || '').trim().toLowerCase();
+  const existing = inn.bowlers.findIndex(b => b.name.toLowerCase() === trimmed);
+  if (existing >= 0) {
+    inn.currentBowler = existing;
+    if (playerId && !inn.bowlers[existing].playerId) inn.bowlers[existing].playerId = playerId;
+  } else {
     inn.currentBowler = inn.bowlers.length;
-    inn.bowlers.push(newBowler(name));
+    inn.bowlers.push(newBowler(name, playerId));
   }
   inn.needNewBowler = false;
 }
 
 // ---------- Transitions ----------
-function startMatch(teamA, teamB, overs, battingFirst, pin) {
-  state.current = newMatch(teamA, teamB, overs, battingFirst, pin);
-  state.view = 'innings-setup';
-  saveCurrent(state.current);
+function goToMatchStart() {
+  const useTeamPick = state.players.length > 0 && !state.setup.skipTeamPick;
+  if (useTeamPick) {
+    state.teamPick = { squads: { A: [], B: [] }, picking: 'A' };
+    state.view = 'team-pick';
+  } else {
+    state.view = 'innings-setup';
+  }
 }
 
-function startInnings(strikerName, nonStrikerName, bowlerName) {
+function startMatch(teamA, teamB, overs, battingFirst, pin, squads = null) {
+  state.current = newMatch(teamA, teamB, overs, battingFirst, pin, squads);
+  if (squads) {
+    state.view = 'innings-setup';
+  } else {
+    goToMatchStart();
+  }
+  persistMatch(state.current);
+}
+
+function startInnings(strikerName, nonStrikerName, bowlerName, strikerId = null, nonStrikerId = null, bowlerId = null) {
   const m = state.current;
   const isFirst = m.innings.length === 0;
   const batting = isFirst ? m.battingFirst : (m.battingFirst === 'A' ? 'B' : 'A');
   const bowling = batting === 'A' ? 'B' : 'A';
   const inn = newInnings(batting, bowling);
-  inn.batters.push(newBatter(strikerName));
-  inn.batters.push(newBatter(nonStrikerName));
-  inn.bowlers.push(newBowler(bowlerName));
+  inn.batters.push(newBatter(strikerName, strikerId));
+  inn.batters.push(newBatter(nonStrikerName, nonStrikerId));
+  inn.bowlers.push(newBowler(bowlerName, bowlerId));
   if (!isFirst) inn.target = m.innings[0].score.runs + 1;
   m.innings.push(inn);
   m.currentInnings = m.innings.length - 1;
   m.undo = [];
   state.view = 'score';
-  saveCurrent(m);
+  persistMatch(m);
   if (isFirst) audio.onMatchStart();
 }
 
@@ -680,7 +746,7 @@ function endInningsManually() {
   inn.endReason = 'manual';
   inn.needNewBatter = false;
   inn.needNewBowler = false;
-  saveCurrent(state.current);
+  persistMatch(state.current);
 }
 
 function completeMatch() {
@@ -689,6 +755,11 @@ function completeMatch() {
   m.endedAt = Date.now();
   m.result = computeResult(m);
   m.undo = [];
+
+  if (window.QCPlayers) {
+    m.awards = window.QCPlayers.computeAwards(m, state.players);
+    state.players = window.QCPlayers.applyMatchStats(m, state.players);
+  }
 
   if (dbOn()) {
     window.QCDB.upsertMatch(m).catch(err => console.warn('final sync failed', err));
@@ -887,6 +958,7 @@ function render() {
   switch (view) {
     case 'home': html = renderHome(); break;
     case 'setup': html = renderSetup(); break;
+    case 'team-pick': html = renderTeamPick(); break;
     case 'innings-setup': html = renderInningsSetup(); break;
     case 'score': html = renderScore(); break;
     case 'innings-break': html = renderInningsBreak(); break;
@@ -894,6 +966,8 @@ function render() {
     case 'history': html = renderHistory(); break;
     case 'in-progress': html = renderInProgress(); break;
     case 'detail': html = renderDetail(); break;
+    case 'players': html = renderPlayers(); break;
+    case 'player-detail': html = renderPlayerDetail(); break;
     case 'view': html = renderSharedView(); break;
     case 'terms': html = renderTerms(); break;
     default: html = renderHome();
@@ -927,61 +1001,122 @@ function render() {
   }
 }
 
+function renderTopbar(title, opts = {}) {
+  const { back = 'back-home', right = '', ghost = false } = opts;
+  return `
+    <nav class="navbar qc-navbar sticky-top px-3">
+      <div class="d-flex align-items-center gap-2 flex-grow-1 min-w-0">
+        <button type="button" class="btn btn-sm ${ghost ? 'btn-link text-white qc-back-link' : 'btn-outline-light'} qc-back-btn rounded-circle" data-action="${back}" aria-label="Back">
+          <i class="bi bi-arrow-left"></i>
+        </button>
+        <span class="qc-nav-title text-truncate">${esc(title)}</span>
+      </div>
+      ${right ? `<div class="d-flex align-items-center gap-2 flex-shrink-0">${right}</div>` : ''}
+    </nav>`;
+}
+
+function iconBtn(action, icon, extraClass = '', title = '') {
+  const t = title ? ` title="${esc(title)}" aria-label="${esc(title)}"` : '';
+  return `<button type="button" class="btn btn-sm btn-outline-light rounded-circle qc-icon-btn ${extraClass}" data-action="${action}"${t}><i class="bi bi-${icon}"></i></button>`;
+}
+
+function renderBottomBar(label, action, variant = 'primary') {
+  return `
+    <div class="qc-bottom-bar border-top bg-body px-3 py-3 mt-auto">
+      <button type="button" class="btn btn-${variant} btn-lg w-100 fw-bold" data-action="${action}">${esc(label)}</button>
+    </div>`;
+}
+
+function renderBsSheet(title, subtitle, body, footer = '') {
+  return `
+    <div class="modal fade show d-block qc-modal-backdrop" tabindex="-1" role="dialog">
+      <div class="modal-dialog modal-dialog-centered modal-dialog-scrollable qc-sheet-dialog mx-3">
+        <div class="modal-content border-0 shadow-lg rounded-4 overflow-hidden">
+          <div class="modal-header border-0 pb-0 px-4 pt-4">
+            <div>
+              <h5 class="modal-title fw-bold mb-1">${esc(title)}</h5>
+              ${subtitle ? `<p class="text-muted small mb-0">${esc(subtitle)}</p>` : ''}
+            </div>
+          </div>
+          <div class="modal-body px-4">${body}</div>
+          ${footer ? `<div class="modal-footer border-0 flex-column gap-2 px-4 pb-4 pt-0">${footer}</div>` : ''}
+        </div>
+      </div>
+    </div>`;
+}
+
 function renderHome() {
   const cur = state.current;
   const inProgressCount = state.history.filter(m => m.status !== 'completed').length;
   const pastCount = state.history.filter(m => m.status === 'completed').length;
+  const playerCount = state.players.length;
+  const menuCard = (action, icon, label, desc, count, loading, tone = '') => `
+    <button type="button" class="home-card home-card--${tone || 'default'}" data-action="${action}">
+      <span class="home-card-icon"><i class="bi bi-${icon}"></i></span>
+      <span class="home-card-body">
+        <span class="home-card-title">${label}${count ? `<span class="home-card-count">${count}</span>` : ''}${loading ? '<span class="home-menu-spinner"></span>' : ''}</span>
+        <span class="home-card-desc">${desc}</span>
+      </span>
+    </button>`;
   return `
-    <div class="screen">
-      <div class="home-hero">
-        <div class="home-brand">
-          <img class="home-logo" src="icon.svg" alt="" aria-hidden="true" />
-          <h1 class="home-title">Quick<span class="accent">Cric</span></h1>
-        </div>
-        <p>Tap a ball outcome. Skip the setup. Casual cricket scoring that gets out of your way.</p>
+    <div class="screen home-page">
+      <div class="home-atmosphere" aria-hidden="true">
+        <div class="home-orb home-orb--a"></div>
+        <div class="home-orb home-orb--b"></div>
+        <div class="home-grain"></div>
       </div>
-      <div class="home-actions">
-        ${cur ? `
-          <button class="cta resume" data-action="resume">
-            <span>Resume ${esc(cur.teams.A)} vs ${esc(cur.teams.B)}</span>
-            <span class="arrow">→</span>
-          </button>` : ''}
-        <button class="cta" data-action="new-match">
-          <span>${cur ? 'Start new match' : 'Start a match'}</span>
-          <span class="arrow">→</span>
-        </button>
-        ${inProgressCount > 0 ? `
-          <button class="cta cta-secondary" data-action="in-progress">
-            <span>In-progress matches <span class="count">${inProgressCount}</span></span>
-            <span class="arrow">→</span>
-          </button>` : ''}
-        <button class="cta cta-secondary" data-action="history">
-          <span>
-            Past matches
-            ${state.loadingHistory ? `<span class="loading-dot"></span>` : pastCount > 0 ? `<span class="count">${pastCount}</span>` : ''}
-          </span>
-          <span class="arrow">→</span>
-        </button>
-      </div>
-      ${!dbOn() ? `
-        <div class="config-warn">
-          <strong>Cloud sync off.</strong> Open <code>config.js</code> and add your Supabase keys to enable share links and cross-device history.
-        </div>` : ''}
-      <div class="home-fill"></div>
-      ${install.shouldShow() ? `
-        <div class="install-banner">
-          <button class="install-main" data-action="install-show">
-            <div class="install-text">
-              <strong>Install on your phone</strong>
-              <span>Use QuickCric like a regular app · offline-ready</span>
+      <div class="home-shell">
+        <header class="home-brand-card">
+          <img class="home-mark" src="icon.svg" alt="" width="48" height="48" />
+          <div class="home-intro">
+            <div class="home-brand-row">
+              <h1 class="home-wordmark">QuickCric</h1>
+              <span class="home-chip">Offline</span>
             </div>
-            <span class="install-arrow">→</span>
+            <p class="home-lede">Tap outcomes. Skip the setup. Share live scores.</p>
+          </div>
+        </header>
+        <main class="home-main">
+          ${cur ? `
+            <button type="button" class="home-resume" data-action="resume">
+              <span class="home-resume-dot" aria-hidden="true"></span>
+              <span class="home-resume-text">
+                <span class="home-resume-label">Live now</span>
+                <span class="home-resume-match">${esc(cur.teams.A)} vs ${esc(cur.teams.B)}</span>
+              </span>
+              <span class="home-resume-go"><i class="bi bi-play-fill"></i></span>
+            </button>
+          ` : ''}
+          <button type="button" class="home-cta" data-action="new-match">
+            <span class="home-cta-text">
+              <span class="home-cta-label">${cur ? 'New match' : 'Start a match'}</span>
+              <span class="home-cta-sub">Teams · overs · ball-by-ball</span>
+            </span>
+            <span class="home-cta-arrow"><i class="bi bi-arrow-right"></i></span>
           </button>
-          <button class="install-x" data-action="install-dismiss" aria-label="Dismiss">×</button>
-        </div>` : ''}
-      <div class="home-foot">
-        <button class="foot-link" data-action="terms">Terms &amp; Conditions</button>
-        <a class="foot-link" href="https://www.linkedin.com/in/khamash/" target="_blank" rel="noopener noreferrer">Contact</a>
+          <div class="home-grid">
+            ${inProgressCount ? menuCard('in-progress', 'hourglass-split', 'In progress', 'Resume another game', inProgressCount, false, 'amber') : ''}
+            ${menuCard('history', 'trophy', 'Past matches', 'Results & scorecards', pastCount, state.loadingHistory, 'green')}
+            ${menuCard('players', 'people', 'Players', 'Roster & career stats', playerCount, false, 'blue')}
+          </div>
+          ${!dbOn() ? `
+            <p class="home-sync-note"><i class="bi bi-cloud-slash"></i> Cloud sync off — add keys in <code>config.js</code> for share links.</p>
+          ` : ''}
+        </main>
+        <footer class="home-banner">
+          ${install.shouldShow() ? `
+            <div class="home-pwa">
+              <span class="home-pwa-icon"><i class="bi bi-phone"></i></span>
+              <button type="button" class="home-pwa-btn" data-action="install-show">Install for full-screen scoring</button>
+              <button type="button" class="home-pwa-dismiss" data-action="install-dismiss" aria-label="Dismiss"><i class="bi bi-x"></i></button>
+            </div>
+          ` : ''}
+          <div class="home-foot">
+            <button type="button" class="foot-link" data-action="terms">Terms</button>
+            <span class="foot-dot">·</span>
+            <a class="foot-link" href="https://www.linkedin.com/in/khamash/" target="_blank" rel="noopener noreferrer">Contact</a>
+          </div>
+        </footer>
       </div>
     </div>
   `;
@@ -989,15 +1124,9 @@ function renderHome() {
 
 function renderTerms() {
   return `
-    <div class="screen">
-      <div class="topbar">
-        <div class="left">
-          <button class="icon-btn ghost" data-action="back-home">←</button>
-          <span class="title">Terms &amp; Conditions</span>
-        </div>
-        <div class="right"></div>
-      </div>
-      <div class="terms-body">
+    <div class="screen d-flex flex-column">
+      ${renderTopbar('Terms & Conditions', { ghost: true })}
+      <div class="terms-body flex-grow-1 overflow-auto px-3 px-md-4 pb-4">
         <p class="terms-updated">Last updated: 18 May 2026</p>
 
         <p>QuickCric is a small, free, casual cricket scoring app. By opening or using this app you are taken to have read and agreed to these terms. If you do not agree, please stop using the app.</p>
@@ -1065,12 +1194,14 @@ function matchCard(m) {
   const i1 = m.innings[0], i2 = m.innings[1];
   const inProg = m.status !== 'completed';
   return `
-    <button class="match-card ${inProg ? 'in-progress' : ''}" data-action="view-detail" data-match-id="${esc(m.id)}">
-      <div class="date">${fmtDate(m.startedAt)}</div>
-      <div class="teams">${esc(m.teams.A)} vs ${esc(m.teams.B)}</div>
-      ${i1 ? `<div class="innings-row"><span>${esc(m.teams[i1.batting])}</span><span>${i1.score.runs}/${i1.score.wickets} (${fmtOvers(i1.score.balls)})</span></div>` : ''}
-      ${i2 ? `<div class="innings-row"><span>${esc(m.teams[i2.batting])}</span><span>${i2.score.runs}/${i2.score.wickets} (${fmtOvers(i2.score.balls)})</span></div>` : ''}
-      <div class="result">${esc(m.result || 'Match in progress')}</div>
+    <button type="button" class="card w-100 text-start border-0 shadow-sm qc-match-card mb-2 ${inProg ? 'border-start border-4 border-success' : ''}" data-action="view-detail" data-match-id="${esc(m.id)}">
+      <div class="card-body py-3">
+        <div class="text-muted small text-uppercase fw-semibold mb-1">${fmtDate(m.startedAt)}</div>
+        <div class="fw-bold fs-6 mb-2">${esc(m.teams.A)} <span class="text-muted fw-normal">vs</span> ${esc(m.teams.B)}</div>
+        ${i1 ? `<div class="d-flex justify-content-between small text-secondary mb-1"><span>${esc(m.teams[i1.batting])}</span><span class="font-monospace">${i1.score.runs}/${i1.score.wickets} (${fmtOvers(i1.score.balls)})</span></div>` : ''}
+        ${i2 ? `<div class="d-flex justify-content-between small text-secondary mb-2"><span>${esc(m.teams[i2.batting])}</span><span class="font-monospace">${i2.score.runs}/${i2.score.wickets} (${fmtOvers(i2.score.balls)})</span></div>` : ''}
+        <span class="badge ${inProg ? 'text-bg-success' : 'text-bg-primary'}">${esc(m.result || 'In progress')}</span>
+      </div>
     </button>
   `;
 }
@@ -1079,54 +1210,47 @@ function renderSetup() {
   const s = state.setup;
   const presets = [5, 6, 8, 10, 15, 20];
   return `
-    <div class="screen">
-      <div class="topbar">
-        <div class="left">
-          <button class="icon-btn ghost" data-action="back-home">←</button>
-          <span class="title">New match</span>
-        </div>
-        <div class="right"></div>
-      </div>
-      <div class="setup-body">
-        <div class="field">
-          <label>Teams · tap circle to set who bats first</label>
-          <div class="team-row">
-            <input id="team-a-input" type="text" placeholder="Team A" value="${esc(s.teamA)}" />
-            <button class="bat-toggle ${s.battingFirst === 'A' ? 'active' : ''}" data-action="bat-first" data-team="A" aria-label="Team A bats first">A</button>
+    <div class="screen d-flex flex-column">
+      ${renderTopbar('New match', { ghost: true })}
+      <div class="setup-body flex-grow-1 overflow-auto px-3 py-4">
+        <div class="mb-4">
+          <label class="form-label small text-uppercase fw-bold text-muted">Teams · tap to set who bats first</label>
+          <div class="input-group mb-2">
+            <input id="team-a-input" class="form-control form-control-lg" type="text" placeholder="Team A" value="${esc(s.teamA)}" />
+            <button type="button" class="btn ${s.battingFirst === 'A' ? 'btn-warning' : 'btn-outline-secondary'} rounded-circle ms-2 qc-bat-toggle" data-action="bat-first" data-team="A" aria-label="Team A bats first">A</button>
           </div>
-          <div class="team-row">
-            <input id="team-b-input" type="text" placeholder="Team B" value="${esc(s.teamB)}" />
-            <button class="bat-toggle ${s.battingFirst === 'B' ? 'active' : ''}" data-action="bat-first" data-team="B" aria-label="Team B bats first">B</button>
+          <div class="input-group">
+            <input id="team-b-input" class="form-control form-control-lg" type="text" placeholder="Team B" value="${esc(s.teamB)}" />
+            <button type="button" class="btn ${s.battingFirst === 'B' ? 'btn-warning' : 'btn-outline-secondary'} rounded-circle ms-2 qc-bat-toggle" data-action="bat-first" data-team="B" aria-label="Team B bats first">B</button>
           </div>
         </div>
-        <div class="toss-row">
-          <button class="toss-btn" data-action="toss">⟳ Toss a coin</button>
-        </div>
-        <div class="field">
-          <label>Overs per innings</label>
-          <div class="overs-counter">
-            <button class="counter-btn" data-action="overs-step" data-delta="-1" aria-label="Decrease overs" ${s.overs <= 1 ? 'disabled' : ''}>−</button>
+        <button type="button" class="btn btn-outline-secondary w-100 mb-4" data-action="toss"><i class="bi bi-shuffle me-2"></i>Toss a coin</button>
+        <div class="mb-4">
+          <label class="form-label small text-uppercase fw-bold text-muted">Overs per innings</label>
+          <div class="d-flex align-items-center justify-content-center gap-4 mb-3">
+            <button type="button" class="btn btn-dark btn-lg rounded-circle qc-counter-btn" data-action="overs-step" data-delta="-1" aria-label="Decrease overs" ${s.overs <= 1 ? 'disabled' : ''}>−</button>
             <span class="counter-value">${s.overs}</span>
-            <button class="counter-btn" data-action="overs-step" data-delta="1" aria-label="Increase overs" ${s.overs >= 99 ? 'disabled' : ''}>+</button>
+            <button type="button" class="btn btn-dark btn-lg rounded-circle qc-counter-btn" data-action="overs-step" data-delta="1" aria-label="Increase overs" ${s.overs >= 99 ? 'disabled' : ''}>+</button>
           </div>
-          <div class="chip-row chip-row-presets">
-            ${presets.map(o => `<button class="chip ${s.overs === o ? 'selected' : ''}" data-action="overs-pick" data-overs="${o}">${o}</button>`).join('')}
+          <div class="d-flex flex-wrap gap-2 justify-content-center">
+            ${presets.map(o => `<button type="button" class="btn btn-sm ${s.overs === o ? 'btn-dark' : 'btn-outline-secondary'} rounded-pill px-3" data-action="overs-pick" data-overs="${o}">${o}</button>`).join('')}
           </div>
         </div>
-        <div class="field pin-field">
-          <label>Scoring PIN · share with anyone who should score from their device</label>
-          <div class="pin-row">
-            <input id="match-pin-input" class="pin-input" type="text" inputmode="numeric"
-              maxlength="4" pattern="[0-9]{4}" placeholder="····"
-              value="${esc(s.pin || '')}" autocomplete="off" />
-            <button class="pin-refresh" data-action="gen-pin" aria-label="Generate new PIN">⟳</button>
+        <div class="mb-3">
+          <label class="form-label small text-uppercase fw-bold text-muted">Scoring PIN <span class="fw-normal text-muted">(optional)</span></label>
+          <div class="input-group input-group-lg">
+            <input id="match-pin-input" class="form-control text-center font-monospace fw-bold pin-input" type="text" inputmode="numeric" maxlength="4" pattern="[0-9]{4}" placeholder="····" value="${esc(s.pin || '')}" autocomplete="off" />
+            <button type="button" class="btn btn-outline-secondary" data-action="gen-pin" aria-label="Generate new PIN"><i class="bi bi-arrow-clockwise"></i></button>
           </div>
-          <div class="pin-hint">Anyone with this PIN can score from their device · leave blank to disable</div>
+          <div class="form-text">Share PIN so others can score from their device</div>
         </div>
+        ${state.players.length > 0 ? `
+          <div class="alert alert-light border small mb-0">
+            <i class="bi bi-people me-1"></i>${state.players.length} saved players · pick squads next (or skip)
+          </div>
+        ` : ''}
       </div>
-      <div class="bottom-bar">
-        <button class="btn btn-primary" data-action="start-match">Start match</button>
-      </div>
+      ${renderBottomBar('Start match', 'start-match')}
     </div>
   `;
 }
@@ -1135,38 +1259,36 @@ function renderInningsSetup() {
   const m = state.current;
   const isFirst = m.innings.length === 0;
   const batting = isFirst ? m.battingFirst : (m.battingFirst === 'A' ? 'B' : 'A');
+  const bowling = batting === 'A' ? 'B' : 'A';
   const team = m.teams[batting];
   const target = !isFirst ? m.innings[0].score.runs + 1 : null;
+  const batSquad = squadPlayerIds(m, batting);
+  const bowlSquad = squadPlayerIds(m, bowling);
   return `
-    <div class="screen">
-      <div class="topbar">
-        <div class="left">
-          <button class="icon-btn" data-action="back-from-innings-setup" aria-label="Back">←</button>
-          <span class="title">${isFirst ? 'Innings 1' : 'Innings 2'}</span>
-        </div>
-        <div class="right"></div>
+    <div class="screen d-flex flex-column">
+      ${renderTopbar(isFirst ? 'Innings 1' : 'Innings 2', { back: 'back-from-innings-setup' })}
+      <div class="setup-head text-white px-4 py-3">
+        <h2 class="h4 fw-bold mb-1">${esc(team)} batting</h2>
+        ${target ? `<p class="mb-0 opacity-75 small">Chasing ${target} in ${m.overs} overs</p>` : `<p class="mb-0 opacity-75 small">${m.overs} overs to bat</p>`}
       </div>
-      <div class="setup-head">
-        <h2>${esc(team)} batting</h2>
-        ${target ? `<p>Chasing ${target} in ${m.overs} overs</p>` : `<p>${m.overs} overs to bat</p>`}
-      </div>
-      <div class="setup-body">
-        <div class="field">
-          <label>Striker · faces the first ball</label>
-          <input id="striker-input" type="text" placeholder="First batter" autocomplete="off" />
+      <div class="setup-body flex-grow-1 overflow-auto px-3 py-4">
+        <div class="mb-3">
+          <label class="form-label small text-uppercase fw-bold text-muted">Striker</label>
+          ${renderPlayerChips(batSquad, 'pick-striker')}
+          <input id="striker-input" class="form-control form-control-lg" type="text" placeholder="First batter" autocomplete="off" />
         </div>
-        <div class="field">
-          <label>Non-striker</label>
-          <input id="non-striker-input" type="text" placeholder="Second batter" autocomplete="off" />
+        <div class="mb-3">
+          <label class="form-label small text-uppercase fw-bold text-muted">Non-striker</label>
+          ${renderPlayerChips(batSquad, 'pick-non-striker')}
+          <input id="non-striker-input" class="form-control form-control-lg" type="text" placeholder="Second batter" autocomplete="off" />
         </div>
-        <div class="field">
-          <label>Bowler</label>
-          <input id="bowler-input" type="text" placeholder="Opening bowler" autocomplete="off" />
+        <div class="mb-3">
+          <label class="form-label small text-uppercase fw-bold text-muted">Bowler</label>
+          ${renderPlayerChips(bowlSquad, 'pick-bowler')}
+          <input id="bowler-input" class="form-control form-control-lg" type="text" placeholder="Opening bowler" autocomplete="off" />
         </div>
       </div>
-      <div class="bottom-bar">
-        <button class="btn btn-primary" data-action="start-innings">Start innings</button>
-      </div>
+      ${renderBottomBar('Start innings', 'start-innings')}
     </div>
   `;
 }
@@ -1213,16 +1335,10 @@ function renderScore() {
 
   return `
     <div class="screen">
-      <div class="topbar">
-        <div class="left">
-          <button class="icon-btn" data-action="home">←</button>
-          <span class="title">${esc(team)}</span>
-        </div>
-        <div class="right">
-          <button class="icon-btn audio-btn ${audio.enabled ? '' : 'muted'}" data-action="toggle-audio" title="${audio.enabled ? 'Mute sound' : 'Enable sound'}" aria-label="Toggle sound">♪</button>
-          <button class="icon-btn" data-action="share" title="Share">↗</button>
-        </div>
-      </div>
+      ${renderTopbar(team, {
+        back: 'home',
+        right: `${iconBtn('toggle-audio', audio.enabled ? 'volume-up-fill' : 'volume-mute-fill', audio.enabled ? '' : 'muted', 'Toggle sound')}${iconBtn('share', 'box-arrow-up', '', 'Share')}`,
+      })}
       <div class="hero">
         <div class="team">${esc(team)}${m.currentInnings === 1 ? ' · 2nd innings' : ''}</div>
         <div class="rate">scoring at ${rate} per over</div>
@@ -1274,12 +1390,12 @@ function renderScore() {
           <button class="run-btn dot ${b.runs === 0 ? 'selected' : ''}" data-action="select-run" data-runs="0">DOT</button>
           ${[1, 2, 3, 4, 5, 6].map(n => `<button class="run-btn ${b.runs === n ? 'selected' : ''}" data-action="select-run" data-runs="${n}">${n}</button>`).join('')}
         </div>
-        <div class="next-bar">
-          <button class="next-ball" data-action="next-ball" ${canNext ? '' : 'disabled'}>Next ball</button>
+        <div class="next-bar px-1">
+          <button type="button" class="btn btn-dark btn-lg w-100 fw-bold next-ball" data-action="next-ball" ${canNext ? '' : 'disabled'}>Next ball</button>
         </div>
-        <div class="foot-links">
-          <button data-action="end-innings">All out · end innings</button>
-          <button class="danger-link" data-action="abort-show">Abort match</button>
+        <div class="foot-links d-flex justify-content-center gap-3 py-1">
+          <button type="button" class="btn btn-link btn-sm text-muted p-0" data-action="end-innings">End innings</button>
+          <button type="button" class="btn btn-link btn-sm text-danger p-0" data-action="abort-show">Abort match</button>
         </div>
       </div>
     </div>
@@ -1366,29 +1482,17 @@ function renderInningsBreak() {
   const i1 = m.innings[0];
   const battingNext = m.battingFirst === 'A' ? 'B' : 'A';
   return `
-    <div class="screen break-screen">
-      <div class="topbar">
-        <div class="left">
-          <button class="icon-btn" data-action="home">←</button>
-          <span class="title">Innings break</span>
-        </div>
-        <div class="right">
-          <button class="icon-btn" data-action="share" title="Share">↗</button>
-        </div>
-      </div>
-      <div class="break-hero">
-        <div class="label">End of innings 1</div>
-        <div class="team">${esc(m.teams[i1.batting])}</div>
+    <div class="screen break-screen d-flex flex-column overflow-auto">
+      ${renderTopbar('Innings break', { back: 'home', right: iconBtn('share', 'box-arrow-up', '', 'Share') })}
+      <div class="break-hero text-white text-center px-4 py-4">
+        <div class="small text-uppercase opacity-75 fw-bold mb-1">End of innings 1</div>
+        <div class="h5 fw-bold mb-2">${esc(m.teams[i1.batting])}</div>
         <div class="score-big">${i1.score.runs}/${i1.score.wickets}</div>
-        <div>${fmtOvers(i1.score.balls)} overs · RR ${fmtRate(i1.score.runs, i1.score.balls)}</div>
-        <div class="target-pill">${esc(m.teams[battingNext])} need ${i1.score.runs + 1} to win</div>
+        <div class="opacity-75 mb-3">${fmtOvers(i1.score.balls)} overs · RR ${fmtRate(i1.score.runs, i1.score.balls)}</div>
+        <span class="badge rounded-pill text-bg-warning fs-6 px-3 py-2">${esc(m.teams[battingNext])} need ${i1.score.runs + 1}</span>
       </div>
-      <div class="scorecard">
-        ${renderInningsCard(m, i1, 'Innings 1')}
-      </div>
-      <div class="bottom-bar">
-        <button class="btn btn-primary" data-action="start-next-innings">Start 2nd innings</button>
-      </div>
+      <div class="scorecard px-3 pb-3 flex-grow-1">${renderInningsCard(m, i1, 'Innings 1')}</div>
+      ${renderBottomBar('Start 2nd innings', 'start-next-innings')}
     </div>
   `;
 }
@@ -1399,32 +1503,22 @@ function renderDetail() {
   const isJustEnded = state.view === 'result';
   const isHistoricalView = state.view === 'detail' && m.status === 'completed';
   return `
-    <div class="screen result-screen">
-      <div class="topbar">
-        <div class="left">
-          <button class="icon-btn" data-action="back-home">←</button>
-          <span class="title">Match summary</span>
-        </div>
-        <div class="right">
-          <button class="icon-btn" data-action="share" title="Share">↗</button>
-        </div>
+    <div class="screen result-screen d-flex flex-column overflow-auto">
+      ${renderTopbar('Match summary', { right: iconBtn('share', 'box-arrow-up', '', 'Share') })}
+      <div class="result-banner text-white text-center px-4 py-4">
+        <div class="small text-uppercase opacity-75 fw-bold mb-1">${m.status === 'completed' ? 'Result' : 'Status'}</div>
+        <div class="winner display-6 fw-bold mb-2">${esc(m.result || 'Match in progress')}</div>
+        <div class="opacity-75">${esc(m.teams.A)} vs ${esc(m.teams.B)} · ${fmtDate(m.startedAt)} · ${m.overs} overs</div>
       </div>
-      <div class="result-banner">
-        <div class="label">${m.status === 'completed' ? 'Result' : 'Status'}</div>
-        <div class="winner">${esc(m.result || 'Match in progress')}</div>
-        <div class="margin">${esc(m.teams.A)} vs ${esc(m.teams.B)} · ${fmtDate(m.startedAt)} · ${m.overs} overs</div>
-      </div>
+      ${renderAwards(m)}
       ${renderTopPerformers(m)}
-      <div class="scorecard">
+      <div class="scorecard px-3 pb-3 flex-grow-1">
         ${m.innings.map((inn, i) => renderInningsCard(m, inn, `Innings ${i + 1}`)).join('')}
       </div>
-      ${isJustEnded ? `
-        <div class="bottom-bar">
-          <button class="btn btn-primary" data-action="back-home">End match</button>
-        </div>` : ''}
+      ${isJustEnded ? renderBottomBar('Done', 'back-home') : ''}
       ${isHistoricalView ? `
-        <div class="bottom-bar">
-          <button class="btn btn-danger" data-action="delete-match" data-match-id="${esc(m.id)}">Delete match</button>
+        <div class="qc-bottom-bar border-top bg-body px-3 py-3">
+          <button type="button" class="btn btn-outline-danger btn-lg w-100" data-action="delete-match" data-match-id="${esc(m.id)}"><i class="bi bi-trash me-2"></i>Delete match</button>
         </div>` : ''}
     </div>
   `;
@@ -1433,41 +1527,34 @@ function renderDetail() {
 function renderInningsCard(m, inn, title, strikerIdx) {
   const teamName = m.teams[inn.batting];
   return `
-    <div class="inn-card">
-      <div class="head">
-        <span>${esc(title)} · ${esc(teamName)}</span>
-        <span class="total">${inn.score.runs}/${inn.score.wickets} (${fmtOvers(inn.score.balls)})</span>
+    <div class="card border-0 shadow-sm mb-3 overflow-hidden">
+      <div class="card-header d-flex justify-content-between align-items-center bg-light">
+        <span class="fw-bold small">${esc(title)} · ${esc(teamName)}</span>
+        <span class="badge text-bg-dark font-monospace">${inn.score.runs}/${inn.score.wickets} (${fmtOvers(inn.score.balls)})</span>
       </div>
-      <table>
-        <thead><tr><th>Batter</th><th>R</th><th>B</th><th>4s</th><th>6s</th></tr></thead>
-        <tbody>
-          ${inn.batters.map((b, bi) => `
-            <tr${!b.out && bi === strikerIdx ? ' class="row-striker"' : ''}>
-              <td>
-                <div>${esc(b.name)}${!b.out && bi === strikerIdx ? '<span class="striker-dot">•</span>' : ''}</div>
-                <div class="${b.out ? 'out' : 'not-out'}">${b.out ? 'out' : 'not out'}</div>
-              </td>
-              <td>${b.runs}</td>
-              <td>${b.balls}</td>
-              <td>${b.fours}</td>
-              <td>${b.sixes}</td>
-            </tr>
-          `).join('')}
-        </tbody>
-      </table>
-      <table>
-        <thead><tr><th>Bowler</th><th>O</th><th>R</th><th>W</th></tr></thead>
-        <tbody>
-          ${inn.bowlers.map(b => `
-            <tr>
-              <td>${esc(b.name)}</td>
-              <td>${fmtOvers(b.balls)}</td>
-              <td>${b.runs}</td>
-              <td>${b.wickets}</td>
-            </tr>
-          `).join('')}
-        </tbody>
-      </table>
+      <div class="table-responsive">
+        <table class="table table-sm table-striped mb-0 small">
+          <thead class="table-light"><tr><th>Batter</th><th class="text-end">R</th><th class="text-end">B</th><th class="text-end">4s</th><th class="text-end">6s</th></tr></thead>
+          <tbody>
+            ${inn.batters.map((b, bi) => `
+              <tr${!b.out && bi === strikerIdx ? ' class="table-warning"' : ''}>
+                <td><div class="fw-semibold">${esc(b.name)}</div><div class="text-muted" style="font-size:11px">${b.out ? 'out' : 'not out'}</div></td>
+                <td class="text-end">${b.runs}</td><td class="text-end">${b.balls}</td><td class="text-end">${b.fours}</td><td class="text-end">${b.sixes}</td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>
+      </div>
+      <div class="table-responsive border-top">
+        <table class="table table-sm mb-0 small">
+          <thead class="table-light"><tr><th>Bowler</th><th class="text-end">O</th><th class="text-end">R</th><th class="text-end">W</th></tr></thead>
+          <tbody>
+            ${inn.bowlers.map(b => `
+              <tr><td>${esc(b.name)}</td><td class="text-end">${fmtOvers(b.balls)}</td><td class="text-end">${b.runs}</td><td class="text-end">${b.wickets}</td></tr>
+            `).join('')}
+          </tbody>
+        </table>
+      </div>
     </div>
   `;
 }
@@ -1482,10 +1569,12 @@ function renderTopPerformers(m) {
   })[0];
   if (!topBat?.balls && !topBowl?.balls) return '';
   return `
-    <div class="top-performers">
-      <div class="heading">Top performers</div>
-      ${topBat?.balls ? `<div class="perf-row"><span class="role">Top scorer</span><span><strong>${esc(topBat.name)}</strong> · ${topBat.runs}(${topBat.balls})</span></div>` : ''}
-      ${topBowl?.balls ? `<div class="perf-row"><span class="role">Best bowler</span><span><strong>${esc(topBowl.name)}</strong> · ${topBowl.wickets}/${topBowl.runs} (${fmtOvers(topBowl.balls)})</span></div>` : ''}
+    <div class="card border-0 shadow-sm mx-3 mb-3">
+      <div class="card-header bg-transparent fw-bold text-uppercase small">Top performers</div>
+      <ul class="list-group list-group-flush">
+        ${topBat?.balls ? `<li class="list-group-item d-flex justify-content-between"><span class="text-muted small">Top scorer</span><span><strong>${esc(topBat.name)}</strong> · ${topBat.runs}(${topBat.balls})</span></li>` : ''}
+        ${topBowl?.balls ? `<li class="list-group-item d-flex justify-content-between"><span class="text-muted small">Best bowler</span><span><strong>${esc(topBowl.name)}</strong> · ${topBowl.wickets}/${topBowl.runs}</span></li>` : ''}
+      </ul>
     </div>
   `;
 }
@@ -1530,6 +1619,226 @@ function fmtDateLabel(iso) {
   return new Date(y, m - 1, d).toLocaleDateString(undefined, { day: '2-digit', month: 'short', year: 'numeric' });
 }
 
+function renderPlayerChips(ids, action, excludeNames = []) {
+  const exclude = new Set(excludeNames.map(n => n.toLowerCase()));
+  const items = ids
+    .map(id => playerById(id))
+    .filter(p => p && !exclude.has(p.name.toLowerCase()));
+  if (!items.length) return '';
+  return `
+    <div class="player-chips-block mb-2">
+      <div class="form-text text-uppercase fw-bold mb-1">From squad</div>
+      <div class="d-flex flex-wrap gap-1">
+        ${items.map(p => `
+          <button type="button" class="btn btn-sm btn-outline-secondary rounded-pill" data-action="${esc(action)}" data-player-id="${esc(p.id)}" data-player-name="${esc(p.name)}">${esc(p.name)}</button>
+        `).join('')}
+      </div>
+    </div>
+  `;
+}
+
+function renderAwards(m) {
+  const a = m.awards || (m.status === 'completed' && window.QCPlayers
+    ? window.QCPlayers.computeAwards(m, state.players)
+    : null);
+  if (!a || (!a.potm && !a.mvpA && !a.mvpB)) return '';
+  return `
+    <div class="card border-0 shadow-sm mx-3 mb-3">
+      <div class="card-header bg-warning-subtle fw-bold text-uppercase small">Match awards</div>
+      <ul class="list-group list-group-flush">
+        ${a.potm ? `<li class="list-group-item"><span class="badge text-bg-warning me-2">POTM</span><strong>${esc(a.potm.name)}</strong><div class="small text-muted">${esc(a.potm.summary)}</div></li>` : ''}
+        ${a.mvpA ? `<li class="list-group-item"><span class="badge text-bg-primary me-2">${esc(m.teams.A)} MVP</span><strong>${esc(a.mvpA.name)}</strong><div class="small text-muted">${esc(a.mvpA.summary)}</div></li>` : ''}
+        ${a.mvpB ? `<li class="list-group-item"><span class="badge text-bg-success me-2">${esc(m.teams.B)} MVP</span><strong>${esc(a.mvpB.name)}</strong><div class="small text-muted">${esc(a.mvpB.summary)}</div></li>` : ''}
+      </ul>
+    </div>
+  `;
+}
+
+function renderTeamPick() {
+  const tp = state.teamPick;
+  const m = state.current;
+  const picking = tp.picking;
+  const avail = availableForPick();
+  const teamName = m.teams[picking];
+  const countA = tp.squads.A.length;
+  const countB = tp.squads.B.length;
+  return `
+    <div class="screen d-flex flex-column">
+      ${renderTopbar('Pick squads', { back: 'back-from-team-pick', ghost: true })}
+      <div class="setup-head text-white px-4 py-3">
+        <h2 class="h5 fw-bold mb-1">${esc(m.teams.A)} vs ${esc(m.teams.B)}</h2>
+        <p class="mb-0 small opacity-75">Captains pick alternately · optional</p>
+      </div>
+      <div class="px-3 py-3">
+        <div class="row g-2">
+          <div class="col-6">
+            <div class="card h-100 ${picking === 'A' ? 'border-warning border-2 shadow-sm' : ''}">
+              <div class="card-header py-2 d-flex justify-content-between"><span class="small fw-bold">${esc(m.teams.A)}</span><span class="badge text-bg-secondary">${countA}</span></div>
+              <div class="card-body py-2 d-flex flex-wrap gap-1">${tp.squads.A.map(id => `<span class="badge text-bg-light text-dark border">${esc(playerName(id))}</span>`).join('') || '<span class="text-muted small">Empty</span>'}</div>
+            </div>
+          </div>
+          <div class="col-6">
+            <div class="card h-100 ${picking === 'B' ? 'border-warning border-2 shadow-sm' : ''}">
+              <div class="card-header py-2 d-flex justify-content-between"><span class="small fw-bold">${esc(m.teams.B)}</span><span class="badge text-bg-secondary">${countB}</span></div>
+              <div class="card-body py-2 d-flex flex-wrap gap-1">${tp.squads.B.map(id => `<span class="badge text-bg-light text-dark border">${esc(playerName(id))}</span>`).join('') || '<span class="text-muted small">Empty</span>'}</div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="setup-body flex-grow-1 overflow-auto px-3">
+        <p class="mb-3">Picking for <strong>${esc(teamName)}</strong></p>
+        <div class="d-flex flex-wrap gap-2">
+          ${avail.length ? avail.map(p => `
+            <button type="button" class="btn btn-outline-dark rounded-pill" data-action="team-pick-player" data-player-id="${esc(p.id)}">${esc(p.name)}</button>
+          `).join('') : '<span class="text-muted">All players picked</span>'}
+        </div>
+      </div>
+      <div class="qc-bottom-bar border-top bg-body px-3 py-3 mt-auto d-grid gap-2">
+        <button type="button" class="btn btn-primary btn-lg fw-bold" data-action="finish-team-pick">Continue to match</button>
+        <button type="button" class="btn btn-link text-muted" data-action="skip-team-pick">Skip · type names later</button>
+      </div>
+    </div>
+  `;
+}
+
+function renderPlayers() {
+  const list = state.players;
+  return `
+    <div class="screen d-flex flex-column">
+      ${renderTopbar('Players', { ghost: true })}
+      <div class="px-3 py-3 border-bottom bg-white">
+        <div class="input-group input-group-lg shadow-sm rounded-3 overflow-hidden">
+          <span class="input-group-text bg-white border-end-0"><i class="bi bi-person-plus text-muted"></i></span>
+          <input id="new-player-input" class="form-control border-start-0 border-end-0" type="text" placeholder="Add player name…" autocomplete="off" autocapitalize="words" />
+          <button type="button" class="btn btn-primary px-4" data-action="add-player">Add</button>
+        </div>
+      </div>
+      <div class="scroll flex-grow-1 overflow-auto players-list-scroll">
+        ${list.length === 0 ? `
+          <div class="players-empty">
+            <i class="bi bi-people"></i>
+            <p>No saved players yet</p>
+            <span>Add names you score with often</span>
+          </div>
+        ` : `
+          <div class="players-list">
+            ${list.map(p => `
+              <button type="button" class="player-list-item" data-action="view-player" data-player-id="${esc(p.id)}">
+                <span class="player-list-avatar">${esc(p.name.charAt(0).toUpperCase())}</span>
+                <span class="player-list-body">
+                  <span class="player-list-name">${esc(p.name)}</span>
+                  <span class="player-list-meta">${p.batting.runs} runs · ${p.bowling.wickets} wkts · SR ${window.QCPlayers.batSR(p.batting)}</span>
+                </span>
+                <i class="bi bi-chevron-right player-list-chevron"></i>
+              </button>
+            `).join('')}
+          </div>
+        `}
+      </div>
+    </div>
+  `;
+}
+
+function renderStatList(items) {
+  return `
+    <div class="player-stat-list">
+      ${items.map(([label, val]) => `
+        <div class="player-stat-row">
+          <span class="player-stat-label">${esc(label)}</span>
+          <span class="player-stat-value">${esc(String(val))}</span>
+        </div>
+      `).join('')}
+    </div>`;
+}
+
+function renderPlayerDetail() {
+  const p = state.playerDetail;
+  if (!p) return renderPlayers();
+  const bat = p.batting;
+  const bowl = p.bowling;
+  const QP = window.QCPlayers;
+  const bestBowl = bowl.bestWickets
+    ? `${bowl.bestWickets}/${bowl.bestRuns ?? 0}`
+    : '—';
+  const batPrimary = [
+    ['Runs', bat.runs],
+    ['Average', QP.batAvg(bat)],
+    ['Strike rate', QP.batSR(bat)],
+    ['Highest', bat.highest],
+  ];
+  const batSecondary = [
+    ['Matches', bat.matches],
+    ['Innings', bat.innings],
+    ['Balls faced', bat.balls],
+    ['Fifties', bat.fifties],
+    ['Hundreds', bat.hundreds],
+    ['Fours', bat.fours],
+    ['Sixes', bat.sixes],
+    ['Ducks', bat.ducks],
+  ];
+  const bowlPrimary = [
+    ['Wickets', bowl.wickets],
+    ['Average', QP.bowlAvg(bowl)],
+    ['Economy', QP.bowlEcon(bowl)],
+    ['Best figures', bestBowl],
+  ];
+  const bowlSecondary = [
+    ['Matches', bowl.matches],
+    ['Overs', QP.fmtOvers(bowl.balls)],
+    ['Runs conceded', bowl.runs],
+    ['Strike rate', QP.bowlSR(bowl)],
+    ['3-wicket hauls', bowl.threeWickets],
+    ['5-wicket hauls', bowl.fiveWickets],
+  ];
+  return `
+    <div class="screen d-flex flex-column player-profile-screen">
+      ${renderTopbar('Player stats', { back: 'players', ghost: true })}
+      <div class="scroll flex-grow-1 overflow-auto">
+        <div class="player-hero">
+          <div class="player-hero-inner">
+            <div class="player-avatar">${esc(p.name.charAt(0).toUpperCase())}</div>
+            <h1 class="player-hero-name">${esc(p.name)}</h1>
+            <p class="player-hero-line">${bat.runs} runs · ${bowl.wickets} wickets · SR ${QP.batSR(bat)}</p>
+          </div>
+        </div>
+        <div class="player-sections">
+          <section class="player-section">
+            <h2 class="player-section-title"><span class="dot batting"></span>Batting</h2>
+            <div class="player-stat-card">
+              <div class="player-stat-highlights">
+                ${batPrimary.map(([lbl, val]) => `
+                  <div class="player-highlight">
+                    <div class="player-highlight-val">${esc(String(val))}</div>
+                    <div class="player-highlight-lbl">${esc(lbl)}</div>
+                  </div>
+                `).join('')}
+              </div>
+              ${renderStatList(batSecondary)}
+            </div>
+          </section>
+          <section class="player-section">
+            <h2 class="player-section-title"><span class="dot bowling"></span>Bowling</h2>
+            <div class="player-stat-card">
+              <div class="player-stat-highlights">
+                ${bowlPrimary.map(([lbl, val]) => `
+                  <div class="player-highlight">
+                    <div class="player-highlight-val">${esc(String(val))}</div>
+                    <div class="player-highlight-lbl">${esc(lbl)}</div>
+                  </div>
+                `).join('')}
+              </div>
+              ${renderStatList(bowlSecondary)}
+            </div>
+          </section>
+          <button type="button" class="btn btn-outline-danger w-100 player-delete-btn" data-action="delete-player" data-player-id="${esc(p.id)}">
+            <i class="bi bi-trash3 me-2"></i>Remove player
+          </button>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
 function renderHistory() {
   const filter = state.historyFilter;
   const customDate = state.historyDate;
@@ -1537,35 +1846,26 @@ function renderHistory() {
   const filtered = filterByDate(completed, filter, customDate);
   const isCustom = filter === 'custom';
   return `
-    <div class="screen">
-      <div class="topbar">
-        <div class="left">
-          <button class="icon-btn" data-action="back-home">←</button>
-          <span class="title">Past matches</span>
-        </div>
-        <div class="right">
-          ${state.loadingHistory ? `<span class="loading-dot light"></span>` : ''}
+    <div class="screen d-flex flex-column">
+      ${renderTopbar('Past matches', { right: state.loadingHistory ? '<span class="spinner-border spinner-border-sm text-light"></span>' : '' })}
+      <div class="px-3 py-2 border-bottom bg-body overflow-auto">
+        <div class="btn-group btn-group-sm flex-nowrap w-100" role="group">
+          ${HISTORY_FILTERS.map(f => `
+            <button type="button" class="btn ${filter === f.id ? 'btn-dark' : 'btn-outline-secondary'} rounded-pill me-1" data-action="history-filter" data-filter="${f.id}">${esc(f.label)}</button>
+          `).join('')}
+          <label class="btn btn-outline-secondary rounded-pill mb-0 position-relative overflow-hidden">
+            <i class="bi bi-calendar3 me-1"></i>${isCustom && customDate ? esc(fmtDateLabel(customDate)) : 'Date'}
+            <input id="history-date-input" type="date" class="position-absolute top-0 start-0 w-100 h-100 opacity-0" value="${esc(customDate || '')}" max="${todayIso()}" />
+          </label>
+          ${isCustom ? `<button type="button" class="btn btn-outline-danger rounded-pill" data-action="history-filter" data-filter="all">×</button>` : ''}
         </div>
       </div>
-      <div class="history-filters">
-        ${HISTORY_FILTERS.map(f => `
-          <button class="filter-chip ${filter === f.id ? 'active' : ''}" data-action="history-filter" data-filter="${f.id}">
-            ${esc(f.label)}
-          </button>
-        `).join('')}
-        <label class="filter-chip date-chip ${isCustom ? 'active' : ''}">
-          <span class="date-icon" aria-hidden="true">📅</span>
-          <span class="date-label">${isCustom && customDate ? esc(fmtDateLabel(customDate)) : 'Pick date'}</span>
-          <input id="history-date-input" type="date" value="${esc(customDate || '')}" max="${todayIso()}" />
-        </label>
-        ${isCustom ? `<button class="filter-chip clear-chip" data-action="history-filter" data-filter="all" aria-label="Clear date">×</button>` : ''}
-      </div>
-      <div class="scroll" style="padding: 12px 16px 16px;">
+      <div class="scroll flex-grow-1 overflow-auto px-3 py-3">
         ${filtered.length === 0 ? `
-          <div class="empty">${completed.length === 0 ? 'No completed matches yet.' : 'No matches in this range.'}</div>
+          <div class="text-center text-muted py-5">${completed.length === 0 ? 'No completed matches yet.' : 'No matches in this range.'}</div>
         ` : `
-          <div class="history-count">${filtered.length} ${filtered.length === 1 ? 'match' : 'matches'}</div>
-          <div class="match-list" style="padding: 0;">${filtered.map(matchCard).join('')}</div>
+          <p class="small text-uppercase fw-bold text-muted mb-2">${filtered.length} ${filtered.length === 1 ? 'match' : 'matches'}</p>
+          ${filtered.map(matchCard).join('')}
         `}
       </div>
     </div>
@@ -1576,24 +1876,14 @@ function renderInProgress() {
   const items = state.history.filter(m => m.status !== 'completed')
     .sort((a, b) => b.startedAt - a.startedAt);
   return `
-    <div class="screen">
-      <div class="topbar">
-        <div class="left">
-          <button class="icon-btn" data-action="back-home">←</button>
-          <span class="title">In-progress matches</span>
-        </div>
-        <div class="right">
-          ${state.loadingHistory ? `<span class="loading-dot light"></span>` : ''}
-        </div>
-      </div>
-      <div class="scroll" style="padding: 16px;">
+    <div class="screen d-flex flex-column">
+      ${renderTopbar('In-progress', { right: state.loadingHistory ? '<span class="spinner-border spinner-border-sm text-light"></span>' : '' })}
+      <div class="scroll flex-grow-1 overflow-auto px-3 py-3">
         ${items.length === 0 ? `
-          <div class="empty">No matches in progress.</div>
+          <div class="text-center text-muted py-5">No matches in progress.</div>
         ` : `
-          <div class="history-count">${items.length} ${items.length === 1 ? 'match' : 'matches'}</div>
-          <div class="match-list" style="padding: 0;">
-            ${items.map(inProgressCard).join('')}
-          </div>
+          <p class="small text-uppercase fw-bold text-muted mb-2">${items.length} ${items.length === 1 ? 'match' : 'matches'}</p>
+          ${items.map(inProgressCard).join('')}
         `}
       </div>
     </div>
@@ -1604,19 +1894,19 @@ function inProgressCard(m) {
   const scorer = canScore(m);
   const i1 = m.innings[0], i2 = m.innings[1];
   return `
-    <div class="match-card-wrap">
-      <button class="match-card in-progress" data-action="view-detail" data-match-id="${esc(m.id)}">
-        <div class="date">${fmtDate(m.startedAt)}</div>
-        <div class="teams">${esc(m.teams.A)} vs ${esc(m.teams.B)}</div>
-        ${i1 ? `<div class="innings-row"><span>${esc(m.teams[i1.batting])}</span><span>${i1.score.runs}/${i1.score.wickets} (${fmtOvers(i1.score.balls)})</span></div>` : ''}
-        ${i2 ? `<div class="innings-row"><span>${esc(m.teams[i2.batting])}</span><span>${i2.score.runs}/${i2.score.wickets} (${fmtOvers(i2.score.balls)})</span></div>` : ''}
-        <div class="result">In progress</div>
+    <div class="card border-0 shadow-sm mb-3 overflow-hidden">
+      <button type="button" class="card-body w-100 text-start border-0 bg-transparent qc-match-card" data-action="view-detail" data-match-id="${esc(m.id)}">
+        <div class="text-muted small text-uppercase fw-semibold mb-1">${fmtDate(m.startedAt)}</div>
+        <div class="fw-bold mb-2">${esc(m.teams.A)} vs ${esc(m.teams.B)}</div>
+        ${i1 ? `<div class="d-flex justify-content-between small text-secondary mb-1"><span>${esc(m.teams[i1.batting])}</span><span class="font-monospace">${i1.score.runs}/${i1.score.wickets}</span></div>` : ''}
+        ${i2 ? `<div class="d-flex justify-content-between small text-secondary mb-2"><span>${esc(m.teams[i2.batting])}</span><span class="font-monospace">${i2.score.runs}/${i2.score.wickets}</span></div>` : ''}
+        <span class="badge text-bg-success">In progress</span>
       </button>
       ${scorer
-      ? `<button class="resume-inline" data-action="resume-match" data-match-id="${esc(m.id)}">Resume <span>→</span></button>`
+      ? `<button type="button" class="btn btn-warning w-100 rounded-0 fw-bold" data-action="resume-match" data-match-id="${esc(m.id)}"><i class="bi bi-play-fill me-2"></i>Resume</button>`
       : m.pin
-        ? `<button class="resume-inline claim-scoring-btn" data-action="claim-scoring" data-match-id="${esc(m.id)}">Enter PIN to score <span>→</span></button>`
-        : `<div class="other-device-note">Started on another device · view only</div>`}
+        ? `<button type="button" class="btn btn-success w-100 rounded-0 fw-bold" data-action="claim-scoring" data-match-id="${esc(m.id)}"><i class="bi bi-key me-2"></i>Enter PIN to score</button>`
+        : `<div class="small text-center text-muted py-2 bg-light border-top">View only · started on another device</div>`}
     </div>
   `;
 }
@@ -1658,6 +1948,8 @@ function renderSharedView() {
           <div class="winner">${esc(m.result || liveSnapshotLine(m))}</div>
           <div class="margin">${fmtDate(m.startedAt)} · ${m.overs} overs</div>
         </div>
+        ${!isLive ? renderAwards(m) : ''}
+        ${!isLive ? renderAwards(m) : ''}
         ${!isLive ? renderTopPerformers(m) : ''}
       `}
 
@@ -1760,60 +2052,35 @@ function renderModal() {
   if (state.modal.type === 'abort') return renderAbortModal();
   if (state.modal.type === 'install') return renderInstallModal();
   if (state.modal.type === 'newBatter') {
-    return `
-      <div class="modal-bg">
-        <div class="modal name-modal">
-          <h3>Next batter</h3>
-          <p>A wicket fell. Who's coming in?</p>
-          <div class="modal-field">
-            <label for="new-batter-input">Batter name</label>
-            <input id="new-batter-input" class="modal-input" type="text" placeholder="Type a name…" autocomplete="off" autocapitalize="words" enterkeyhint="done" />
-          </div>
-          <button class="btn btn-primary btn-tall" data-action="confirm-new-batter">Continue</button>
-        </div>
-      </div>
-    `;
+    const inn = state.current.innings[state.current.currentInnings];
+    const onField = new Set(inn.batters.filter(b => !b.out).map(b => b.name.toLowerCase()));
+    const squad = squadPlayerIds(state.current, inn.batting);
+    return renderBsSheet('Next batter', "A wicket fell. Who's coming in?", `
+      ${renderPlayerChips(squad, 'pick-new-batter', [...onField])}
+      <label class="form-label" for="new-batter-input">Batter name</label>
+      <input id="new-batter-input" class="form-control form-control-lg" type="text" placeholder="Type a name…" autocomplete="off" autocapitalize="words" enterkeyhint="done" />
+    `, `<button type="button" class="btn btn-primary btn-lg w-100" data-action="confirm-new-batter">Continue</button>`);
   }
   if (state.modal.type === 'newBowler') {
     const inn = state.current.innings[state.current.currentInnings];
     const current = inn.bowlers[inn.currentBowler]?.name;
     const recent = [...new Set(inn.bowlers.map(b => b.name))].filter(n => n !== current);
-    return `
-      <div class="modal-bg">
-        <div class="modal name-modal">
-          <h3>Next bowler</h3>
-          <p>Over complete. Who's bowling next?</p>
-          ${recent.length ? `
-            <div class="recents-block">
-              <div class="recents-label">Previously bowled</div>
-              <div class="recents">${recent.map(n => `<button class="recent" data-action="recent-bowler" data-name="${esc(n)}">${esc(n)}</button>`).join('')}</div>
-            </div>` : ''}
-          <div class="modal-field">
-            <label for="new-bowler-input">Bowler name</label>
-            <input id="new-bowler-input" class="modal-input" type="text" placeholder="Type a name…" autocomplete="off" autocapitalize="words" enterkeyhint="done" />
-          </div>
-          <button class="btn btn-primary btn-tall" data-action="confirm-new-bowler">Continue</button>
-        </div>
-      </div>
-    `;
+    const squad = squadPlayerIds(state.current, inn.bowling);
+    return renderBsSheet('Next bowler', 'Over complete. Who bowls next?', `
+      ${renderPlayerChips(squad, 'pick-new-bowler', recent)}
+      ${recent.length ? `<div class="mb-3"><div class="form-text fw-bold text-uppercase mb-1">Previously bowled</div><div class="d-flex flex-wrap gap-1">${recent.map(n => `<button type="button" class="btn btn-sm btn-outline-secondary rounded-pill" data-action="recent-bowler" data-name="${esc(n)}">${esc(n)}</button>`).join('')}</div></div>` : ''}
+      <label class="form-label" for="new-bowler-input">Bowler name</label>
+      <input id="new-bowler-input" class="form-control form-control-lg" type="text" placeholder="Type a name…" autocomplete="off" autocapitalize="words" enterkeyhint="done" />
+    `, `<button type="button" class="btn btn-primary btn-lg w-100" data-action="confirm-new-bowler">Continue</button>`);
   }
   if (state.modal.type === 'claimPin') {
-    return `
-      <div class="modal-bg">
-        <div class="modal name-modal">
-          <h3>Enter Match PIN</h3>
-          <p>Enter the 4-digit PIN to claim scoring on this device.</p>
-          <div class="modal-field">
-            <label for="claim-pin-input">Match PIN</label>
-            <input id="claim-pin-input" class="modal-input pin-modal-input" type="text"
-              inputmode="numeric" maxlength="4" pattern="[0-9]{4}"
-              placeholder="····" autocomplete="off" enterkeyhint="done" />
-          </div>
-          <button class="btn btn-primary btn-tall" data-action="confirm-claim-pin" data-match-id="${esc(state.modal.matchId)}" data-from-shared="${state.modal.fromShared ? '1' : ''}">Claim scoring →</button>
-          <button class="btn btn-ghost" data-action="cancel-claim-pin">Cancel</button>
-        </div>
-      </div>
-    `;
+    return renderBsSheet('Enter match PIN', '4-digit PIN to claim scoring on this device', `
+      <label class="form-label" for="claim-pin-input">PIN</label>
+      <input id="claim-pin-input" class="form-control form-control-lg text-center font-monospace fw-bold pin-input" type="text" inputmode="numeric" maxlength="4" pattern="[0-9]{4}" placeholder="····" autocomplete="off" enterkeyhint="done" />
+    `, `
+      <button type="button" class="btn btn-primary btn-lg w-100" data-action="confirm-claim-pin" data-match-id="${esc(state.modal.matchId)}" data-from-shared="${state.modal.fromShared ? '1' : ''}">Claim scoring</button>
+      <button type="button" class="btn btn-link w-100" data-action="cancel-claim-pin">Cancel</button>
+    `);
   }
   return '';
 }
@@ -1840,7 +2107,7 @@ function handle(action, dataset) {
       if (!m) { showToast('Match not found'); break; }
       if (!canScore(m)) { showToast(m.pin ? 'Enter PIN to score' : 'Started on another device'); break; }
       state.current = m;
-      saveCurrent(m);
+      persistMatch(m);
       state.detail = null;
       const inn = m.innings[m.currentInnings];
       if (!inn) state.view = 'innings-setup';
@@ -1876,8 +2143,97 @@ function handle(action, dataset) {
       break;
     case 'new-match':
       state.view = 'setup';
-      state.setup = { teamA: '', teamB: '', overs: 6, battingFirst: 'A', pin: genPin() };
+      state.setup = { teamA: '', teamB: '', overs: 6, battingFirst: 'A', pin: genPin(), skipTeamPick: false };
       render(); break;
+    case 'players':
+      state.view = 'players';
+      state.playerDetail = null;
+      render(); break;
+    case 'view-player': {
+      const p = playerById(dataset.playerId);
+      if (p) { state.playerDetail = p; state.view = 'player-detail'; render(); }
+      break;
+    }
+    case 'delete-player': {
+      if (!confirm('Delete this player and their career stats?')) break;
+      state.players = window.QCPlayers.remove(state.players, dataset.playerId);
+      state.playerDetail = null;
+      state.view = 'players';
+      render();
+      showToast('Player removed');
+      break;
+    }
+    case 'team-pick-player': {
+      const id = dataset.playerId;
+      const side = state.teamPick.picking;
+      if (!id || state.teamPick.squads[side].includes(id)) break;
+      if (state.teamPick.squads.A.includes(id) || state.teamPick.squads.B.includes(id)) break;
+      state.teamPick.squads[side].push(id);
+      state.teamPick.picking = side === 'A' ? 'B' : 'A';
+      render();
+      break;
+    }
+    case 'skip-team-pick':
+      if (state.current) {
+        state.current.squads = { A: [], B: [] };
+        persistMatch(state.current);
+      }
+      state.view = 'innings-setup';
+      render(); break;
+    case 'finish-team-pick':
+      if (state.current) {
+        state.current.squads = clone(state.teamPick.squads);
+        persistMatch(state.current);
+      }
+      state.view = 'innings-setup';
+      render(); break;
+    case 'back-from-team-pick': {
+      const m = state.current;
+      if (!m) { state.view = 'home'; render(); break; }
+      if (dbOn()) window.QCDB.deleteMatch(m.id).catch(() => { });
+      state.history = state.history.filter(x => x.id !== m.id);
+      saveHistory(state.history);
+      state.setup = { teamA: m.teams.A, teamB: m.teams.B, overs: m.overs, battingFirst: m.battingFirst, pin: m.pin || '', skipTeamPick: false };
+      state.current = null;
+      saveCurrent(null);
+      state.view = 'setup';
+      render();
+      break;
+    }
+    case 'pick-striker':
+    case 'pick-non-striker':
+    case 'pick-bowler':
+    case 'pick-new-batter':
+    case 'pick-new-bowler': {
+      const inputMap = {
+        'pick-striker': 'striker-input',
+        'pick-non-striker': 'non-striker-input',
+        'pick-bowler': 'bowler-input',
+        'pick-new-batter': 'new-batter-input',
+        'pick-new-bowler': 'new-bowler-input',
+      };
+      const input = $(inputMap[action]);
+      if (input) {
+        input.value = dataset.playerName || '';
+        input.dataset.playerId = dataset.playerId || '';
+        input.focus();
+      }
+      if (action === 'pick-new-batter') {
+        addBatter(state.current.innings[state.current.currentInnings], dataset.playerName, dataset.playerId);
+        persistMatch(state.current);
+        const inn = state.current.innings[state.current.currentInnings];
+        state.modal = inn.needNewBowler ? { type: 'newBowler' } : null;
+        render();
+      } else if (action === 'pick-new-bowler') {
+        addBowler(state.current.innings[state.current.currentInnings], dataset.playerName, dataset.playerId);
+        persistMatch(state.current);
+        state.modal = null;
+        render();
+      } else {
+        render();
+      }
+      break;
+    }
     case 'resume': {
       const m = state.current;
       if (!m) { state.view = 'home'; render(); break; }
@@ -1972,7 +2328,7 @@ function handle(action, dataset) {
       saveHistory(state.history);
       state.current = null;
       saveCurrent(null);
-      state.setup = { teamA: A, teamB: B, overs, battingFirst, pin: genPin() };
+      state.setup = { teamA: A, teamB: B, overs, battingFirst, pin: genPin(), skipTeamPick: false };
       state.modal = null;
       state.detail = null;
       state.ball = emptyBall();
@@ -1989,7 +2345,7 @@ function handle(action, dataset) {
         if (dbOn()) window.QCDB.deleteMatch(m.id).catch(() => { });
         state.history = state.history.filter(x => x.id !== m.id);
         saveHistory(state.history);
-        state.setup = { teamA: m.teams.A, teamB: m.teams.B, overs: m.overs, battingFirst: m.battingFirst };
+        state.setup = { teamA: m.teams.A, teamB: m.teams.B, overs: m.overs, battingFirst: m.battingFirst, pin: m.pin || '', skipTeamPick: false };
         state.current = null;
         saveCurrent(null);
         state.view = 'setup';
@@ -2057,6 +2413,11 @@ async function init() {
 
   state.current = loadCurrent();
   state.history = loadHistory();
+  state.players = loadPlayers();
+  if (state.current) {
+    state.history = [state.current, ...state.history.filter(x => x.id !== state.current.id)];
+    saveHistory(state.history);
+  }
   purgeStaleInProgress();
   state.view = 'home';
   render();
@@ -2086,30 +2447,45 @@ document.addEventListener('DOMContentLoaded', () => {
       render();
       return;
     }
+    if (action === 'add-player') {
+      const name = $('new-player-input')?.value || '';
+      const res = window.QCPlayers.add(state.players, name);
+      if (res.error) return showToast(res.error);
+      state.players = res.players;
+      render();
+      showToast(`${res.player.name} added`);
+      return;
+    }
     if (action === 'start-innings') {
       const s = $('striker-input')?.value || '';
       const ns = $('non-striker-input')?.value || '';
       const bw = $('bowler-input')?.value || '';
+      const sId = $('striker-input')?.dataset.playerId || null;
+      const nsId = $('non-striker-input')?.dataset.playerId || null;
+      const bwId = $('bowler-input')?.dataset.playerId || null;
       if (!s.trim() || !ns.trim() || !bw.trim()) return showToast('Need both batters and the bowler');
-      startInnings(s, ns, bw);
+      if (s.trim().toLowerCase() === ns.trim().toLowerCase()) return showToast('Striker and non-striker must differ');
+      startInnings(s, ns, bw, sId, nsId, bwId);
       render();
       return;
     }
     if (action === 'confirm-new-batter') {
       const v = $('new-batter-input')?.value || '';
+      const pid = $('new-batter-input')?.dataset.playerId || null;
       if (!v.trim()) return showToast('Name required');
       const inn = state.current.innings[state.current.currentInnings];
-      addBatter(inn, v);
-      saveCurrent(state.current);
+      addBatter(inn, v, pid);
+      persistMatch(state.current);
       state.modal = inn.needNewBowler ? { type: 'newBowler' } : null;
       render();
       return;
     }
     if (action === 'confirm-new-bowler') {
       const v = $('new-bowler-input')?.value || '';
+      const pid = $('new-bowler-input')?.dataset.playerId || null;
       if (!v.trim()) return showToast('Name required');
-      addBowler(state.current.innings[state.current.currentInnings], v);
-      saveCurrent(state.current);
+      addBowler(state.current.innings[state.current.currentInnings], v, pid);
+      persistMatch(state.current);
       state.modal = null;
       render();
       return;
@@ -2128,20 +2504,16 @@ document.addEventListener('DOMContentLoaded', () => {
       if (!pin) { showToast('Enter the PIN'); return; }
       if (pin !== m.pin) { showToast('Wrong PIN · try again'); return; }
       m.scoringDeviceId = DEVICE_ID;
-      if (dbOn()) window.QCDB.syncMatch(m);
       state.modal = null;
       if (fromShared) {
         state.current = clone(m);
-        saveCurrent(state.current);
-        state.history = [state.current, ...state.history.filter(x => x.id !== state.current.id)];
-        saveHistory(state.history);
+        persistMatch(state.current);
         state.shared = null;
         stopPolling();
         history.replaceState(null, '', location.pathname);
       } else {
-        saveHistory(state.history);
         state.current = m;
-        saveCurrent(m);
+        persistMatch(m);
       }
       const inn = state.current.innings[state.current.currentInnings];
       if (!inn) state.view = 'innings-setup';
@@ -2165,6 +2537,9 @@ document.addEventListener('DOMContentLoaded', () => {
     } else if (e.target.id === 'claim-pin-input') {
       e.preventDefault();
       app.querySelector('[data-action="confirm-claim-pin"]')?.click();
+    } else if (e.target.id === 'new-player-input') {
+      e.preventDefault();
+      app.querySelector('[data-action="add-player"]')?.click();
     }
   });
 

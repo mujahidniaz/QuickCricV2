@@ -10,8 +10,8 @@
 // If left blank, the app falls back to localStorage (single-device, no sharing).
 
 window.QC_CONFIG = {
-  SUPABASE_URL: 'https://nwfzivzgfwruhedxpyuv.supabase.co',
-  SUPABASE_ANON_KEY: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im53ZnppdnpnZndydWhlZHhweXV2Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzkwMzc5MDcsImV4cCI6MjA5NDYxMzkwN30.0UI0ouSISdnkfx1Iw91hgEOCVaH9-zeHNbhLr_Tl3Qg',
+  SUPABASE_URL: 'https://uubgaoxaevkuyylwcmqs.supabase.co',
+  SUPABASE_ANON_KEY: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InV1Ymdhb3hhZXZrdXl5bHdjbXFzIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODQwMzk3NzEsImV4cCI6MjA5OTYxNTc3MX0.0UFBlVZPn6mvmv6EhUwjAHL96xMk0iyY8cjTjrerK7c',
 
   // Passcode required to delete a saved match. Change this to your own.
   DELETE_PASSCODE: '10315'

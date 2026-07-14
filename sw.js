@@ -1,8 +1,9 @@
-const CACHE = 'quickcric-v21';
+const CACHE = 'quickcric-v29';
 const ASSETS = [
   './',
   'index.html',
   'app.js',
+  'players.js',
   'db.js',
   'config.js',
   'style.css',
