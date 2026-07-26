@@ -479,9 +479,30 @@ function ensurePlayerInRoster(name, playerId = null) {
   const existing = resolvePlayerId(trimmed);
   if (existing) return existing;
   const res = window.QCPlayers.add(state.players, trimmed);
-  if (res.error) return playerId || null;
+  if (res.error) {
+    // Name may already exist after a race/refresh — resolve again before giving up.
+    return resolvePlayerId(trimmed) || playerId || null;
+  }
   state.players = res.players;
   return res.player?.id || null;
+}
+
+function matchUsesSquads(match) {
+  return !!match?.squads &&
+    ((match.squads.A?.length || 0) + (match.squads.B?.length || 0) > 0);
+}
+
+/** Persist a player on the global roster and, when squads are in use, on that side's squad. */
+function ensurePlayerOnSide(match, side, name, playerId = null) {
+  const id = ensurePlayerInRoster(name, playerId);
+  if (!id || !match || !side) return id;
+  if (!matchUsesSquads(match)) return id;
+  if (!match.squads) match.squads = { A: [], B: [] };
+  if (!Array.isArray(match.squads[side])) match.squads[side] = [];
+  const other = side === 'A' ? 'B' : 'A';
+  if (match.squads[other]?.includes(id)) return id;
+  if (!match.squads[side].includes(id)) match.squads[side].push(id);
+  return id;
 }
 
 function resetInningsPickers() {
@@ -489,10 +510,53 @@ function resetInningsPickers() {
   state.inningsPick = { striker: null, nonStriker: null, bowler: null };
 }
 
+function playerFromMatchLine(line) {
+  if (!line) return null;
+  if (line.playerId) {
+    const byId = playerById(line.playerId);
+    if (byId) return byId;
+  }
+  if (line.name) {
+    const id = resolvePlayerId(line.name);
+    if (id) return playerById(id);
+  }
+  return null;
+}
+
 function rosterForSide(match, side) {
-  const squad = squadPlayerIds(match, side);
-  if (squad.length) return squad.map(id => playerById(id)).filter(Boolean);
-  return state.players.slice();
+  if (!matchUsesSquads(match)) return state.players.slice();
+
+  const seen = new Map();
+  for (const id of squadPlayerIds(match, side)) {
+    const p = playerById(id);
+    if (p) seen.set(p.id, p);
+  }
+
+  // Anyone who already batted or bowled for this side should stay pickable
+  // (covers names typed earlier before they were synced onto the squad).
+  for (const inn of match.innings || []) {
+    if (inn.batting === side) {
+      for (const b of inn.batters || []) {
+        const p = playerFromMatchLine(b);
+        if (p) seen.set(p.id, p);
+      }
+    }
+    if (inn.bowling === side) {
+      for (const b of inn.bowlers || []) {
+        const p = playerFromMatchLine(b);
+        if (p) seen.set(p.id, p);
+      }
+    }
+  }
+
+  if (seen.size) return Array.from(seen.values());
+
+  // Side squad still empty — offer unassigned roster players to pick from.
+  const assigned = new Set([
+    ...(match.squads.A || []),
+    ...(match.squads.B || []),
+  ]);
+  return state.players.filter(p => !assigned.has(p.id));
 }
 
 function innPlayerMatch(b, player) {
@@ -832,7 +896,7 @@ function addBatter(inn, name, playerId = null) {
     showToast('Already batting');
     return false;
   }
-  playerId = ensurePlayerInRoster(trimmed, playerId);
+  playerId = ensurePlayerOnSide(state.current, inn.batting, trimmed, playerId);
   const idx = inn.batters.length;
   inn.batters.push(newBatter(trimmed, playerId));
   if (inn.batters[inn.striker]?.out) inn.striker = idx;
@@ -848,9 +912,11 @@ function addBowler(inn, name, playerId = null) {
     showToast("Can't bowl consecutive overs");
     return false;
   }
-  playerId = ensurePlayerInRoster(trimmed, playerId);
+  playerId = ensurePlayerOnSide(state.current, inn.bowling, trimmed, playerId);
   const key = trimmed.toLowerCase();
-  const existing = inn.bowlers.findIndex(b => b.name.toLowerCase() === key);
+  const existing = inn.bowlers.findIndex(b =>
+    (playerId && b.playerId === playerId) || b.name.toLowerCase() === key
+  );
   if (existing >= 0) {
     inn.currentBowler = existing;
     if (playerId && !inn.bowlers[existing].playerId) inn.bowlers[existing].playerId = playerId;
@@ -887,12 +953,12 @@ function startMatch(teamA, teamB, overs, battingFirst, pin, squads = null) {
 
 function startInnings(strikerName, nonStrikerName, bowlerName, strikerId = null, nonStrikerId = null, bowlerId = null) {
   const m = state.current;
-  strikerId = ensurePlayerInRoster(strikerName, strikerId);
-  nonStrikerId = ensurePlayerInRoster(nonStrikerName, nonStrikerId);
-  bowlerId = ensurePlayerInRoster(bowlerName, bowlerId);
   const isFirst = m.innings.length === 0;
   const batting = isFirst ? m.battingFirst : (m.battingFirst === 'A' ? 'B' : 'A');
   const bowling = batting === 'A' ? 'B' : 'A';
+  strikerId = ensurePlayerOnSide(m, batting, strikerName, strikerId);
+  nonStrikerId = ensurePlayerOnSide(m, batting, nonStrikerName, nonStrikerId);
+  bowlerId = ensurePlayerOnSide(m, bowling, bowlerName, bowlerId);
   const inn = newInnings(batting, bowling);
   inn.batters.push(newBatter(strikerName, strikerId));
   inn.batters.push(newBatter(nonStrikerName, nonStrikerId));
