@@ -371,6 +371,7 @@ const state = {
   inningsManual: { striker: false, nonStriker: false, bowler: false },
   inningsPick: { striker: null, nonStriker: null, bowler: null },
   inningsPickUndo: [],
+  playersTab: 'roster',
 };
 
 function emptyBall() { return { runs: null, extra: null, wicket: false }; }
@@ -1562,7 +1563,7 @@ function renderHome() {
           <div class="home-grid">
             ${inProgressCount ? menuCard('in-progress', 'hourglass-split', 'In progress', 'Resume another game', inProgressCount, false, 'amber') : ''}
             ${menuCard('history', 'trophy', 'Past matches', 'Results & scorecards', pastCount, state.loadingHistory, 'green')}
-            ${menuCard('players', 'people', 'Players', 'Roster & career stats', playerCount, false, 'blue')}
+            ${menuCard('players', 'people', 'Players', 'Roster, batting & bowling ranks', playerCount, false, 'blue')}
           </div>
           ${!dbOn() ? `
             <p class="home-sync-note"><i class="bi bi-cloud-slash"></i> Cloud sync off — add keys in <code>config.js</code> for share links.</p>
@@ -2171,6 +2172,85 @@ function renderTeamPick() {
 
 function renderPlayers() {
   const list = state.players;
+  const tab = state.playersTab || 'roster';
+  const QP = window.QCPlayers;
+  const batRanked = QP.battingRankings(list);
+  const bowlRanked = QP.bowlingRankings(list);
+
+  const tabs = [
+    { id: 'roster', label: 'Roster' },
+    { id: 'batting', label: 'Batting' },
+    { id: 'bowling', label: 'Bowling' },
+  ];
+
+  function rankingRow(p, rank, kind) {
+    const topClass = rank <= 3 ? ` player-rank-num--top player-rank-num--${rank}` : '';
+    const stat = kind === 'batting'
+      ? `<span class="player-rank-stat">${p.batting.runs} runs</span>
+         <span class="player-rank-sub">Avg ${QP.batAvg(p.batting)} · SR ${QP.batSR(p.batting)} · ${p.batting.innings} inns</span>`
+      : `<span class="player-rank-stat">${p.bowling.wickets} wkts</span>
+         <span class="player-rank-sub">Econ ${QP.bowlEcon(p.bowling)} · Avg ${QP.bowlAvg(p.bowling)} · ${QP.fmtOvers(p.bowling.balls)} ov</span>`;
+    return `
+      <button type="button" class="player-rank-row" data-action="view-player" data-player-id="${esc(p.id)}">
+        <span class="player-rank-num${topClass}">${rank}</span>
+        <span class="player-rank-body">
+          <span class="player-rank-name">${esc(p.name)}</span>
+          ${stat}
+        </span>
+        <i class="bi bi-chevron-right player-list-chevron"></i>
+      </button>`;
+  }
+
+  let body = '';
+  if (tab === 'roster') {
+    body = list.length === 0 ? `
+      <div class="players-empty">
+        <i class="bi bi-people"></i>
+        <p>No saved players yet</p>
+        <span>Add names you score with often</span>
+      </div>
+    ` : `
+      <div class="players-list">
+        ${list.map(p => `
+          <button type="button" class="player-list-item" data-action="view-player" data-player-id="${esc(p.id)}">
+            <span class="player-list-avatar">${esc(p.name.charAt(0).toUpperCase())}</span>
+            <span class="player-list-body">
+              <span class="player-list-name">${esc(p.name)}</span>
+              <span class="player-list-meta">${p.batting.runs} runs · ${p.bowling.wickets} wkts · SR ${QP.batSR(p.batting)}</span>
+            </span>
+            <i class="bi bi-chevron-right player-list-chevron"></i>
+          </button>
+        `).join('')}
+      </div>
+    `;
+  } else if (tab === 'batting') {
+    body = batRanked.length === 0 ? `
+      <div class="players-empty">
+        <i class="bi bi-bar-chart"></i>
+        <p>No batting stats yet</p>
+        <span>Complete matches to build the leaderboard</span>
+      </div>
+    ` : `
+      <p class="players-rank-note">Ranked by runs, then average, then strike rate.</p>
+      <div class="players-rank-list">
+        ${batRanked.map((p, i) => rankingRow(p, i + 1, 'batting')).join('')}
+      </div>
+    `;
+  } else {
+    body = bowlRanked.length === 0 ? `
+      <div class="players-empty">
+        <i class="bi bi-bar-chart"></i>
+        <p>No bowling stats yet</p>
+        <span>Complete matches to build the leaderboard</span>
+      </div>
+    ` : `
+      <p class="players-rank-note">Ranked by wickets, then average, then economy.</p>
+      <div class="players-rank-list">
+        ${bowlRanked.map((p, i) => rankingRow(p, i + 1, 'bowling')).join('')}
+      </div>
+    `;
+  }
+
   return `
     <div class="screen d-flex flex-column">
       ${renderTopbar('Players', { ghost: true })}
@@ -2181,27 +2261,15 @@ function renderPlayers() {
           <button type="button" class="btn btn-primary px-4" data-action="add-player">Add</button>
         </div>
       </div>
+      <div class="players-tabs px-3 pt-2 pb-0 bg-white border-bottom">
+        <div class="btn-group w-100" role="group">
+          ${tabs.map(t => `
+            <button type="button" class="btn btn-sm ${tab === t.id ? 'btn-dark' : 'btn-outline-secondary'}" data-action="players-tab" data-tab="${t.id}">${esc(t.label)}</button>
+          `).join('')}
+        </div>
+      </div>
       <div class="scroll flex-grow-1 overflow-auto players-list-scroll">
-        ${list.length === 0 ? `
-          <div class="players-empty">
-            <i class="bi bi-people"></i>
-            <p>No saved players yet</p>
-            <span>Add names you score with often</span>
-          </div>
-        ` : `
-          <div class="players-list">
-            ${list.map(p => `
-              <button type="button" class="player-list-item" data-action="view-player" data-player-id="${esc(p.id)}">
-                <span class="player-list-avatar">${esc(p.name.charAt(0).toUpperCase())}</span>
-                <span class="player-list-body">
-                  <span class="player-list-name">${esc(p.name)}</span>
-                  <span class="player-list-meta">${p.batting.runs} runs · ${p.bowling.wickets} wkts · SR ${window.QCPlayers.batSR(p.batting)}</span>
-                </span>
-                <i class="bi bi-chevron-right player-list-chevron"></i>
-              </button>
-            `).join('')}
-          </div>
-        `}
+        ${body}
       </div>
     </div>
   `;
@@ -2717,6 +2785,10 @@ function handle(action, dataset) {
       state.view = 'players';
       state.playerDetail = null;
       render(); break;
+    case 'players-tab':
+      state.playersTab = dataset.tab || 'roster';
+      render();
+      break;
     case 'view-player': {
       const p = playerById(dataset.playerId);
       if (p) { state.playerDetail = p; state.view = 'player-detail'; render(); }

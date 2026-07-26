@@ -1224,6 +1224,71 @@ input { background: var(--paper); }
 .player-list-meta { font-size: 0.8rem; color: var(--ink-faint); font-weight: 500; }
 .player-list-chevron { color: var(--ink-faint); font-size: 0.85rem; flex-shrink: 0; }
 
+.players-tabs .btn-group .btn { flex: 1; font-weight: 700; border-radius: var(--radius-sm) !important; }
+.players-tabs .btn-group .btn:not(:last-child) { margin-right: 0.35rem; }
+.players-rank-note {
+  padding: 0.75rem 1rem 0.35rem;
+  margin: 0;
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--ink-faint);
+}
+.players-rank-list {
+  padding: 0.5rem 0.75rem 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+}
+.player-rank-row {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  width: 100%;
+  text-align: left;
+  padding: 0.85rem 0.9rem;
+  background: var(--paper);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-1);
+  transition: transform 0.12s;
+}
+.player-rank-row:active { transform: scale(0.99); }
+.player-rank-num {
+  flex-shrink: 0;
+  width: 2rem;
+  height: 2rem;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: var(--font-display);
+  font-weight: 800;
+  font-size: 0.95rem;
+  background: var(--cream-deep);
+  color: var(--ink-soft);
+}
+.player-rank-num--top { color: var(--accent-ink); box-shadow: var(--shadow-1); }
+.player-rank-num--1 { background: linear-gradient(135deg, #ffd54f, #ffb300); }
+.player-rank-num--2 { background: linear-gradient(135deg, #e0e0e0, #bdbdbd); color: var(--ink); }
+.player-rank-num--3 { background: linear-gradient(135deg, #ffcc80, #ff9800); }
+.player-rank-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 0.2rem; }
+.player-rank-name {
+  font-weight: 800;
+  font-size: 1rem;
+  color: var(--ink);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.player-rank-stat {
+  font-family: var(--font-display);
+  font-size: 1.05rem;
+  font-weight: 800;
+  color: var(--green-mid);
+  letter-spacing: 0.02em;
+}
+.player-rank-sub { font-size: 0.75rem; font-weight: 600; color: var(--ink-faint); }
+
 .bottom-bar {
   padding: 14px 16px calc(18px + env(safe-area-inset-bottom, 0px));
   background: var(--cream);

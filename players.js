@@ -325,6 +325,37 @@
     return `${Math.floor(balls / 6)}.${balls % 6}`;
   }
 
+  function battingRankings(players) {
+    return [...players]
+      .filter(p => (p.batting?.innings || 0) > 0 || (p.batting?.runs || 0) > 0)
+      .sort((a, b) => {
+        const runsA = a.batting.runs || 0;
+        const runsB = b.batting.runs || 0;
+        if (runsB !== runsA) return runsB - runsA;
+        const avgA = parseFloat(batAvg(a.batting)) || 0;
+        const avgB = parseFloat(batAvg(b.batting)) || 0;
+        if (avgB !== avgA) return avgB - avgA;
+        return (parseFloat(batSR(b.batting)) || 0) - (parseFloat(batSR(a.batting)) || 0);
+      });
+  }
+
+  function bowlingRankings(players) {
+    return [...players]
+      .filter(p => (p.bowling?.wickets || 0) > 0 || (p.bowling?.balls || 0) > 0)
+      .sort((a, b) => {
+        const wA = a.bowling.wickets || 0;
+        const wB = b.bowling.wickets || 0;
+        if (wB !== wA) return wB - wA;
+        const avgA = parseFloat(bowlAvg(a.bowling));
+        const avgB = parseFloat(bowlAvg(b.bowling));
+        if (!Number.isNaN(avgA) && !Number.isNaN(avgB) && avgA !== avgB) return avgA - avgB;
+        const ecA = parseFloat(bowlEcon(a.bowling));
+        const ecB = parseFloat(bowlEcon(b.bowling));
+        if (!Number.isNaN(ecA) && !Number.isNaN(ecB) && ecA !== ecB) return ecA - ecB;
+        return (b.bowling.balls || 0) - (a.bowling.balls || 0);
+      });
+  }
+
   function matchBattingLine(innings, playerId, name) {
     let runs = 0, balls = 0, fours = 0, sixes = 0, out = false, faced = false;
     for (const inn of innings) {
@@ -517,6 +548,8 @@
     bowlEcon,
     bowlSR,
     fmtOvers,
+    battingRankings,
+    bowlingRankings,
     computeAwards,
     applyMatchStats,
     matchPerformanceScore,
