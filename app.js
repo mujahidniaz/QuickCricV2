@@ -360,6 +360,7 @@ const state = {
   toast: null,
   setup: { teamA: DEFAULT_TEAM_A, teamB: DEFAULT_TEAM_B, overs: DEFAULT_OVERS, battingFirst: 'A', skipTeamPick: false },
   teamPick: { squads: { A: [], B: [] }, picking: 'A' },
+  teamPickUndo: [],
   loadingHistory: false,
   installTab: 'android',
   historyFilter: 'all',
@@ -563,6 +564,22 @@ function undoInningsPick() {
   return true;
 }
 
+function pushTeamPickUndo() {
+  state.teamPickUndo.push(clone({
+    squads: clone(state.teamPick.squads),
+    picking: state.teamPick.picking,
+  }));
+  if (state.teamPickUndo.length > 24) state.teamPickUndo.shift();
+}
+
+function undoTeamPick() {
+  if (!state.teamPickUndo.length) return false;
+  const snap = state.teamPickUndo.pop();
+  state.teamPick.squads = snap.squads;
+  state.teamPick.picking = snap.picking;
+  return true;
+}
+
 function playerFromMatchLine(line) {
   if (!line) return null;
   if (line.playerId) {
@@ -618,6 +635,21 @@ function rosterForSide(match, side) {
     ...(match.squads.B || []),
   ]);
   return state.players.filter(p => !assigned.has(p.id));
+}
+
+/** Opening lineup always shows the full saved roster; squad filters apply mid-innings only. */
+function rosterForInningsSetup() {
+  return state.players.slice();
+}
+
+function enterInningsSetupView() {
+  resetInningsPickers();
+  state.view = 'innings-setup';
+  if (dbOn()) {
+    refreshPlayers().then(() => render()).catch(() => render());
+    return true;
+  }
+  return false;
 }
 
 function innPlayerMatch(b, player) {
@@ -1101,10 +1133,11 @@ function goToMatchStart() {
   const useTeamPick = state.players.length > 0 && !state.setup.skipTeamPick;
   if (useTeamPick) {
     state.teamPick = { squads: { A: [], B: [] }, picking: 'A' };
+    state.teamPickUndo = [];
     state.view = 'team-pick';
   } else {
     if (state.current) state.current.squadsSkipped = true;
-    state.view = 'innings-setup';
+    enterInningsSetupView();
   }
 }
 
@@ -1705,10 +1738,11 @@ function renderInningsSetup() {
         ${target ? `<p class="mb-0 opacity-75 small">Chasing ${target} in ${m.overs} overs</p>` : `<p class="mb-0 opacity-75 small">${m.overs} overs to bat</p>`}
       </div>
       <div class="setup-body flex-grow-1 overflow-auto px-3 py-4">
+        ${state.players.length ? `<p class="small text-muted mb-3">${state.players.length} saved players — tap a name for each role</p>` : ''}
         ${renderPlayerPicker({
           label: 'Striker',
           action: 'pick-striker',
-          players: rosterForSide(m, batting),
+          players: rosterForInningsSetup(),
           mode: 'bat',
           manualKey: 'striker',
           inputId: 'striker-input',
@@ -1718,7 +1752,7 @@ function renderInningsSetup() {
         ${renderPlayerPicker({
           label: 'Non-striker',
           action: 'pick-non-striker',
-          players: rosterForSide(m, batting),
+          players: rosterForInningsSetup(),
           mode: 'bat',
           manualKey: 'nonStriker',
           inputId: 'non-striker-input',
@@ -1728,7 +1762,7 @@ function renderInningsSetup() {
         ${renderPlayerPicker({
           label: 'Bowler',
           action: 'pick-bowler',
-          players: rosterForSide(m, bowling),
+          players: rosterForInningsSetup(),
           mode: 'bowl',
           manualKey: 'bowler',
           inputId: 'bowler-input',
@@ -1736,7 +1770,7 @@ function renderInningsSetup() {
         })}
       </div>
       <div class="undo-row px-3 pb-2">
-        <button type="button" data-action="undo-innings-pick" ${state.inningsPickUndo.length ? '' : 'disabled'}>↶ Undo last pick</button>
+        <button type="button" class="btn btn-sm btn-outline-secondary w-100" data-action="undo-innings-pick" ${state.inningsPickUndo.length ? '' : 'disabled'}>↶ Undo last pick</button>
       </div>
       ${renderBottomBar('Start innings', 'start-innings')}
     </div>
@@ -2136,6 +2170,7 @@ function renderTeamPick() {
         </div>
       </div>
       <div class="qc-bottom-bar border-top bg-body px-3 py-3 mt-auto d-grid gap-2">
+        <button type="button" class="btn btn-outline-secondary" data-action="undo-team-pick" ${state.teamPickUndo.length ? '' : 'disabled'}>↶ Undo last pick</button>
         <button type="button" class="btn btn-primary btn-lg fw-bold" data-action="finish-team-pick">Continue to match</button>
         <button type="button" class="btn btn-link text-muted" data-action="skip-team-pick">Skip · type names later</button>
       </div>
@@ -2505,7 +2540,9 @@ function renderModal() {
         inputId: 'new-batter-input',
         modalManual: state.modal.manual,
       })}
-    `, `<button type="button" class="btn btn-primary btn-lg w-100" data-action="confirm-new-batter">Continue</button>`);
+    `, `${canUndoNow(state.current) && lastUndoKind(state.current) === 'pick'
+      ? `<button type="button" class="btn btn-outline-secondary w-100 mb-2" data-action="undo">${esc(undoActionLabel(state.current))}</button>`
+      : ''}<button type="button" class="btn btn-primary btn-lg w-100" data-action="confirm-new-batter">Continue</button>`);
   }
   if (state.modal.type === 'newBowler') {
     const inn = state.current.innings[state.current.currentInnings];
@@ -2520,7 +2557,9 @@ function renderModal() {
         inputId: 'new-bowler-input',
         modalManual: state.modal.manual,
       })}
-    `, `<button type="button" class="btn btn-primary btn-lg w-100" data-action="confirm-new-bowler">Continue</button>`);
+    `, `${canUndoNow(state.current) && lastUndoKind(state.current) === 'pick'
+      ? `<button type="button" class="btn btn-outline-secondary w-100 mb-2" data-action="undo">${esc(undoActionLabel(state.current))}</button>`
+      : ''}<button type="button" class="btn btn-primary btn-lg w-100" data-action="confirm-new-bowler">Continue</button>`);
   }
   if (state.modal.type === 'editOverPin') {
     return renderBsSheet('Edit this over', 'Enter the edit PIN to undo any ball in the current over.', `
@@ -2657,29 +2696,34 @@ function handle(action, dataset) {
       const side = state.teamPick.picking;
       if (!id || state.teamPick.squads[side].includes(id)) break;
       if (state.teamPick.squads.A.includes(id) || state.teamPick.squads.B.includes(id)) break;
+      pushTeamPickUndo();
       state.teamPick.squads[side].push(id);
       state.teamPick.picking = side === 'A' ? 'B' : 'A';
       render();
       break;
     }
+    case 'undo-team-pick':
+      if (undoTeamPick()) {
+        showToast('Squad pick undone');
+        render();
+      }
+      break;
     case 'skip-team-pick':
       if (state.current) {
         state.current.squads = { A: [], B: [] };
         state.current.squadsSkipped = true;
         persistMatch(state.current);
       }
-      resetInningsPickers();
-      state.view = 'innings-setup';
-      render(); break;
+      if (!enterInningsSetupView()) render();
+      break;
     case 'finish-team-pick':
       if (state.current) {
         state.current.squads = clone(state.teamPick.squads);
         state.current.squadsSkipped = false;
         persistMatch(state.current);
       }
-      resetInningsPickers();
-      state.view = 'innings-setup';
-      render(); break;
+      if (!enterInningsSetupView()) render();
+      break;
     case 'back-from-team-pick': {
       const m = state.current;
       if (!m) { state.view = 'home'; render(); break; }
@@ -2706,8 +2750,23 @@ function handle(action, dataset) {
       };
       if (pickMap[action]) {
         const [inputId, pickKey] = pickMap[action];
+        const cur = state.inningsPick[pickKey];
+        const samePlayer = cur && (
+          (dataset.playerId && cur.id === dataset.playerId) ||
+          cur.name?.toLowerCase() === (dataset.playerName || '').toLowerCase()
+        );
         pushInningsPickUndo();
         const input = $(inputId);
+        if (samePlayer) {
+          state.inningsPick[pickKey] = null;
+          if (input) {
+            input.value = '';
+            delete input.dataset.playerId;
+          }
+          state.inningsManual[pickKey] = false;
+          render();
+          break;
+        }
         if (input) {
           input.value = dataset.playerName || '';
           input.dataset.playerId = dataset.playerId || '';
@@ -2866,9 +2925,7 @@ function handle(action, dataset) {
       break;
     }
     case 'start-next-innings':
-      resetInningsPickers();
-      state.view = 'innings-setup';
-      render();
+      if (!enterInningsSetupView()) render();
       break;
     case 'back-from-innings-setup': {
       const m = state.current;
