@@ -10,6 +10,8 @@ const FREE_UNDO = 2;          // undos allowed without the edit PIN
 const EDIT_OVER_PIN = '5500'; // global PIN to edit the full current over
 const POLL_INTERVAL_MS = 3000;
 const IN_PROGRESS_TTL_MS = 6 * 60 * 60 * 1000;
+const DEFAULT_TEAM_A = 'Green';
+const DEFAULT_TEAM_B = 'Blue';
 
 const DEVICE_ID = (() => {
   let id = '';
@@ -355,7 +357,7 @@ const state = {
   ball: emptyBall(),
   modal: null,
   toast: null,
-  setup: { teamA: '', teamB: '', overs: 6, battingFirst: 'A', skipTeamPick: false },
+  setup: { teamA: DEFAULT_TEAM_A, teamB: DEFAULT_TEAM_B, overs: 6, battingFirst: 'A', skipTeamPick: false },
   teamPick: { squads: { A: [], B: [] }, picking: 'A' },
   loadingHistory: false,
   installTab: 'android',
@@ -787,7 +789,7 @@ function newMatch(teamA, teamB, overs, battingFirst, squads = null) {
     scoringDeviceId: DEVICE_ID,
     startedAt: Date.now(),
     endedAt: null,
-    teams: { A: (teamA || '').trim() || 'Team A', B: (teamB || '').trim() || 'Team B' },
+    teams: { A: (teamA || '').trim() || DEFAULT_TEAM_A, B: (teamB || '').trim() || DEFAULT_TEAM_B },
     squads: squads || { A: [], B: [] },
     awards: null,
     overs,
@@ -1585,12 +1587,12 @@ function renderSetup() {
         <div class="mb-4">
           <label class="form-label small text-uppercase fw-bold text-muted">Teams · tap to set who bats first</label>
           <div class="input-group mb-2">
-            <input id="team-a-input" class="form-control form-control-lg" type="text" placeholder="Team A" value="${esc(s.teamA)}" />
-            <button type="button" class="btn ${s.battingFirst === 'A' ? 'btn-warning' : 'btn-outline-secondary'} rounded-circle ms-2 qc-bat-toggle" data-action="bat-first" data-team="A" aria-label="Team A bats first">A</button>
+            <input id="team-a-input" class="form-control form-control-lg" type="text" placeholder="${esc(DEFAULT_TEAM_A)}" value="${esc(s.teamA)}" />
+            <button type="button" class="btn ${s.battingFirst === 'A' ? 'btn-warning' : 'btn-outline-secondary'} rounded-circle ms-2 qc-bat-toggle" data-action="bat-first" data-team="A" aria-label="${esc(DEFAULT_TEAM_A)} bats first">A</button>
           </div>
           <div class="input-group">
-            <input id="team-b-input" class="form-control form-control-lg" type="text" placeholder="Team B" value="${esc(s.teamB)}" />
-            <button type="button" class="btn ${s.battingFirst === 'B' ? 'btn-warning' : 'btn-outline-secondary'} rounded-circle ms-2 qc-bat-toggle" data-action="bat-first" data-team="B" aria-label="Team B bats first">B</button>
+            <input id="team-b-input" class="form-control form-control-lg" type="text" placeholder="${esc(DEFAULT_TEAM_B)}" value="${esc(s.teamB)}" />
+            <button type="button" class="btn ${s.battingFirst === 'B' ? 'btn-warning' : 'btn-outline-secondary'} rounded-circle ms-2 qc-bat-toggle" data-action="bat-first" data-team="B" aria-label="${esc(DEFAULT_TEAM_B)} bats first">B</button>
           </div>
         </div>
         <button type="button" class="btn btn-outline-secondary w-100 mb-4" data-action="toss"><i class="bi bi-shuffle me-2"></i>Toss a coin</button>
@@ -2555,7 +2557,7 @@ function handle(action, dataset) {
       break;
     case 'new-match':
       state.view = 'setup';
-      state.setup = { teamA: '', teamB: '', overs: 6, battingFirst: 'A', skipTeamPick: false };
+      state.setup = { teamA: DEFAULT_TEAM_A, teamB: DEFAULT_TEAM_B, overs: 6, battingFirst: 'A', skipTeamPick: false };
       render(); break;
     case 'players':
       state.view = 'players';
@@ -2684,8 +2686,8 @@ function handle(action, dataset) {
     case 'toss': {
       state.setup.battingFirst = Math.random() < 0.5 ? 'A' : 'B';
       const name = state.setup.battingFirst === 'A'
-        ? (state.setup.teamA || 'Team A')
-        : (state.setup.teamB || 'Team B');
+        ? (state.setup.teamA || DEFAULT_TEAM_A)
+        : (state.setup.teamB || DEFAULT_TEAM_B);
       render();
       showToast(`${name} bats first`);
       break;
