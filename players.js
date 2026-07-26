@@ -478,17 +478,15 @@
     return { potm, mvpA, mvpB };
   }
 
-  function applyMatchStats(match, players) {
-    if (match.status !== 'completed') return players;
-    const rosterIds = new Set(players.map(p => p.id));
-    const touched = new Set();
-
+  function applyMatchStatsToRoster(match, players) {
+    if (match.status !== 'completed') return false;
+    let any = false;
     for (const p of players) {
       const bat = matchBattingLine(match.innings, p.id, p.name);
       const bowl = matchBowlingLine(match.innings, p.id, p.name);
       if (!bat.faced && !bowl.bowled) continue;
 
-      touched.add(p.id);
+      any = true;
       touch(p);
       if (bat.faced) p.batting.matches += 1;
       if (bowl.bowled) p.bowling.matches += 1;
@@ -520,9 +518,128 @@
         else if (bowl.wickets >= 3) p.bowling.threeWickets += 1;
       }
     }
+    return any;
+  }
 
-    if (touched.size) return save(players);
+  function applyMatchStats(match, players) {
+    const touched = applyMatchStatsToRoster(match, players);
+    if (touched) return save(players);
     return players;
+  }
+
+  function resetCareerStats(p) {
+    p.batting = emptyBatting();
+    p.bowling = emptyBowling();
+  }
+
+  function lineIsSource(line, sourceId, sourceName) {
+    if (!line) return false;
+    if (sourceId && line.playerId === sourceId) return true;
+    const sn = normalizeName(sourceName);
+    if (!sn) return false;
+    if (normalizeName(line.name) !== sn) return false;
+    return !line.playerId || line.playerId === sourceId;
+  }
+
+  function rewritePlayerInMatch(match, sourceId, sourceName, targetId, targetName) {
+    if (!match) return false;
+    let changed = false;
+    const applyLine = (line) => {
+      if (!lineIsSource(line, sourceId, sourceName)) return;
+      line.playerId = targetId;
+      line.name = targetName;
+      changed = true;
+    };
+
+    if (match.squads) {
+      for (const side of ['A', 'B']) {
+        const arr = match.squads[side];
+        if (!Array.isArray(arr)) continue;
+        const next = arr.map(id => {
+          if (id === sourceId) {
+            changed = true;
+            return targetId;
+          }
+          return id;
+        });
+        match.squads[side] = [...new Set(next)];
+      }
+    }
+
+    for (const inn of match.innings || []) {
+      for (const b of inn.batters || []) applyLine(b);
+      for (const b of inn.bowlers || []) applyLine(b);
+    }
+
+    if (match.awards) {
+      for (const key of ['potm', 'mvpA', 'mvpB']) {
+        const a = match.awards[key];
+        if (!a) continue;
+        if (a.playerId === sourceId || lineIsSource(a, sourceId, sourceName)) {
+          a.playerId = targetId;
+          a.name = targetName;
+          changed = true;
+        }
+      }
+    }
+    return changed;
+  }
+
+  function cloneMatch(m) {
+    return JSON.parse(JSON.stringify(m));
+  }
+
+  function rebuildAllStatsFromMatches(players, matches) {
+    for (const p of players) resetCareerStats(p);
+    const completed = matches
+      .filter(m => m && m.status === 'completed')
+      .sort((a, b) => (a.startedAt || 0) - (b.startedAt || 0));
+    for (const m of completed) applyMatchStatsToRoster(m, players);
+    for (const p of players) touch(p);
+    return save(players);
+  }
+
+  /**
+   * Merge source into target: rewrite all matches, drop source, rebuild career stats from completed matches.
+   */
+  function mergePlayersInto(players, sourceId, targetId, matches) {
+    if (!sourceId || !targetId) {
+      return { players, matches, changedMatchIds: [], error: 'Pick both players' };
+    }
+    if (sourceId === targetId) {
+      return { players, matches, changedMatchIds: [], error: 'Choose two different players' };
+    }
+    const source = findById(players, sourceId);
+    const target = findById(players, targetId);
+    if (!source || !target) {
+      return { players, matches, changedMatchIds: [], error: 'Player not found' };
+    }
+
+    const changedMatchIds = [];
+    const updatedMatches = (matches || []).map(m => {
+      const copy = cloneMatch(m);
+      if (rewritePlayerInMatch(copy, sourceId, source.name, targetId, target.name)) {
+        changedMatchIds.push(copy.id);
+      }
+      return copy;
+    });
+
+    let nextPlayers = players.filter(p => p.id !== sourceId);
+    nextPlayers = rebuildAllStatsFromMatches(nextPlayers, updatedMatches);
+
+    if (cloudOn()) {
+      window.QCDB.deletePlayer(sourceId).catch(err =>
+        console.warn('[QuickCric] player delete failed:', err.message));
+    }
+
+    return {
+      players: nextPlayers,
+      matches: updatedMatches,
+      changedMatchIds,
+      error: null,
+      targetName: target.name,
+      sourceName: source.name,
+    };
   }
 
   window.QCPlayers = {
@@ -552,6 +669,8 @@
     bowlingRankings,
     computeAwards,
     applyMatchStats,
+    mergePlayersInto,
+    rebuildAllStatsFromMatches,
     matchPerformanceScore,
   };
 })();

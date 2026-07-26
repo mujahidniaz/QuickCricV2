@@ -522,6 +522,7 @@ input { background: var(--paper); }
 }
 .foot-link:active,
 .foot-link:hover { color: var(--ink-soft); }
+.foot-link--muted { opacity: 0.55; font-size: 0.92em; }
 
 /* Legacy cta (unused on home, kept for reference) */
 .home-actions {
@@ -1425,6 +1426,43 @@ input { background: var(--paper); }
 .players-empty i { font-size: 2.5rem; opacity: 0.35; margin-bottom: 1rem; }
 .players-empty p { font-weight: 700; color: var(--ink-soft); margin: 0 0 0.25rem; }
 .players-empty span { font-size: 0.875rem; }
+
+/* ===== Admin ===== */
+.admin-screen { background: var(--cream); }
+.admin-body { padding-bottom: 1.5rem; }
+.admin-card {
+  background: var(--paper);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius-sm);
+  padding: 1rem 1rem 1.1rem;
+  box-shadow: var(--shadow-1);
+}
+.admin-card-title {
+  font-size: 1.05rem;
+  font-weight: 800;
+  margin: 0 0 0.35rem;
+  color: var(--ink);
+}
+.admin-card-lede {
+  font-size: 0.8rem;
+  color: var(--ink-soft);
+  margin: 0 0 1rem;
+  line-height: 1.45;
+}
+.admin-label {
+  font-size: 0.65rem;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+  margin-bottom: 0.25rem;
+}
+.admin-footnote {
+  margin: 0.75rem 0.25rem 0;
+  font-size: 0.72rem;
+  color: var(--ink-faint);
+  line-height: 1.4;
+}
 
 /* Legacy list classes (player detail / elsewhere) */
 .players-list { padding: 0.75rem; display: flex; flex-direction: column; gap: 0.5rem; }

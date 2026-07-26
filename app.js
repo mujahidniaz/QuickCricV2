@@ -372,6 +372,8 @@ const state = {
   inningsPick: { striker: null, nonStriker: null, bowler: null },
   inningsPickUndo: [],
   playersTab: 'roster',
+  adminUnlocked: false,
+  adminMerge: { sourceId: '', targetId: '' },
 };
 
 function emptyBall() { return { runs: null, extra: null, wicket: false }; }
@@ -478,6 +480,62 @@ function saveCurrent(m) {
     }
     stopActiveMatchPoll();
   }
+}
+
+async function allMatchesForStats() {
+  const byId = new Map();
+  for (const m of state.history) byId.set(m.id, m);
+  if (state.current) byId.set(state.current.id, state.current);
+  if (dbOn()) {
+    try {
+      const remote = await window.QCDB.loadMatches(500);
+      for (const m of remote) byId.set(m.id, m);
+    } catch (err) {
+      console.warn('load matches for admin failed', err);
+    }
+  }
+  return [...byId.values()];
+}
+
+function applyMergedMatches(updatedMatches, changedMatchIds) {
+  const map = new Map(updatedMatches.map(m => [m.id, m]));
+  state.history = state.history.map(m => map.get(m.id) || m);
+  for (const m of updatedMatches) {
+    if (!state.history.some(x => x.id === m.id)) state.history.push(m);
+  }
+  state.history.sort((a, b) => (b.startedAt || 0) - (a.startedAt || 0));
+  if (state.current && map.has(state.current.id)) {
+    state.current = map.get(state.current.id);
+  }
+  if (state.detail && map.has(state.detail.id)) {
+    state.detail = map.get(state.detail.id);
+  }
+  saveHistory(state.history);
+  if (state.current) saveCurrent(state.current);
+  if (dbOn()) {
+    const syncIds = new Set(changedMatchIds || []);
+    for (const id of syncIds) {
+      const m = map.get(id);
+      if (m) window.QCDB.syncMatch(m).catch(err => console.warn('match sync failed', err));
+    }
+  }
+}
+
+async function runPlayerMerge(sourceId, targetId) {
+  if (!window.QCPlayers?.mergePlayersInto) return { error: 'Merge not available' };
+  const matches = await allMatchesForStats();
+  const res = window.QCPlayers.mergePlayersInto(state.players, sourceId, targetId, matches);
+  if (res.error) return res;
+  state.players = res.players;
+  applyMergedMatches(res.matches, res.changedMatchIds);
+  if (state.playerDetail?.id === sourceId) {
+    state.playerDetail = playerById(targetId);
+    if (!state.playerDetail) state.view = 'players';
+  } else if (state.playerDetail) {
+    state.playerDetail = playerById(state.playerDetail.id);
+  }
+  state.adminMerge = { sourceId: '', targetId: '' };
+  return res;
 }
 
 function persistMatch(m) {
@@ -1408,6 +1466,14 @@ function render() {
     case 'player-detail': html = renderPlayerDetail(); break;
     case 'view': html = renderSharedView(); break;
     case 'terms': html = renderTerms(); break;
+    case 'admin':
+      if (!state.adminUnlocked) {
+        state.view = 'home';
+        html = renderHome();
+      } else {
+        html = renderAdmin();
+      }
+      break;
     default: html = renderHome();
   }
   if (state.modal) html += renderModal();
@@ -1462,6 +1528,12 @@ function render() {
       $('edit-player-name-input')?.focus({ preventScroll: true });
     } catch {
       $('edit-player-name-input')?.focus();
+    }
+  } else if (state.modal?.type === 'adminPin') {
+    try {
+      $('admin-pin-input')?.focus({ preventScroll: true });
+    } catch {
+      $('admin-pin-input')?.focus();
     }
   }
   syncActiveMatchPoll();
@@ -1582,9 +1654,43 @@ function renderHome() {
             <span class="foot-dot">·</span>
             <button type="button" class="foot-link" data-action="terms">Terms</button>
             <span class="foot-dot">·</span>
+            <button type="button" class="foot-link foot-link--muted" data-action="admin-open">Admin</button>
+            <span class="foot-dot">·</span>
             <a class="foot-link" href="https://www.linkedin.com/in/khamash/" target="_blank" rel="noopener noreferrer">Contact</a>
           </div>
         </footer>
+      </div>
+    </div>
+  `;
+}
+
+function renderAdmin() {
+  const sorted = [...state.players].sort((a, b) =>
+    a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }));
+  const { sourceId, targetId } = state.adminMerge;
+  const optionHtml = (selectedId) => {
+    const head = '<option value="">— Select —</option>';
+    const rows = sorted.map(p =>
+      `<option value="${esc(p.id)}"${p.id === selectedId ? ' selected' : ''}>${esc(p.name)}</option>`).join('');
+    return head + rows;
+  };
+  const canMerge = sourceId && targetId && sourceId !== targetId;
+  return `
+    <div class="screen d-flex flex-column admin-screen">
+      ${renderTopbar('Admin', { back: 'back-from-admin', ghost: true })}
+      <div class="scroll flex-grow-1 overflow-auto admin-body px-3 py-3">
+        <div class="admin-card">
+          <h2 class="admin-card-title">Merge players</h2>
+          <p class="admin-card-lede">Scorecards point at the kept player. The duplicate is removed. Stats are rebuilt from all completed matches.</p>
+          <label class="form-label admin-label" for="admin-merge-source">Remove duplicate</label>
+          <select id="admin-merge-source" class="form-select form-select-sm mb-2">${optionHtml(sourceId)}</select>
+          <label class="form-label admin-label" for="admin-merge-target">Keep this profile</label>
+          <select id="admin-merge-target" class="form-select form-select-sm mb-3">${optionHtml(targetId)}</select>
+          <label class="form-label admin-label" for="admin-merge-pin">Global PIN</label>
+          <input id="admin-merge-pin" class="form-control form-control-sm pin-input text-center font-monospace fw-bold mb-3" type="text" inputmode="numeric" maxlength="4" placeholder="····" autocomplete="off" enterkeyhint="done" />
+          <button type="button" class="btn btn-danger w-100 fw-bold" data-action="admin-merge-run" ${canMerge ? '' : 'disabled'}>Merge &amp; recalculate stats</button>
+        </div>
+        <p class="admin-footnote">For typos and duplicate profiles. Not reversible in the app.</p>
       </div>
     </div>
   `;
@@ -2675,6 +2781,20 @@ function renderModal() {
       `,
     );
   }
+  if (state.modal.type === 'adminPin') {
+    return renderBsSheet(
+      'Admin',
+      'Enter the global PIN to manage roster tools.',
+      `
+        <label class="form-label" for="admin-pin-input">Global PIN</label>
+        <input id="admin-pin-input" class="form-control form-control-lg text-center font-monospace fw-bold pin-input" type="text" inputmode="numeric" maxlength="4" pattern="[0-9]{4}" placeholder="····" autocomplete="off" enterkeyhint="done" />
+      `,
+      `
+        <button type="button" class="btn btn-primary btn-lg w-100 mb-2" data-action="confirm-admin-pin">Continue</button>
+        <button type="button" class="btn btn-outline-secondary w-100" data-action="cancel-admin-pin">Cancel</button>
+      `,
+    );
+  }
   if (state.modal.type === 'confirmSwapStrike') {
     const inn = state.current.innings[state.current.currentInnings];
     const striker = inn.batters[inn.striker];
@@ -2697,6 +2817,23 @@ function handle(action, dataset) {
   switch (action) {
     case 'home': state.view = 'home'; state.detail = null; render(); break;
     case 'terms': state.view = 'terms'; render(); break;
+    case 'admin-open':
+      if (state.adminUnlocked) {
+        state.view = 'admin';
+        render();
+      } else {
+        state.modal = { type: 'adminPin' };
+        render();
+      }
+      break;
+    case 'back-from-admin':
+      state.view = 'home';
+      render();
+      break;
+    case 'cancel-admin-pin':
+      state.modal = null;
+      render();
+      break;
     case 'hard-reload':
       hardReloadApp();
       break;
@@ -3243,6 +3380,37 @@ document.addEventListener('DOMContentLoaded', () => {
       showToast(res.player ? `${res.player.name} updated` : 'Name updated');
       return;
     }
+    if (action === 'confirm-admin-pin') {
+      const pin = ($('admin-pin-input')?.value || '').trim();
+      if (!pin) return showToast('Enter the global PIN');
+      if (pin !== EDIT_OVER_PIN) return showToast('Wrong PIN · try again');
+      state.adminUnlocked = true;
+      state.modal = null;
+      state.view = 'admin';
+      render();
+      return;
+    }
+    if (action === 'admin-merge-run') {
+      (async () => {
+        const pin = ($('admin-merge-pin')?.value || '').trim();
+        if (!pin) return showToast('Enter the global PIN');
+        if (pin !== EDIT_OVER_PIN) return showToast('Wrong PIN · try again');
+        const sourceId = $('admin-merge-source')?.value || state.adminMerge.sourceId;
+        const targetId = $('admin-merge-target')?.value || state.adminMerge.targetId;
+        if (!sourceId || !targetId) return showToast('Pick both players');
+        if (sourceId === targetId) return showToast('Choose two different players');
+        showToast('Merging…');
+        const res = await runPlayerMerge(sourceId, targetId);
+        if (res.error) {
+          showToast(res.error);
+          render();
+          return;
+        }
+        render();
+        showToast(`Merged into ${res.targetName} · stats recalculated`);
+      })();
+      return;
+    }
     if (action === 'add-player') {
       (async () => {
         if (dbOn()) await refreshPlayers();
@@ -3310,9 +3478,25 @@ document.addEventListener('DOMContentLoaded', () => {
     } else if (e.target.id === 'edit-player-pin-input') {
       e.preventDefault();
       app.querySelector('[data-action="confirm-edit-player-name"]')?.click();
+    } else if (e.target.id === 'admin-pin-input') {
+      e.preventDefault();
+      app.querySelector('[data-action="confirm-admin-pin"]')?.click();
+    } else if (e.target.id === 'admin-merge-pin') {
+      e.preventDefault();
+      app.querySelector('[data-action="admin-merge-run"]')?.click();
     } else if (e.target.id === 'new-player-input') {
       e.preventDefault();
       app.querySelector('[data-action="add-player"]')?.click();
+    }
+  });
+
+  app.addEventListener('change', (e) => {
+    if (e.target.id === 'admin-merge-source') {
+      state.adminMerge.sourceId = e.target.value || '';
+      render();
+    } else if (e.target.id === 'admin-merge-target') {
+      state.adminMerge.targetId = e.target.value || '';
+      render();
     }
   });
 
