@@ -1412,8 +1412,24 @@ async function loadSharedById(id) {
 }
 
 // ---------- Renderers ----------
+const SCROLL_RESTORE_SEL = '.setup-body, .scroll, .break-screen, .result-screen';
+
+function captureScrollPositions(container) {
+  return [...container.querySelectorAll(SCROLL_RESTORE_SEL)].map(el => el.scrollTop);
+}
+
+function restoreScrollPositions(container, tops) {
+  const els = container.querySelectorAll(SCROLL_RESTORE_SEL);
+  tops.forEach((top, i) => {
+    const el = els[i];
+    if (el) el.scrollTop = top;
+  });
+}
+
 function render() {
   const root = $('app');
+
+  const scrollTops = captureScrollPositions(root);
 
   const savedInputs = {};
   root.querySelectorAll('input').forEach((input) => {
@@ -1453,6 +1469,9 @@ function render() {
   if (state.toast) html += `<div class="toast">${esc(state.toast)}</div>`;
   root.innerHTML = html;
 
+  restoreScrollPositions(root, scrollTops);
+  requestAnimationFrame(() => restoreScrollPositions(root, scrollTops));
+
   Object.entries(savedInputs).forEach(([id, value]) => {
     if (!value) return;
     const el = document.getElementById(id);
@@ -1462,15 +1481,27 @@ function render() {
   if (focusedId) {
     const el = document.getElementById(focusedId);
     if (el) {
-      el.focus();
+      try {
+        el.focus({ preventScroll: true });
+      } catch {
+        el.focus();
+      }
       if (selStart != null && selEnd != null) {
         try { el.setSelectionRange(selStart, selEnd); } catch { }
       }
     }
   } else if (state.modal?.type === 'newBatter') {
-    $('new-batter-input')?.focus();
+    try {
+      $('new-batter-input')?.focus({ preventScroll: true });
+    } catch {
+      $('new-batter-input')?.focus();
+    }
   } else if (state.modal?.type === 'newBowler') {
-    $('new-bowler-input')?.focus();
+    try {
+      $('new-bowler-input')?.focus({ preventScroll: true });
+    } catch {
+      $('new-bowler-input')?.focus();
+    }
   }
   syncActiveMatchPoll();
 }
