@@ -273,6 +273,28 @@
     return saved;
   }
 
+  function rename(players, id, newName) {
+    const trimmed = (newName || '').trim().replace(/\s+/g, ' ');
+    if (!trimmed) return { players, player: null, error: 'Name required' };
+    const list = dedupeByName(filterDeleted(players)).players;
+    const target = findById(list, id);
+    if (!target) return { players: list, player: null, error: 'Player not found' };
+    if (normalizeName(trimmed) === normalizeName(target.name)) {
+      return { players: list, player: target, error: null };
+    }
+    if (isDeletedName(trimmed)) {
+      return { players: list, player: null, error: 'This name was removed from the roster' };
+    }
+    const conflict = findByName(list, trimmed);
+    if (conflict && conflict.id !== id) {
+      return { players: list, player: null, error: 'Another player already uses this name' };
+    }
+    target.name = trimmed;
+    touch(target);
+    const saved = save(list);
+    return { players: saved, player: findById(saved, id), error: null };
+  }
+
   function batAvg(s) {
     const dismissals = s.innings - s.notOuts;
     if (!dismissals) return s.runs > 0 ? s.runs.toFixed(2) : '—';
@@ -485,6 +507,7 @@
     isDeletedName,
     add,
     remove,
+    rename,
     findById,
     findByName,
     newPlayer,

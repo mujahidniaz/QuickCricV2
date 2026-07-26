@@ -7,7 +7,7 @@ const STORE_INSTALL_DISMISSED = 'quickcric:install-dismissed';
 const STORE_DEVICE_ID = 'quickcric:device-id';
 const MAX_UNDO = 36;          // enough for a full over with extras + player picks
 const FREE_UNDO = 2;          // undos allowed without the edit PIN
-const EDIT_OVER_PIN = '5500'; // global PIN to edit the full current over
+const EDIT_OVER_PIN = '5500'; // global PIN (edit over, delete player, …)
 const POLL_INTERVAL_MS = 3000;
 const IN_PROGRESS_TTL_MS = 6 * 60 * 60 * 1000;
 const DEFAULT_TEAM_A = 'Green';
@@ -1450,6 +1450,18 @@ function render() {
     } catch {
       $('new-bowler-input')?.focus();
     }
+  } else if (state.modal?.type === 'deletePlayerPin') {
+    try {
+      $('delete-player-pin-input')?.focus({ preventScroll: true });
+    } catch {
+      $('delete-player-pin-input')?.focus();
+    }
+  } else if (state.modal?.type === 'editPlayerName') {
+    try {
+      $('edit-player-name-input')?.focus({ preventScroll: true });
+    } catch {
+      $('edit-player-name-input')?.focus();
+    }
   }
   syncActiveMatchPoll();
 }
@@ -2286,6 +2298,9 @@ function renderPlayerDetail() {
               ${renderStatList(bowlSecondary)}
             </div>
           </section>
+          <button type="button" class="btn btn-outline-secondary w-100 mb-2" data-action="edit-player-name" data-player-id="${esc(p.id)}">
+            <i class="bi bi-pencil me-2"></i>Edit name
+          </button>
           <button type="button" class="btn btn-outline-danger w-100 player-delete-btn" data-action="delete-player" data-player-id="${esc(p.id)}">
             <i class="bi bi-trash3 me-2"></i>Remove player
           </button>
@@ -2547,6 +2562,40 @@ function renderModal() {
       <button type="button" class="btn btn-link w-100" data-action="cancel-edit-over-pin">Cancel</button>
     `);
   }
+  if (state.modal.type === 'deletePlayerPin') {
+    const p = playerById(state.modal.playerId);
+    const name = p?.name || 'This player';
+    return renderBsSheet(
+      'Remove player?',
+      `${esc(name)} and all career stats will be deleted permanently.`,
+      `
+        <label class="form-label" for="delete-player-pin-input">Global PIN</label>
+        <input id="delete-player-pin-input" class="form-control form-control-lg text-center font-monospace fw-bold pin-input" type="text" inputmode="numeric" maxlength="4" pattern="[0-9]{4}" placeholder="····" autocomplete="off" enterkeyhint="done" />
+      `,
+      `
+        <button type="button" class="btn btn-danger btn-lg w-100 mb-2" data-action="confirm-delete-player-pin">Remove player</button>
+        <button type="button" class="btn btn-outline-secondary w-100" data-action="cancel-delete-player-pin">Cancel</button>
+      `,
+    );
+  }
+  if (state.modal.type === 'editPlayerName') {
+    const p = playerById(state.modal.playerId);
+    const name = p?.name || '';
+    return renderBsSheet(
+      'Edit player name',
+      'Stats stay on this profile; only the display name changes.',
+      `
+        <label class="form-label" for="edit-player-name-input">Name</label>
+        <input id="edit-player-name-input" class="form-control form-control-lg" type="text" value="${esc(name)}" autocomplete="off" autocapitalize="words" enterkeyhint="next" />
+        <label class="form-label mt-3" for="edit-player-pin-input">Global PIN</label>
+        <input id="edit-player-pin-input" class="form-control form-control-lg text-center font-monospace fw-bold pin-input" type="text" inputmode="numeric" maxlength="4" pattern="[0-9]{4}" placeholder="····" autocomplete="off" enterkeyhint="done" />
+      `,
+      `
+        <button type="button" class="btn btn-primary btn-lg w-100 mb-2" data-action="confirm-edit-player-name">Save name</button>
+        <button type="button" class="btn btn-outline-secondary w-100" data-action="cancel-edit-player-name">Cancel</button>
+      `,
+    );
+  }
   if (state.modal.type === 'confirmSwapStrike') {
     const inn = state.current.innings[state.current.currentInnings];
     const striker = inn.batters[inn.striker];
@@ -2674,14 +2723,27 @@ function handle(action, dataset) {
       break;
     }
     case 'delete-player': {
-      if (!confirm('Delete this player and their career stats?')) break;
-      state.players = window.QCPlayers.remove(state.players, dataset.playerId);
-      state.playerDetail = null;
-      state.view = 'players';
+      const p = playerById(dataset.playerId);
+      if (!p) break;
+      state.modal = { type: 'deletePlayerPin', playerId: p.id };
       render();
-      showToast('Player removed');
       break;
     }
+    case 'edit-player-name': {
+      const p = playerById(dataset.playerId);
+      if (!p) break;
+      state.modal = { type: 'editPlayerName', playerId: p.id };
+      render();
+      break;
+    }
+    case 'cancel-delete-player-pin':
+      state.modal = null;
+      render();
+      break;
+    case 'cancel-edit-player-name':
+      state.modal = null;
+      render();
+      break;
     case 'team-pick-player': {
       const id = dataset.playerId;
       const side = state.teamPick.picking;
@@ -3068,6 +3130,36 @@ document.addEventListener('DOMContentLoaded', () => {
       showToast('Over editing unlocked — undo any ball in this over');
       return;
     }
+    if (action === 'confirm-delete-player-pin') {
+      const pin = ($('delete-player-pin-input')?.value || '').trim();
+      if (!pin) return showToast('Enter the global PIN');
+      if (pin !== EDIT_OVER_PIN) return showToast('Wrong PIN · try again');
+      const id = state.modal?.playerId;
+      if (!id) return;
+      state.players = window.QCPlayers.remove(state.players, id);
+      state.playerDetail = null;
+      state.modal = null;
+      state.view = 'players';
+      render();
+      showToast('Player removed');
+      return;
+    }
+    if (action === 'confirm-edit-player-name') {
+      const pin = ($('edit-player-pin-input')?.value || '').trim();
+      if (!pin) return showToast('Enter the global PIN');
+      if (pin !== EDIT_OVER_PIN) return showToast('Wrong PIN · try again');
+      const id = state.modal?.playerId;
+      if (!id) return;
+      const name = $('edit-player-name-input')?.value || '';
+      const res = window.QCPlayers.rename(state.players, id, name);
+      if (res.error) return showToast(res.error);
+      state.players = res.players;
+      state.playerDetail = res.player;
+      state.modal = null;
+      render();
+      showToast(res.player ? `${res.player.name} updated` : 'Name updated');
+      return;
+    }
     if (action === 'add-player') {
       (async () => {
         if (dbOn()) await refreshPlayers();
@@ -3129,6 +3221,12 @@ document.addEventListener('DOMContentLoaded', () => {
     } else if (e.target.id === 'edit-over-pin-input') {
       e.preventDefault();
       app.querySelector('[data-action="confirm-edit-over-pin"]')?.click();
+    } else if (e.target.id === 'delete-player-pin-input') {
+      e.preventDefault();
+      app.querySelector('[data-action="confirm-delete-player-pin"]')?.click();
+    } else if (e.target.id === 'edit-player-pin-input') {
+      e.preventDefault();
+      app.querySelector('[data-action="confirm-edit-player-name"]')?.click();
     } else if (e.target.id === 'new-player-input') {
       e.preventDefault();
       app.querySelector('[data-action="add-player"]')?.click();
