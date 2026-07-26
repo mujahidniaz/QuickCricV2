@@ -381,6 +381,26 @@ const fmtDate = (ts) => new Date(ts).toLocaleDateString(undefined, { day: '2-dig
 const fmtRate = (runs, balls) => balls === 0 ? '0.00' : ((runs / balls) * 6).toFixed(2);
 const dbOn = () => !!(window.QCDB && window.QCDB.enabled);
 
+/** Clear SW + caches, then reload from network (does not wipe roster/match cloud data). */
+async function hardReloadApp() {
+  showToast('Loading latest app…');
+  try {
+    if ('caches' in window) {
+      const keys = await caches.keys();
+      await Promise.all(keys.map((k) => caches.delete(k)));
+    }
+    if ('serviceWorker' in navigator) {
+      const regs = await navigator.serviceWorker.getRegistrations();
+      await Promise.all(regs.map((r) => r.unregister()));
+    }
+  } catch (err) {
+    console.warn('[QuickCric] hard reload failed', err);
+  }
+  const url = new URL(location.href);
+  url.searchParams.set('_', Date.now().toString(36));
+  location.replace(url.toString());
+}
+
 function buildEventBanner(d) {
   if (d.wicket) {
     const onExtra = d.extra ? `on a ${d.extra === 'wd' ? 'wide' : d.extra === 'nb' ? 'no ball' : d.extra}` : '';
@@ -1459,6 +1479,8 @@ function renderHome() {
             </div>
           ` : ''}
           <div class="home-foot">
+            <button type="button" class="foot-link" data-action="hard-reload" title="Clear app cache and reload">Refresh app</button>
+            <span class="foot-dot">·</span>
             <button type="button" class="foot-link" data-action="terms">Terms</button>
             <span class="foot-dot">·</span>
             <a class="foot-link" href="https://www.linkedin.com/in/khamash/" target="_blank" rel="noopener noreferrer">Contact</a>
@@ -2440,6 +2462,9 @@ function handle(action, dataset) {
   switch (action) {
     case 'home': state.view = 'home'; state.detail = null; render(); break;
     case 'terms': state.view = 'terms'; render(); break;
+    case 'hard-reload':
+      hardReloadApp();
+      break;
     case 'history':
       state.view = 'history';
       state.historyFilter = 'all';
