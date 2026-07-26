@@ -4,6 +4,10 @@
   const STORE = 'quickcric:players';
   const STORE_DELETED = 'quickcric:players-deleted-names';
 
+  function cloudOn() {
+    return !!(window.QCDB && window.QCDB.enabled);
+  }
+
   function loadDeletedNames() {
     try {
       return new Set(JSON.parse(localStorage.getItem(STORE_DELETED) || '[]'));
@@ -176,6 +180,7 @@
   }
 
   function load() {
+    if (cloudOn()) return [];
     try { return JSON.parse(localStorage.getItem(STORE) || '[]'); } catch { return []; }
   }
 
@@ -183,8 +188,10 @@
     const localOnly = !!(opts && opts.localOnly);
     const cleaned = filterDeleted(players);
     const { players: deduped, removedIds } = dedupeByName(cleaned);
-    try { localStorage.setItem(STORE, JSON.stringify(deduped)); } catch { }
-    if (!localOnly && window.QCDB?.enabled) {
+    if (!cloudOn()) {
+      try { localStorage.setItem(STORE, JSON.stringify(deduped)); } catch { }
+    }
+    if (!localOnly && cloudOn()) {
       removedIds.forEach(id => {
         window.QCDB.deletePlayer(id).catch(err => console.warn('[QuickCric] player delete failed:', err.message));
       });
@@ -193,7 +200,30 @@
     return deduped;
   }
 
+  /** Supabase roster is canonical when cloud is on — replaces in-memory state, no local merge. */
+  function applyRemoteBundle(bundle) {
+    const remote = Array.isArray(bundle) ? bundle : (bundle?.players || []);
+    const deletedNames = Array.isArray(bundle) ? null : bundle?.deletedNames;
+    if (Array.isArray(deletedNames)) applyDeletedNames(deletedNames);
+    const { players: deduped, removedIds } = dedupeByName(filterDeleted(remote));
+    if (cloudOn()) {
+      try {
+        localStorage.removeItem(STORE);
+      } catch { }
+      removedIds.forEach(id => {
+        window.QCDB.deletePlayer(id).catch(err => console.warn('[QuickCric] player delete failed:', err.message));
+      });
+      if (removedIds.length || deduped.length !== remote.length) {
+        window.QCDB.syncPlayers(deduped);
+      }
+    } else {
+      try { localStorage.setItem(STORE, JSON.stringify(deduped)); } catch { }
+    }
+    return deduped;
+  }
+
   function merge(local, remote) {
+    if (cloudOn()) return applyRemoteBundle({ players: remote, deletedNames: null });
     const map = new Map();
     for (const p of filterDeleted(remote)) map.set(p.id, p);
     for (const p of filterDeleted(local)) {
@@ -444,8 +474,10 @@
 
   window.QCPlayers = {
     STORE,
+    cloudOn,
     load,
     save,
+    applyRemoteBundle,
     merge,
     dedupeByName,
     normalizeName,

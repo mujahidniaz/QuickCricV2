@@ -429,20 +429,28 @@ function showToast(msg, ms = 1500) {
 
 // ---------- Storage ----------
 function loadHistory() {
+  if (dbOn()) return [];
   try { return JSON.parse(localStorage.getItem(STORE_HIST) || '[]'); } catch { return []; }
 }
 function saveHistory(arr) {
+  if (dbOn()) return;
   try { localStorage.setItem(STORE_HIST, JSON.stringify(arr)); } catch { }
 }
 function loadCurrent() {
+  if (dbOn()) return null;
   try { return JSON.parse(localStorage.getItem(STORE_CURRENT) || 'null'); } catch { return null; }
 }
 function saveCurrent(m) {
   if (m) {
-    try { localStorage.setItem(STORE_CURRENT, JSON.stringify(m)); } catch { }
+    if (!dbOn()) {
+      try { localStorage.setItem(STORE_CURRENT, JSON.stringify(m)); } catch { }
+    }
     if (dbOn()) window.QCDB.syncMatch(m);
   } else {
-    try { localStorage.removeItem(STORE_CURRENT); } catch { }
+    if (!dbOn()) {
+      try { localStorage.removeItem(STORE_CURRENT); } catch { }
+    }
+    stopActiveMatchPoll();
   }
 }
 
@@ -668,7 +676,14 @@ async function refreshHistory() {
   try {
     const remote = await window.QCDB.loadMatches();
     state.history = remote;
-    saveHistory(remote);
+    try {
+      localStorage.removeItem(STORE_HIST);
+      localStorage.removeItem(STORE_CURRENT);
+    } catch { }
+    if (state.current) {
+      const fresh = remote.find(x => x.id === state.current.id);
+      state.current = fresh && fresh.status !== 'completed' ? fresh : null;
+    }
     purgeStaleInProgress();
   } catch (err) {
     console.warn('history fetch failed', err);
@@ -681,19 +696,15 @@ async function refreshHistory() {
 async function refreshPlayers() {
   if (!dbOn() || !window.QCPlayers) return;
   try {
-    const { players: remote, deletedNames } = await window.QCDB.loadPlayersBundle();
-    window.QCPlayers.applyDeletedNames(deletedNames);
-    const local = loadPlayers();
-    const merged = window.QCPlayers.merge(local, remote);
-    const saved = window.QCPlayers.save(merged);
-    state.players = saved;
+    const bundle = await window.QCDB.loadPlayersBundle();
+    state.players = window.QCPlayers.applyRemoteBundle(bundle);
     if (state.playerDetail) {
       state.playerDetail = playerById(state.playerDetail.id);
     }
     const blocked = new Set(
-      (deletedNames || []).map(n => window.QCPlayers.normalizeName(n)).filter(Boolean)
+      (bundle.deletedNames || []).map(n => window.QCPlayers.normalizeName(n)).filter(Boolean)
     );
-    for (const p of remote) {
+    for (const p of bundle.players || []) {
       if (blocked.has(window.QCPlayers.normalizeName(p.name))) {
         window.QCDB.deletePlayer(p.id).catch(() => {});
       }
@@ -770,6 +781,7 @@ function newMatch(teamA, teamB, overs, battingFirst, squads = null) {
 }
 
 function canScore(m) {
+  if (dbOn() && m?.status === 'in_progress') return true;
   return (m.scoringDeviceId !== undefined ? m.scoringDeviceId : m.deviceId) === DEVICE_ID;
 }
 
@@ -1205,6 +1217,43 @@ function stopPolling() {
   if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
 }
 
+let activeMatchPollTimer = null;
+const ACTIVE_MATCH_VIEWS = new Set(['score', 'innings-setup', 'innings-break', 'team-pick']);
+
+function startActiveMatchPoll(id) {
+  if (activeMatchPollTimer && state._pollMatchId === id) return;
+  stopActiveMatchPoll();
+  state._pollMatchId = id;
+  activeMatchPollTimer = setInterval(async () => {
+    if (!state.current || state.current.id !== id) return;
+    try {
+      const r = await window.QCDB.loadMatch(id);
+      if (!r?.match) return;
+      if (JSON.stringify(r.match) === JSON.stringify(state.current)) return;
+      state.current = r.match;
+      state.history = [r.match, ...state.history.filter(x => x.id !== id)];
+      render();
+    } catch { /* ignore */ }
+  }, POLL_INTERVAL_MS);
+}
+
+function stopActiveMatchPoll() {
+  if (activeMatchPollTimer) {
+    clearInterval(activeMatchPollTimer);
+    activeMatchPollTimer = null;
+  }
+  state._pollMatchId = null;
+}
+
+function syncActiveMatchPoll() {
+  const m = state.current;
+  if (dbOn() && m?.id && m.status === 'in_progress' && ACTIVE_MATCH_VIEWS.has(state.view)) {
+    startActiveMatchPoll(m.id);
+  } else {
+    stopActiveMatchPoll();
+  }
+}
+
 async function loadSharedById(id) {
   if (!dbOn()) {
     showToast('This link needs cloud setup');
@@ -1296,6 +1345,7 @@ function render() {
   } else if (state.modal?.type === 'newBowler') {
     $('new-bowler-input')?.focus();
   }
+  syncActiveMatchPoll();
 }
 
 function renderTopbar(title, opts = {}) {
@@ -2403,19 +2453,28 @@ function handle(action, dataset) {
       if (dbOn()) refreshHistory();
       break;
     case 'resume-match': {
-      const m = state.history.find(x => x.id === dataset.matchId);
-      if (!m) { showToast('Match not found'); break; }
-      if (!canScore(m)) { showToast('Started on another device'); break; }
-      state.current = m;
-      state.overEditUnlocked = false;
-      state.freeUndosUsed = 0;
-      persistMatch(m);
-      state.detail = null;
-      const inn = m.innings[m.currentInnings];
-      if (!inn) state.view = 'innings-setup';
-      else if (inn.ended && m.currentInnings === 0) state.view = 'innings-break';
-      else state.view = 'score';
-      render();
+      (async () => {
+        const matchId = dataset.matchId;
+        let m = state.history.find(x => x.id === matchId);
+        if (dbOn()) {
+          try {
+            const r = await window.QCDB.loadMatch(matchId);
+            if (r?.match) m = r.match;
+          } catch { /* fall back to cached list row */ }
+        }
+        if (!m) { showToast('Match not found'); return; }
+        if (!canScore(m)) { showToast('Cannot score this match'); return; }
+        state.current = m;
+        state.overEditUnlocked = false;
+        state.freeUndosUsed = 0;
+        persistMatch(m);
+        state.detail = null;
+        const inn = m.innings[m.currentInnings];
+        if (!inn) state.view = 'innings-setup';
+        else if (inn.ended && m.currentInnings === 0) state.view = 'innings-break';
+        else state.view = 'score';
+        render();
+      })();
       break;
     }
     case 'take-scoring': {
@@ -2773,13 +2832,13 @@ async function init() {
     }
   }
 
-  state.current = loadCurrent();
-  state.history = loadHistory();
-  state.players = loadPlayers();
-  if (window.QCPlayers) {
+  state.current = dbOn() ? null : loadCurrent();
+  state.history = dbOn() ? [] : loadHistory();
+  state.players = dbOn() ? [] : loadPlayers();
+  if (window.QCPlayers && !dbOn()) {
     state.players = window.QCPlayers.save(state.players, { localOnly: true });
   }
-  if (state.current) {
+  if (state.current && !dbOn()) {
     state.history = [state.current, ...state.history.filter(x => x.id !== state.current.id)];
     saveHistory(state.history);
   }
@@ -2792,6 +2851,12 @@ async function init() {
     render();
     refreshHistory();
   }
+
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState !== 'visible' || !dbOn()) return;
+    refreshPlayers().then(() => render()).catch(() => {});
+    refreshHistory();
+  });
 }
 
 document.addEventListener('DOMContentLoaded', () => {
