@@ -12,6 +12,7 @@ const POLL_INTERVAL_MS = 3000;
 const IN_PROGRESS_TTL_MS = 6 * 60 * 60 * 1000;
 const DEFAULT_TEAM_A = 'Green';
 const DEFAULT_TEAM_B = 'Blue';
+const DEFAULT_OVERS = 8;
 
 const DEVICE_ID = (() => {
   let id = '';
@@ -357,7 +358,7 @@ const state = {
   ball: emptyBall(),
   modal: null,
   toast: null,
-  setup: { teamA: DEFAULT_TEAM_A, teamB: DEFAULT_TEAM_B, overs: 6, battingFirst: 'A', skipTeamPick: false },
+  setup: { teamA: DEFAULT_TEAM_A, teamB: DEFAULT_TEAM_B, overs: DEFAULT_OVERS, battingFirst: 'A', skipTeamPick: false },
   teamPick: { squads: { A: [], B: [] }, picking: 'A' },
   loadingHistory: false,
   installTab: 'android',
@@ -368,6 +369,7 @@ const state = {
   freeUndosUsed: 0,
   inningsManual: { striker: false, nonStriker: false, bowler: false },
   inningsPick: { striker: null, nonStriker: null, bowler: null },
+  inningsPickUndo: [],
 };
 
 function emptyBall() { return { runs: null, extra: null, wicket: false }; }
@@ -521,6 +523,7 @@ function ensurePlayerInRoster(name, playerId = null) {
 }
 
 function matchUsesSquads(match) {
+  if (match?.squadsSkipped) return false;
   return !!match?.squads &&
     ((match.squads.A?.length || 0) + (match.squads.B?.length || 0) > 0);
 }
@@ -541,6 +544,23 @@ function ensurePlayerOnSide(match, side, name, playerId = null) {
 function resetInningsPickers() {
   state.inningsManual = { striker: false, nonStriker: false, bowler: false };
   state.inningsPick = { striker: null, nonStriker: null, bowler: null };
+  state.inningsPickUndo = [];
+}
+
+function pushInningsPickUndo() {
+  state.inningsPickUndo.push(clone({
+    inningsPick: state.inningsPick,
+    inningsManual: { ...state.inningsManual },
+  }));
+  if (state.inningsPickUndo.length > 24) state.inningsPickUndo.shift();
+}
+
+function undoInningsPick() {
+  if (!state.inningsPickUndo.length) return false;
+  const snap = state.inningsPickUndo.pop();
+  state.inningsPick = snap.inningsPick;
+  state.inningsManual = snap.inningsManual;
+  return true;
 }
 
 function playerFromMatchLine(line) {
@@ -558,6 +578,14 @@ function playerFromMatchLine(line) {
 
 function rosterForSide(match, side) {
   if (!matchUsesSquads(match)) return state.players.slice();
+
+  const sideSquad = squadPlayerIds(match, side);
+  if (!sideSquad.length) {
+    const other = side === 'A' ? 'B' : 'A';
+    const onOther = new Set(squadPlayerIds(match, other));
+    const pool = state.players.filter(p => !onOther.has(p.id));
+    if (pool.length) return pool;
+  }
 
   const seen = new Map();
   for (const id of squadPlayerIds(match, side)) {
@@ -791,6 +819,7 @@ function newMatch(teamA, teamB, overs, battingFirst, squads = null) {
     endedAt: null,
     teams: { A: (teamA || '').trim() || DEFAULT_TEAM_A, B: (teamB || '').trim() || DEFAULT_TEAM_B },
     squads: squads || { A: [], B: [] },
+    squadsSkipped: !squads || ((squads.A?.length || 0) + (squads.B?.length || 0) === 0),
     awards: null,
     overs,
     battingFirst,
@@ -847,10 +876,25 @@ function snapshotForUndo(m) {
   });
 }
 
-function pushUndo(match) {
+function pushUndo(match, kind = 'ball') {
   if (!match) return;
-  match.undo.push(snapshotForUndo(match));
+  const snap = snapshotForUndo(match);
+  snap.undoKind = kind;
+  match.undo.push(snap);
   if (match.undo.length > MAX_UNDO) match.undo.shift();
+}
+
+function lastUndoKind(match) {
+  const snap = match?.undo?.[match.undo.length - 1];
+  return snap?.undoKind || 'ball';
+}
+
+function undoActionLabel(match) {
+  const kind = lastUndoKind(match);
+  if (kind === 'pick') return '↶ Undo player pick';
+  if (kind === 'swap') return '↶ Undo swap strike';
+  if (kind === 'innings-start') return '↶ Undo start innings';
+  return '↶ Undo last ball';
 }
 
 function currentOverNo(inn) {
@@ -876,12 +920,14 @@ function undoWouldLeaveCurrentOver(match) {
 
 function canUndoNow(match) {
   if (!match?.undo?.length) return false;
+  const kind = lastUndoKind(match);
+  if (kind === 'pick' || kind === 'swap' || kind === 'innings-start') return true;
   if (state.overEditUnlocked) return undoWouldLeaveCurrentOver(match) || state.freeUndosUsed < FREE_UNDO;
   return state.freeUndosUsed < FREE_UNDO;
 }
 
 function recordBall(match, sel) {
-  pushUndo(match);
+  pushUndo(match, 'ball');
   state.freeUndosUsed = 0;
 
   const inn = match.innings[match.currentInnings];
@@ -955,14 +1001,38 @@ function recordBall(match, sel) {
 function undoBall(match) {
   if (!canUndoNow(match)) return false;
   const snap = match.undo.pop();
+  const kind = snap.undoKind || 'ball';
   match.innings = snap.innings;
   match.currentInnings = snap.currentInnings;
   match.status = snap.status;
   match.result = snap.result;
   if (snap.squads) match.squads = snap.squads;
-  state.freeUndosUsed += 1;
+  if (kind === 'ball') state.freeUndosUsed += 1;
+  else state.freeUndosUsed = 0;
   persistMatch(match);
   return true;
+}
+
+function afterUndoMatch() {
+  state.ball = emptyBall();
+  state.modal = null;
+  const m = state.current;
+  const inn = m?.innings?.[m?.currentInnings];
+  if (!inn) {
+    state.view = 'innings-setup';
+    render();
+    return;
+  }
+  if (inn.ended) {
+    afterInningsEnd();
+    return;
+  }
+  if (inn.needNewBatter) {
+    state.modal = { type: 'newBatter', manual: false };
+  } else if (inn.needNewBowler) {
+    state.modal = { type: 'newBowler', manual: false };
+  }
+  render();
 }
 
 function swapStrike(match) {
@@ -971,7 +1041,7 @@ function swapStrike(match) {
   const a = inn.batters[inn.striker];
   const b = inn.batters[inn.nonStriker];
   if (!a || !b || a.out || b.out) return false;
-  pushUndo(match);
+  pushUndo(match, 'swap');
   state.freeUndosUsed = 0;
   [inn.striker, inn.nonStriker] = [inn.nonStriker, inn.striker];
   persistMatch(match);
@@ -989,7 +1059,7 @@ function addBatter(inn, name, playerId = null) {
     showToast('Already batting');
     return false;
   }
-  pushUndo(state.current);
+  pushUndo(state.current, 'pick');
   state.freeUndosUsed = 0;
   playerId = ensurePlayerOnSide(state.current, inn.batting, trimmed, playerId);
   const idx = inn.batters.length;
@@ -1007,7 +1077,7 @@ function addBowler(inn, name, playerId = null) {
     showToast("Can't bowl consecutive overs");
     return false;
   }
-  pushUndo(state.current);
+  pushUndo(state.current, 'pick');
   state.freeUndosUsed = 0;
   playerId = ensurePlayerOnSide(state.current, inn.bowling, trimmed, playerId);
   const key = trimmed.toLowerCase();
@@ -1033,6 +1103,7 @@ function goToMatchStart() {
     state.teamPick = { squads: { A: [], B: [] }, picking: 'A' };
     state.view = 'team-pick';
   } else {
+    if (state.current) state.current.squadsSkipped = true;
     state.view = 'innings-setup';
   }
 }
@@ -1052,6 +1123,8 @@ function startMatch(teamA, teamB, overs, battingFirst, squads = null) {
 
 function startInnings(strikerName, nonStrikerName, bowlerName, strikerId = null, nonStrikerId = null, bowlerId = null) {
   const m = state.current;
+  pushUndo(m, 'innings-start');
+  state.freeUndosUsed = 0;
   const isFirst = m.innings.length === 0;
   const batting = isFirst ? m.battingFirst : (m.battingFirst === 'A' ? 'B' : 'A');
   const bowling = batting === 'A' ? 'B' : 'A';
@@ -1065,9 +1138,8 @@ function startInnings(strikerName, nonStrikerName, bowlerName, strikerId = null,
   if (!isFirst) inn.target = m.innings[0].score.runs + 1;
   m.innings.push(inn);
   m.currentInnings = m.innings.length - 1;
-  m.undo = [];
   state.overEditUnlocked = false;
-  state.freeUndosUsed = 0;
+  state.inningsPickUndo = [];
   state.view = 'score';
   persistMatch(m);
   if (isFirst) audio.onMatchStart();
@@ -1663,6 +1735,9 @@ function renderInningsSetup() {
           selected: state.inningsPick.bowler,
         })}
       </div>
+      <div class="undo-row px-3 pb-2">
+        <button type="button" data-action="undo-innings-pick" ${state.inningsPickUndo.length ? '' : 'disabled'}>↶ Undo last pick</button>
+      </div>
       ${renderBottomBar('Start innings', 'start-innings')}
     </div>
   `;
@@ -1759,7 +1834,7 @@ function renderScore() {
       </div>
       ${inn.freeHit ? `<div class="free-hit-banner"><span class="fh-dot"></span>Free hit · next ball<span class="fh-dot"></span></div>` : ''}
       <div class="undo-row">
-        ${showingLast ? '' : `<button data-action="undo" ${canUndo ? '' : 'disabled'}>↶ Undo</button>`}
+        ${showingLast ? '' : `<button data-action="undo" ${canUndo ? '' : 'disabled'}>${undoActionLabel(m)}</button>`}
       </div>
       <div class="actions">
         <div class="input-cluster">
@@ -2557,7 +2632,7 @@ function handle(action, dataset) {
       break;
     case 'new-match':
       state.view = 'setup';
-      state.setup = { teamA: DEFAULT_TEAM_A, teamB: DEFAULT_TEAM_B, overs: 6, battingFirst: 'A', skipTeamPick: false };
+      state.setup = { teamA: DEFAULT_TEAM_A, teamB: DEFAULT_TEAM_B, overs: DEFAULT_OVERS, battingFirst: 'A', skipTeamPick: false };
       render(); break;
     case 'players':
       state.view = 'players';
@@ -2590,15 +2665,19 @@ function handle(action, dataset) {
     case 'skip-team-pick':
       if (state.current) {
         state.current.squads = { A: [], B: [] };
+        state.current.squadsSkipped = true;
         persistMatch(state.current);
       }
+      resetInningsPickers();
       state.view = 'innings-setup';
       render(); break;
     case 'finish-team-pick':
       if (state.current) {
         state.current.squads = clone(state.teamPick.squads);
+        state.current.squadsSkipped = false;
         persistMatch(state.current);
       }
+      resetInningsPickers();
       state.view = 'innings-setup';
       render(); break;
     case 'back-from-team-pick': {
@@ -2627,6 +2706,7 @@ function handle(action, dataset) {
       };
       if (pickMap[action]) {
         const [inputId, pickKey] = pickMap[action];
+        pushInningsPickUndo();
         const input = $(inputId);
         if (input) {
           input.value = dataset.playerName || '';
@@ -2720,12 +2800,16 @@ function handle(action, dataset) {
         showToast("Can't swap strike right now");
       }
       break;
+    case 'undo-innings-pick':
+      if (undoInningsPick()) {
+        showToast('Pick undone');
+        render();
+      }
+      break;
     case 'undo':
       if (undoBall(state.current)) {
-        state.ball = emptyBall();
-        state.modal = null;
         showEventBanner({ kind: 'undo', big: 'UNDO', sub: 'Last action undone' }, 1300);
-        afterBall();
+        afterUndoMatch();
       } else if (state.current?.undo?.length && !state.overEditUnlocked) {
         state.modal = { type: 'editOverPin' };
         render();
