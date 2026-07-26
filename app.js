@@ -580,66 +580,18 @@ function undoTeamPick() {
   return true;
 }
 
-function playerFromMatchLine(line) {
-  if (!line) return null;
-  if (line.playerId) {
-    const byId = playerById(line.playerId);
-    if (byId) return byId;
-  }
-  if (line.name) {
-    const id = resolvePlayerId(line.name);
-    if (id) return playerById(id);
-  }
-  return null;
-}
-
-function rosterForSide(match, side) {
-  if (!matchUsesSquads(match)) return state.players.slice();
-
-  const sideSquad = squadPlayerIds(match, side);
-  if (!sideSquad.length) {
-    const other = side === 'A' ? 'B' : 'A';
-    const onOther = new Set(squadPlayerIds(match, other));
-    const pool = state.players.filter(p => !onOther.has(p.id));
-    if (pool.length) return pool;
-  }
-
-  const seen = new Map();
-  for (const id of squadPlayerIds(match, side)) {
-    const p = playerById(id);
-    if (p) seen.set(p.id, p);
-  }
-
-  // Anyone who already batted or bowled for this side should stay pickable
-  // (covers names typed earlier before they were synced onto the squad).
-  for (const inn of match.innings || []) {
-    if (inn.batting === side) {
-      for (const b of inn.batters || []) {
-        const p = playerFromMatchLine(b);
-        if (p) seen.set(p.id, p);
-      }
-    }
-    if (inn.bowling === side) {
-      for (const b of inn.bowlers || []) {
-        const p = playerFromMatchLine(b);
-        if (p) seen.set(p.id, p);
-      }
-    }
-  }
-
-  if (seen.size) return Array.from(seen.values());
-
-  // Side squad still empty — offer unassigned roster players to pick from.
-  const assigned = new Set([
-    ...(match.squads.A || []),
-    ...(match.squads.B || []),
-  ]);
-  return state.players.filter(p => !assigned.has(p.id));
-}
-
-/** Opening lineup always shows the full saved roster; squad filters apply mid-innings only. */
+/** Opening lineup always shows the full saved roster; squad lists are optional pre-match only. */
 function rosterForInningsSetup() {
   return state.players.slice();
+}
+
+/** Scoring modals: full saved roster; bowlers exclude anyone currently at the crease. */
+function rosterForScoringPicker(inn, mode) {
+  let list = state.players.slice();
+  if (mode === 'bowl' && inn) {
+    list = list.filter(p => !batterNotOutOnField(inn, p));
+  }
+  return list;
 }
 
 function enterInningsSetupView() {
@@ -741,10 +693,6 @@ function renderPlayerPicker(opts) {
       ` : ''}
     </div>
   `;
-}
-
-function squadPlayerIds(match, side) {
-  return match?.squads?.[side] || [];
 }
 
 function availableForPick() {
@@ -2560,11 +2508,10 @@ function renderModal() {
   if (state.modal.type === 'install') return renderInstallModal();
   if (state.modal.type === 'newBatter') {
     const inn = state.current.innings[state.current.currentInnings];
-    const batting = inn.batting;
-    return renderBsSheet('Next batter', "A wicket fell. Pick from your squad or add someone new.", `
+    return renderBsSheet('Next batter', 'A wicket fell. Pick a batter or add a new name.', `
       ${renderPlayerPicker({
         action: 'pick-new-batter',
-        players: rosterForSide(state.current, batting),
+        players: rosterForScoringPicker(inn, 'bat'),
         inn,
         mode: 'bat',
         blockOnField: true,
@@ -2577,11 +2524,10 @@ function renderModal() {
   }
   if (state.modal.type === 'newBowler') {
     const inn = state.current.innings[state.current.currentInnings];
-    const bowling = inn.bowling;
     return renderBsSheet('Next bowler', 'Over complete. Pick the next bowler.', `
       ${renderPlayerPicker({
         action: 'pick-new-bowler',
-        players: rosterForSide(state.current, bowling),
+        players: rosterForScoringPicker(inn, 'bowl'),
         inn,
         mode: 'bowl',
         blockConsecutive: true,
@@ -2600,6 +2546,20 @@ function renderModal() {
       <button type="button" class="btn btn-primary btn-lg w-100" data-action="confirm-edit-over-pin">Unlock over edit</button>
       <button type="button" class="btn btn-link w-100" data-action="cancel-edit-over-pin">Cancel</button>
     `);
+  }
+  if (state.modal.type === 'confirmSwapStrike') {
+    const inn = state.current.innings[state.current.currentInnings];
+    const striker = inn.batters[inn.striker];
+    const nonStriker = inn.batters[inn.nonStriker];
+    return renderBsSheet(
+      'Swap strike?',
+      `${esc(striker.name)} and ${esc(nonStriker.name)} will switch ends.`,
+      `<p class="small text-muted mb-0">Striker becomes non-striker and vice versa. You can undo after confirming.</p>`,
+      `
+        <button type="button" class="btn btn-primary btn-lg w-100 mb-2" data-action="confirm-swap-strike">Yes, swap strike</button>
+        <button type="button" class="btn btn-outline-secondary w-100" data-action="cancel-swap-strike">Cancel</button>
+      `,
+    );
   }
   return '';
 }
@@ -2882,13 +2842,32 @@ function handle(action, dataset) {
       state.modal = null;
       render();
       break;
-    case 'swap-strike':
+    case 'swap-strike': {
+      const m = state.current;
+      const inn = m?.innings?.[m.currentInnings];
+      const ok = inn && !inn.ended && !inn.needNewBatter &&
+        inn.batters[inn.striker] && inn.batters[inn.nonStriker] &&
+        !inn.batters[inn.striker].out && !inn.batters[inn.nonStriker].out;
+      if (!ok) {
+        showToast("Can't swap strike right now");
+        break;
+      }
+      state.modal = { type: 'confirmSwapStrike' };
+      render();
+      break;
+    }
+    case 'confirm-swap-strike':
+      state.modal = null;
       if (swapStrike(state.current)) {
         showToast('Strike swapped');
-        render();
       } else {
         showToast("Can't swap strike right now");
       }
+      render();
+      break;
+    case 'cancel-swap-strike':
+      state.modal = null;
+      render();
       break;
     case 'undo-innings-pick':
       if (undoInningsPick()) {
