@@ -1337,11 +1337,16 @@ input { background: var(--paper); }
 }
 .over-strip-head { position: relative; display: flex; align-items: center; justify-content: center; margin-bottom: 6px; }
 .over-strip-head .heading { margin-bottom: 0; }
-.over-toggle {
+.over-strip-actions {
   position: absolute;
   right: 0;
   top: 50%;
   transform: translateY(-50%);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.over-toggle {
   background: transparent;
   border: 0;
   color: var(--cream);
@@ -1435,6 +1440,26 @@ input { background: var(--paper); }
 }
 .undo-row button { font-size: 12px; font-weight: 700; color: rgba(255, 255, 255, 0.85); padding: 3px 10px; border-radius: 8px; }
 .undo-row button[disabled] { color: rgba(255, 255, 255, 0.3); }
+
+.stats .row.stats-actions {
+  grid-column: 1 / -1;
+  display: flex;
+  justify-content: center;
+  padding-top: 2px;
+}
+.strike-swap-btn {
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--cream);
+  background: rgba(255, 255, 255, 0.12);
+  border: 1px solid rgba(255, 255, 255, 0.28);
+  border-radius: 999px;
+  padding: 5px 14px;
+}
+.strike-swap-btn:active { background: rgba(255, 255, 255, 0.22); }
+.strike-swap-btn[disabled] { opacity: 0.35; }
 
 /* Action panel */
 .actions {
