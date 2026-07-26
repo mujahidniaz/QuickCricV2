@@ -5,7 +5,9 @@ const STORE_CURRENT = 'quickcric:current';
 const STORE_AUDIO = 'quickcric:audio';
 const STORE_INSTALL_DISMISSED = 'quickcric:install-dismissed';
 const STORE_DEVICE_ID = 'quickcric:device-id';
-const MAX_UNDO = 2;
+const MAX_UNDO = 36;          // enough for a full over with extras + player picks
+const FREE_UNDO = 2;          // undos allowed without the edit PIN
+const EDIT_OVER_PIN = '5500'; // global PIN to edit the full current over
 const POLL_INTERVAL_MS = 3000;
 const IN_PROGRESS_TTL_MS = 6 * 60 * 60 * 1000;
 
@@ -353,13 +355,15 @@ const state = {
   ball: emptyBall(),
   modal: null,
   toast: null,
-  setup: { teamA: '', teamB: '', overs: 6, battingFirst: 'A', pin: '', skipTeamPick: false },
+  setup: { teamA: '', teamB: '', overs: 6, battingFirst: 'A', skipTeamPick: false },
   teamPick: { squads: { A: [], B: [] }, picking: 'A' },
   loadingHistory: false,
   installTab: 'android',
   historyFilter: 'all',
   historyDate: '',
   showLastOver: false,
+  overEditUnlocked: false,
+  freeUndosUsed: 0,
   inningsManual: { striker: false, nonStriker: false, bowler: false },
   inningsPick: { striker: null, nonStriker: null, bowler: null },
 };
@@ -372,7 +376,6 @@ const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => (
 ));
 const clone = (o) => JSON.parse(JSON.stringify(o));
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
-const genPin = () => String(Math.floor(1000 + Math.random() * 9000));
 const fmtOvers = (balls) => `${Math.floor(balls / 6)}.${balls % 6}`;
 const fmtDate = (ts) => new Date(ts).toLocaleDateString(undefined, { day: '2-digit', month: 'short', year: 'numeric' });
 const fmtRate = (runs, balls) => balls === 0 ? '0.00' : ((runs / balls) * 6).toFixed(2);
@@ -746,12 +749,11 @@ function newInnings(batting, bowling) {
     freeHit: false,
   };
 }
-function newMatch(teamA, teamB, overs, battingFirst, pin, squads = null) {
+function newMatch(teamA, teamB, overs, battingFirst, squads = null) {
   return {
     id: uid(),
     deviceId: DEVICE_ID,
     scoringDeviceId: DEVICE_ID,
-    pin: pin || null,
     startedAt: Date.now(),
     endedAt: null,
     teams: { A: (teamA || '').trim() || 'Team A', B: (teamB || '').trim() || 'Team B' },
@@ -769,6 +771,11 @@ function newMatch(teamA, teamB, overs, battingFirst, pin, squads = null) {
 
 function canScore(m) {
   return (m.scoringDeviceId !== undefined ? m.scoringDeviceId : m.deviceId) === DEVICE_ID;
+}
+
+function claimScoring(m) {
+  if (!m) return;
+  m.scoringDeviceId = DEVICE_ID;
 }
 
 // ---------- Scoring core ----------
@@ -802,14 +809,49 @@ function snapshotForUndo(m) {
     currentInnings: m.currentInnings,
     status: m.status,
     result: m.result,
+    squads: m.squads,
   });
 }
 
-function recordBall(match, sel) {
+function pushUndo(match) {
+  if (!match) return;
   match.undo.push(snapshotForUndo(match));
   if (match.undo.length > MAX_UNDO) match.undo.shift();
+}
+
+function currentOverNo(inn) {
+  if (!inn) return 0;
+  const balls = inn.score?.balls || 0;
+  const ballsInOver = balls % 6;
+  const over = Math.floor(balls / 6);
+  // At over end waiting for new bowler, still treat as the completed over.
+  if (ballsInOver === 0 && balls > 0 && inn.needNewBowler) return over - 1;
+  return over;
+}
+
+function undoWouldLeaveCurrentOver(match) {
+  if (!match?.undo?.length) return false;
+  const inn = match.innings[match.currentInnings];
+  if (!inn) return false;
+  const snap = match.undo[match.undo.length - 1];
+  const snapInn = snap.innings?.[snap.currentInnings];
+  if (!snapInn) return false;
+  if (snap.currentInnings !== match.currentInnings) return false;
+  return currentOverNo(snapInn) === currentOverNo(inn);
+}
+
+function canUndoNow(match) {
+  if (!match?.undo?.length) return false;
+  if (state.overEditUnlocked) return undoWouldLeaveCurrentOver(match) || state.freeUndosUsed < FREE_UNDO;
+  return state.freeUndosUsed < FREE_UNDO;
+}
+
+function recordBall(match, sel) {
+  pushUndo(match);
+  state.freeUndosUsed = 0;
 
   const inn = match.innings[match.currentInnings];
+  const overBefore = currentOverNo(inn);
   const wasFreeHit = inn.freeHit;
   const d = decomposeBall(sel);
   const striker = inn.batters[inn.striker];
@@ -868,6 +910,8 @@ function recordBall(match, sel) {
     if (d.wicket) inn.needNewBatter = true;
   }
 
+  if (currentOverNo(inn) !== overBefore) state.overEditUnlocked = false;
+
   audio.onBall(d, wasFreeHit);
   if (!endNow && d.isLegalBall && inn.score.balls % 6 === 0) audio.onOverEnd();
   persistMatch(match);
@@ -875,12 +919,27 @@ function recordBall(match, sel) {
 }
 
 function undoBall(match) {
-  if (!match.undo.length) return false;
+  if (!canUndoNow(match)) return false;
   const snap = match.undo.pop();
   match.innings = snap.innings;
   match.currentInnings = snap.currentInnings;
   match.status = snap.status;
   match.result = snap.result;
+  if (snap.squads) match.squads = snap.squads;
+  state.freeUndosUsed += 1;
+  persistMatch(match);
+  return true;
+}
+
+function swapStrike(match) {
+  const inn = match?.innings?.[match.currentInnings];
+  if (!inn || inn.ended || inn.needNewBatter) return false;
+  const a = inn.batters[inn.striker];
+  const b = inn.batters[inn.nonStriker];
+  if (!a || !b || a.out || b.out) return false;
+  pushUndo(match);
+  state.freeUndosUsed = 0;
+  [inn.striker, inn.nonStriker] = [inn.nonStriker, inn.striker];
   persistMatch(match);
   return true;
 }
@@ -896,6 +955,8 @@ function addBatter(inn, name, playerId = null) {
     showToast('Already batting');
     return false;
   }
+  pushUndo(state.current);
+  state.freeUndosUsed = 0;
   playerId = ensurePlayerOnSide(state.current, inn.batting, trimmed, playerId);
   const idx = inn.batters.length;
   inn.batters.push(newBatter(trimmed, playerId));
@@ -912,6 +973,8 @@ function addBowler(inn, name, playerId = null) {
     showToast("Can't bowl consecutive overs");
     return false;
   }
+  pushUndo(state.current);
+  state.freeUndosUsed = 0;
   playerId = ensurePlayerOnSide(state.current, inn.bowling, trimmed, playerId);
   const key = trimmed.toLowerCase();
   const existing = inn.bowlers.findIndex(b =>
@@ -940,9 +1003,11 @@ function goToMatchStart() {
   }
 }
 
-function startMatch(teamA, teamB, overs, battingFirst, pin, squads = null) {
+function startMatch(teamA, teamB, overs, battingFirst, squads = null) {
   resetInningsPickers();
-  state.current = newMatch(teamA, teamB, overs, battingFirst, pin, squads);
+  state.overEditUnlocked = false;
+  state.freeUndosUsed = 0;
+  state.current = newMatch(teamA, teamB, overs, battingFirst, squads);
   if (squads) {
     state.view = 'innings-setup';
   } else {
@@ -967,6 +1032,8 @@ function startInnings(strikerName, nonStrikerName, bowlerName, strikerId = null,
   m.innings.push(inn);
   m.currentInnings = m.innings.length - 1;
   m.undo = [];
+  state.overEditUnlocked = false;
+  state.freeUndosUsed = 0;
   state.view = 'score';
   persistMatch(m);
   if (isFirst) audio.onMatchStart();
@@ -1090,23 +1157,21 @@ function shareCurrent() {
     const b64 = btoa(unescape(encodeURIComponent(json)));
     url = `${location.origin}${location.pathname}#v=${b64}`;
   }
-  const pinSuffix = m.pin ? ` · Scoring PIN: ${m.pin}` : '';
-  const shareText = `QuickCric scorecard${pinSuffix}`;
+  const shareText = 'QuickCric scorecard';
   if (navigator.share) {
-    navigator.share({ title: shareText, url }).catch(() => copyShare(url, m.pin));
+    navigator.share({ title: shareText, url }).catch(() => copyShare(url));
   } else {
-    copyShare(url, m.pin);
+    copyShare(url);
   }
 }
-function copyShare(url, pin) {
-  const text = pin ? `${url}\nScoring PIN: ${pin}` : url;
+function copyShare(url) {
   if (navigator.clipboard) {
-    navigator.clipboard.writeText(text).then(
-      () => showToast(pin ? `Link + PIN copied` : 'Link copied'),
-      () => prompt('Copy this link:', text)
+    navigator.clipboard.writeText(url).then(
+      () => showToast('Link copied'),
+      () => prompt('Copy this link:', url)
     );
   } else {
-    prompt('Copy this link:', text);
+    prompt('Copy this link:', url);
   }
 }
 function parseSharedFromHash() {
@@ -1468,14 +1533,6 @@ function renderSetup() {
             ${presets.map(o => `<button type="button" class="btn btn-sm ${s.overs === o ? 'btn-dark' : 'btn-outline-secondary'} rounded-pill px-3" data-action="overs-pick" data-overs="${o}">${o}</button>`).join('')}
           </div>
         </div>
-        <div class="mb-3">
-          <label class="form-label small text-uppercase fw-bold text-muted">Scoring PIN <span class="fw-normal text-muted">(optional)</span></label>
-          <div class="input-group input-group-lg">
-            <input id="match-pin-input" class="form-control text-center font-monospace fw-bold pin-input" type="text" inputmode="numeric" maxlength="4" pattern="[0-9]{4}" placeholder="····" value="${esc(s.pin || '')}" autocomplete="off" />
-            <button type="button" class="btn btn-outline-secondary" data-action="gen-pin" aria-label="Generate new PIN"><i class="bi bi-arrow-clockwise"></i></button>
-          </div>
-          <div class="form-text">Share PIN so others can score from their device</div>
-        </div>
         ${state.players.length > 0 ? `
           <div class="alert alert-light border small mb-0">
             <i class="bi bi-people me-1"></i>${state.players.length} saved players · pick squads next (or skip)
@@ -1575,7 +1632,12 @@ function renderScore() {
   const b = state.ball;
   const selCount = (b.runs != null ? 1 : 0) + (b.extra ? 1 : 0) + (b.wicket ? 1 : 0);
   const canNext = selCount > 0;
-  const canUndo = m.undo.length > 0;
+  const canUndo = canUndoNow(m);
+  const canSwap = !inn.ended && !inn.needNewBatter &&
+    inn.batters[inn.striker] && inn.batters[inn.nonStriker] &&
+    !inn.batters[inn.striker].out && !inn.batters[inn.nonStriker].out;
+  const overBallCount = overBalls.length;
+  const canEditOver = !showingLast && overBallCount > 0;
 
   return `
     <div class="screen">
@@ -1589,7 +1651,7 @@ function renderScore() {
         <div class="score-line">${inn.score.runs}/${inn.score.wickets}</div>
         <div class="overs">${fmtOvers(inn.score.balls)} / ${m.overs}.0 overs</div>
         ${targetPill ? `<div class="target">${esc(targetPill)}</div>` : ''}
-        ${m.pin ? `<div class="pin-badge">PIN&thinsp;·&thinsp;${esc(m.pin)}</div>` : ''}
+        ${state.overEditUnlocked ? `<div class="pin-badge">Edit over unlocked</div>` : ''}
       </div>
       <div class="stats">
         <div class="row">
@@ -1604,12 +1666,17 @@ function renderScore() {
           <span class="name">${esc(nonStriker.name)}</span>
           <span class="figs">${nonStriker.runs} (${nonStriker.balls})</span>
         </div>
-        <div class="row"></div>
+        <div class="row stats-actions">
+          <button type="button" class="strike-swap-btn" data-action="swap-strike" ${canSwap ? '' : 'disabled'} title="Swap striker and non-striker">⇄ Swap strike</button>
+        </div>
       </div>
       <div class="over-strip">
         <div class="over-strip-head">
           <div class="heading">${showingLast ? 'Last over' : 'This over'}</div>
-          ${hasLastOver ? `<button class="over-toggle" data-action="toggle-last-over">${showingLast ? 'Show this over' : 'View last over'}</button>` : ''}
+          <div class="over-strip-actions">
+            ${canEditOver ? `<button class="over-toggle" data-action="edit-over">${state.overEditUnlocked ? 'Editing over' : 'Edit over'}</button>` : ''}
+            ${hasLastOver ? `<button class="over-toggle" data-action="toggle-last-over">${showingLast ? 'Show this over' : 'View last over'}</button>` : ''}
+          </div>
         </div>
         <div class="balls">
           ${overSlots.map(renderBallPill).join('')}
@@ -1618,7 +1685,7 @@ function renderScore() {
       </div>
       ${inn.freeHit ? `<div class="free-hit-banner"><span class="fh-dot"></span>Free hit · next ball<span class="fh-dot"></span></div>` : ''}
       <div class="undo-row">
-        ${showingLast ? '' : `<button data-action="undo" ${canUndo ? '' : 'disabled'}>↶ Undo last ball</button>`}
+        ${showingLast ? '' : `<button data-action="undo" ${canUndo ? '' : 'disabled'}>↶ Undo</button>`}
       </div>
       <div class="actions">
         <div class="input-cluster">
@@ -2130,9 +2197,7 @@ function inProgressCard(m) {
       </button>
       ${scorer
       ? `<button type="button" class="btn btn-warning w-100 rounded-0 fw-bold" data-action="resume-match" data-match-id="${esc(m.id)}"><i class="bi bi-play-fill me-2"></i>Resume</button>`
-      : m.pin
-        ? `<button type="button" class="btn btn-success w-100 rounded-0 fw-bold" data-action="claim-scoring" data-match-id="${esc(m.id)}"><i class="bi bi-key me-2"></i>Enter PIN to score</button>`
-        : `<div class="small text-center text-muted py-2 bg-light border-top">View only · started on another device</div>`}
+      : `<button type="button" class="btn btn-success w-100 rounded-0 fw-bold" data-action="take-scoring" data-match-id="${esc(m.id)}"><i class="bi bi-play-fill me-2"></i>Score this match</button>`}
     </div>
   `;
 }
@@ -2182,13 +2247,13 @@ function renderSharedView() {
       ${hasActiveInnings ? `
         <div class="live-meta">
           <span>${fmtDate(m.startedAt)} · ${m.overs} overs</span>
-          ${m.pin && !canScore(m)
-            ? `<button class="btn-inline-score" data-action="claim-scoring" data-match-id="${esc(m.id)}" data-from-shared="1">Score this match →</button>`
+          ${!canScore(m)
+            ? `<button class="btn-inline-score" data-action="take-scoring" data-match-id="${esc(m.id)}" data-from-shared="1">Score this match →</button>`
             : ''}
         </div>
-      ` : isLive && m.pin && !canScore(m) ? `
+      ` : isLive && !canScore(m) ? `
         <div class="live-meta">
-          <button class="btn btn-primary shared-score-btn" data-action="claim-scoring" data-match-id="${esc(m.id)}" data-from-shared="1">Score this match →</button>
+          <button class="btn btn-primary shared-score-btn" data-action="take-scoring" data-match-id="${esc(m.id)}" data-from-shared="1">Score this match →</button>
         </div>
       ` : ''}
 
@@ -2308,13 +2373,13 @@ function renderModal() {
       })}
     `, `<button type="button" class="btn btn-primary btn-lg w-100" data-action="confirm-new-bowler">Continue</button>`);
   }
-  if (state.modal.type === 'claimPin') {
-    return renderBsSheet('Enter match PIN', '4-digit PIN to claim scoring on this device', `
-      <label class="form-label" for="claim-pin-input">PIN</label>
-      <input id="claim-pin-input" class="form-control form-control-lg text-center font-monospace fw-bold pin-input" type="text" inputmode="numeric" maxlength="4" pattern="[0-9]{4}" placeholder="····" autocomplete="off" enterkeyhint="done" />
+  if (state.modal.type === 'editOverPin') {
+    return renderBsSheet('Edit this over', 'Enter the edit PIN to undo any ball in the current over.', `
+      <label class="form-label" for="edit-over-pin-input">PIN</label>
+      <input id="edit-over-pin-input" class="form-control form-control-lg text-center font-monospace fw-bold pin-input" type="text" inputmode="numeric" maxlength="4" pattern="[0-9]{4}" placeholder="····" autocomplete="off" enterkeyhint="done" />
     `, `
-      <button type="button" class="btn btn-primary btn-lg w-100" data-action="confirm-claim-pin" data-match-id="${esc(state.modal.matchId)}" data-from-shared="${state.modal.fromShared ? '1' : ''}">Claim scoring</button>
-      <button type="button" class="btn btn-link w-100" data-action="cancel-claim-pin">Cancel</button>
+      <button type="button" class="btn btn-primary btn-lg w-100" data-action="confirm-edit-over-pin">Unlock over edit</button>
+      <button type="button" class="btn btn-link w-100" data-action="cancel-edit-over-pin">Cancel</button>
     `);
   }
   return '';
@@ -2340,8 +2405,10 @@ function handle(action, dataset) {
     case 'resume-match': {
       const m = state.history.find(x => x.id === dataset.matchId);
       if (!m) { showToast('Match not found'); break; }
-      if (!canScore(m)) { showToast(m.pin ? 'Enter PIN to score' : 'Started on another device'); break; }
+      if (!canScore(m)) { showToast('Started on another device'); break; }
       state.current = m;
+      state.overEditUnlocked = false;
+      state.freeUndosUsed = 0;
       persistMatch(m);
       state.detail = null;
       const inn = m.innings[m.currentInnings];
@@ -2349,6 +2416,32 @@ function handle(action, dataset) {
       else if (inn.ended && m.currentInnings === 0) state.view = 'innings-break';
       else state.view = 'score';
       render();
+      break;
+    }
+    case 'take-scoring': {
+      const matchId = dataset.matchId;
+      const fromShared = !!dataset.fromShared;
+      const m = fromShared ? state.shared : state.history.find(x => x.id === matchId);
+      if (!m) { showToast('Match not found'); break; }
+      claimScoring(m);
+      state.overEditUnlocked = false;
+      state.freeUndosUsed = 0;
+      if (fromShared) {
+        state.current = clone(m);
+        persistMatch(state.current);
+        state.shared = null;
+        stopPolling();
+        history.replaceState(null, '', location.pathname);
+      } else {
+        state.current = m;
+        persistMatch(m);
+      }
+      const inn = state.current.innings[state.current.currentInnings];
+      if (!inn) state.view = 'innings-setup';
+      else if (inn.ended && state.current.currentInnings === 0) state.view = 'innings-break';
+      else state.view = 'score';
+      render();
+      showToast('You are now scoring');
       break;
     }
     case 'history-filter':
@@ -2378,7 +2471,7 @@ function handle(action, dataset) {
       break;
     case 'new-match':
       state.view = 'setup';
-      state.setup = { teamA: '', teamB: '', overs: 6, battingFirst: 'A', pin: genPin(), skipTeamPick: false };
+      state.setup = { teamA: '', teamB: '', overs: 6, battingFirst: 'A', skipTeamPick: false };
       render(); break;
     case 'players':
       state.view = 'players';
@@ -2428,7 +2521,7 @@ function handle(action, dataset) {
       if (dbOn()) window.QCDB.deleteMatch(m.id).catch(() => { });
       state.history = state.history.filter(x => x.id !== m.id);
       saveHistory(state.history);
-      state.setup = { teamA: m.teams.A, teamB: m.teams.B, overs: m.overs, battingFirst: m.battingFirst, pin: m.pin || '', skipTeamPick: false };
+      state.setup = { teamA: m.teams.A, teamB: m.teams.B, overs: m.overs, battingFirst: m.battingFirst, skipTeamPick: false };
       state.current = null;
       saveCurrent(null);
       state.view = 'setup';
@@ -2513,21 +2606,6 @@ function handle(action, dataset) {
       showToast(`${name} bats first`);
       break;
     }
-    case 'gen-pin':
-      state.setup.pin = genPin();
-      render(); break;
-    case 'claim-scoring': {
-      const matchId = dataset.matchId;
-      const fromShared = !!dataset.fromShared;
-      const m = fromShared ? state.shared : state.history.find(x => x.id === matchId);
-      if (!m) { showToast('Match not found'); break; }
-      if (!m.pin) { showToast('This match has no PIN'); break; }
-      if (canScore(m)) { showToast('You are already the scorer'); break; }
-      state.modal = { type: 'claimPin', matchId, fromShared };
-      render(); break;
-    }
-    case 'cancel-claim-pin':
-      state.modal = null; render(); break;
     case 'select-run': pickBall('runs', parseInt(dataset.runs, 10)); break;
     case 'select-extra': pickBall('extra', dataset.extra); break;
     case 'select-wkt': pickBall('wicket', true); break;
@@ -2536,10 +2614,36 @@ function handle(action, dataset) {
       state.showLastOver = !state.showLastOver;
       render();
       break;
+    case 'edit-over':
+      if (state.overEditUnlocked) {
+        showToast('Over editing already unlocked — use Undo');
+        break;
+      }
+      state.modal = { type: 'editOverPin' };
+      render();
+      break;
+    case 'cancel-edit-over-pin':
+      state.modal = null;
+      render();
+      break;
+    case 'swap-strike':
+      if (swapStrike(state.current)) {
+        showToast('Strike swapped');
+        render();
+      } else {
+        showToast("Can't swap strike right now");
+      }
+      break;
     case 'undo':
       if (undoBall(state.current)) {
         state.ball = emptyBall();
-        showEventBanner({ kind: 'undo', big: 'UNDO', sub: 'Last ball removed' }, 1300);
+        state.modal = null;
+        showEventBanner({ kind: 'undo', big: 'UNDO', sub: 'Last action undone' }, 1300);
+        afterBall();
+      } else if (state.current?.undo?.length && !state.overEditUnlocked) {
+        state.modal = { type: 'editOverPin' };
+        render();
+        showToast('Enter PIN to edit earlier balls in this over');
       }
       break;
     case 'end-innings':
@@ -2580,10 +2684,12 @@ function handle(action, dataset) {
       saveHistory(state.history);
       state.current = null;
       saveCurrent(null);
-      state.setup = { teamA: A, teamB: B, overs, battingFirst, pin: genPin(), skipTeamPick: false };
+      state.setup = { teamA: A, teamB: B, overs, battingFirst, skipTeamPick: false };
       state.modal = null;
       state.detail = null;
       state.ball = emptyBall();
+      state.overEditUnlocked = false;
+      state.freeUndosUsed = 0;
       state.view = 'setup';
       render();
       showToast('Confirm setup, then Start match');
@@ -2601,7 +2707,7 @@ function handle(action, dataset) {
         if (dbOn()) window.QCDB.deleteMatch(m.id).catch(() => { });
         state.history = state.history.filter(x => x.id !== m.id);
         saveHistory(state.history);
-        state.setup = { teamA: m.teams.A, teamB: m.teams.B, overs: m.overs, battingFirst: m.battingFirst, pin: m.pin || '', skipTeamPick: false };
+        state.setup = { teamA: m.teams.A, teamB: m.teams.B, overs: m.overs, battingFirst: m.battingFirst, skipTeamPick: false };
         state.current = null;
         saveCurrent(null);
         state.view = 'setup';
@@ -2701,13 +2807,22 @@ document.addEventListener('DOMContentLoaded', () => {
     if (action === 'start-match') {
       const a = $('team-a-input')?.value || '';
       const b = $('team-b-input')?.value || '';
-      const pin = ($('match-pin-input')?.value || '').trim();
       state.setup.teamA = a;
       state.setup.teamB = b;
       if (!a.trim() || !b.trim()) return showToast('Enter both team names');
-      if (pin && !/^\d{4}$/.test(pin)) return showToast('PIN must be exactly 4 digits');
-      startMatch(a, b, state.setup.overs, state.setup.battingFirst, pin || null);
+      startMatch(a, b, state.setup.overs, state.setup.battingFirst);
       render();
+      return;
+    }
+    if (action === 'confirm-edit-over-pin') {
+      const pin = ($('edit-over-pin-input')?.value || '').trim();
+      if (!pin) return showToast('Enter the PIN');
+      if (pin !== EDIT_OVER_PIN) return showToast('Wrong PIN · try again');
+      state.overEditUnlocked = true;
+      state.freeUndosUsed = 0;
+      state.modal = null;
+      render();
+      showToast('Over editing unlocked — undo any ball in this over');
       return;
     }
     if (action === 'add-player') {
@@ -2757,34 +2872,6 @@ document.addEventListener('DOMContentLoaded', () => {
       render();
       return;
     }
-    if (action === 'confirm-claim-pin') {
-      const pin = ($('claim-pin-input')?.value || '').trim();
-      const matchId = t.dataset.matchId;
-      const fromShared = !!t.dataset.fromShared;
-      const m = fromShared ? state.shared : state.history.find(x => x.id === matchId);
-      if (!m) { showToast('Match not found'); return; }
-      if (!pin) { showToast('Enter the PIN'); return; }
-      if (pin !== m.pin) { showToast('Wrong PIN · try again'); return; }
-      m.scoringDeviceId = DEVICE_ID;
-      state.modal = null;
-      if (fromShared) {
-        state.current = clone(m);
-        persistMatch(state.current);
-        state.shared = null;
-        stopPolling();
-        history.replaceState(null, '', location.pathname);
-      } else {
-        state.current = m;
-        persistMatch(m);
-      }
-      const inn = state.current.innings[state.current.currentInnings];
-      if (!inn) state.view = 'innings-setup';
-      else if (inn.ended && state.current.currentInnings === 0) state.view = 'innings-break';
-      else state.view = 'score';
-      render();
-      showToast('Scoring claimed · you are now the scorer');
-      return;
-    }
     handle(action, t.dataset);
   });
 
@@ -2796,9 +2883,9 @@ document.addEventListener('DOMContentLoaded', () => {
     } else if (e.target.id === 'new-bowler-input') {
       e.preventDefault();
       app.querySelector('[data-action="confirm-new-bowler"]')?.click();
-    } else if (e.target.id === 'claim-pin-input') {
+    } else if (e.target.id === 'edit-over-pin-input') {
       e.preventDefault();
-      app.querySelector('[data-action="confirm-claim-pin"]')?.click();
+      app.querySelector('[data-action="confirm-edit-over-pin"]')?.click();
     } else if (e.target.id === 'new-player-input') {
       e.preventDefault();
       app.querySelector('[data-action="add-player"]')?.click();
@@ -2809,7 +2896,6 @@ document.addEventListener('DOMContentLoaded', () => {
     if (state.view === 'setup') {
       if (e.target.id === 'team-a-input') state.setup.teamA = e.target.value;
       if (e.target.id === 'team-b-input') state.setup.teamB = e.target.value;
-      if (e.target.id === 'match-pin-input') state.setup.pin = e.target.value;
     }
     if (state.view === 'history' && e.target.id === 'history-date-input') {
       const v = e.target.value;
