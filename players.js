@@ -455,12 +455,40 @@
   }
 
   function sideForNextPick(squads, scoreMap) {
-    const options = ['A', 'B'].filter(s => canAddToSquadSide(s, squads));
-    if (!options.length) return 'A';
+    let options = ['A', 'B'].filter(s => canAddToSquadSide(s, squads));
+    if (!options.length) {
+      rebalanceSquadsBySize(squads, scoreMap);
+      options = ['A', 'B'].filter(s => canAddToSquadSide(s, squads));
+    }
+    if (!options.length) {
+      return squads.A.length <= squads.B.length ? 'A' : 'B';
+    }
     if (options.length === 1) return options[0];
     const totals = squadRatingTotals(squads, scoreMap);
     const weaker = weakerSquadSide(totals);
     return options.includes(weaker) ? weaker : options[0];
+  }
+
+  function dedupeSquads(squads) {
+    squads.A = [...new Set(squads.A || [])];
+    squads.B = [...new Set(squads.B || [])];
+    squads.B = squads.B.filter(id => !squads.A.includes(id));
+  }
+
+  /** Keep squad sizes within one; fix duplicates and stuck imbalances. */
+  function normalizeSquadSizes(players, squads) {
+    const scoreMap = new Map(teamBalanceScores(players || []).map(s => [s.id, s]));
+    dedupeSquads(squads);
+    rebalanceSquadsBySize(squads, scoreMap);
+    if (squadCountsWithinOne(squads.A.length, squads.B.length)) return squads;
+
+    const ids = [...squads.A, ...squads.B];
+    squads.A = [];
+    squads.B = [];
+    const items = ids.map(id => scoreMap.get(id) || { id, rating: 0, role: 'unknown' });
+    draftBalanced(items, squads, scoreMap);
+    rebalanceSquadsBySize(squads, scoreMap);
+    return squads;
   }
 
   function rebalanceSquadsBySize(squads, scoreMap) {
@@ -522,6 +550,9 @@
     const pool = (players || []).filter(p => p && !taken.has(p.id));
     const scoreMap = new Map(teamBalanceScores(players || []).map(s => [s.id, s]));
 
+    dedupeSquads(squads);
+    rebalanceSquadsBySize(squads, scoreMap);
+
     const buckets = { bowler: [], batsman: [], allrounder: [], unknown: [] };
     for (const s of teamBalanceScores(pool)) {
       buckets[s.role]?.push(s);
@@ -531,7 +562,7 @@
     snakeDraftCategory(buckets.batsman, squads, scoreMap);
     draftBalanced(buckets.allrounder, squads, scoreMap);
     draftBalanced(buckets.unknown, squads, scoreMap);
-    rebalanceSquadsBySize(squads, scoreMap);
+    normalizeSquadSizes(players, squads);
 
     const countRole = (ids, role) =>
       ids.filter(id => scoreMap.get(id)?.role === role).length;
@@ -869,6 +900,7 @@
     bowlingRankings,
     teamBalanceScores,
     balanceTeams,
+    normalizeSquadSizes,
     formatBalanceSummary,
     computeAwards,
     applyMatchStats,

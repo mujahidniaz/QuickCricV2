@@ -375,6 +375,7 @@ const state = {
   adminUnlocked: false,
   adminMerge: { sourceId: '', targetId: '' },
   matchAvailability: { ids: [] },
+  tossCoin: { phase: 'idle', result: null },
 };
 
 function emptyBall() { return { runs: null, extra: null, wicket: false }; }
@@ -623,6 +624,25 @@ function canMoveSquadPlayer(fromSide, squads) {
   return squadCountsWithinOne(a, b);
 }
 
+function squadSizeDiff(squads) {
+  return Math.abs((squads?.A?.length || 0) - (squads?.B?.length || 0));
+}
+
+function normalizeTeamPickSquads(squads) {
+  if (!window.QCPlayers?.normalizeSquadSizes) return squads;
+  const players = playersAvailableToday();
+  window.QCPlayers.normalizeSquadSizes(players, squads);
+  return squads;
+}
+
+/** Manual alternation: when sizes differ, only the smaller side may receive the next pick. */
+function teamPickSideForNext(squads) {
+  const a = squads.A.length;
+  const b = squads.B.length;
+  if (a !== b) return a < b ? 'A' : 'B';
+  return state.teamPick.picking;
+}
+
 /** Persist a player on the global roster and, when squads are in use, on that side's squad. */
 function ensurePlayerOnSide(match, side, name, playerId = null) {
   const id = ensurePlayerInRoster(name, playerId);
@@ -677,7 +697,9 @@ function undoTeamPick() {
 }
 
 function enterSquadReview(squads, toastMsg) {
-  state.teamPick.squads = { A: [...squads.A], B: [...squads.B] };
+  const next = { A: [...squads.A], B: [...squads.B] };
+  normalizeTeamPickSquads(next);
+  state.teamPick.squads = next;
   state.teamPick.mode = 'review';
   state.teamPick.autoBalanced = true;
   state.teamPick.picking = 'A';
@@ -708,6 +730,23 @@ function rosterForScoringPicker(inn, mode) {
     list = list.filter(p => !batterNotOutOnField(inn, p));
   }
   return list;
+}
+
+function enterTossView() {
+  resetInningsPickers();
+  state.tossCoin = { phase: 'idle', result: null };
+  state.view = 'match-toss';
+  if (dbOn()) {
+    refreshPlayers().then(() => render()).catch(() => render());
+    return true;
+  }
+  return false;
+}
+
+/** First innings not started yet: toss screen until confirmed, then openers. */
+function viewBeforeFirstInnings(m) {
+  if (!m || m.innings.length > 0) return null;
+  return m.tossDone ? 'innings-setup' : 'match-toss';
 }
 
 function enterInningsSetupView() {
@@ -848,7 +887,9 @@ function runAutoBalance(existingSquads = null) {
   const pool = playersAvailableToday();
   if (pool.length < 2) return { error: 'Need at least 2 available players' };
   const fixed = existingSquads || { A: [], B: [] };
-  return window.QCPlayers.balanceTeams(pool, { existingSquads: fixed });
+  const res = window.QCPlayers.balanceTeams(pool, { existingSquads: fixed });
+  if (!res.error && res.squads) normalizeTeamPickSquads(res.squads);
+  return res;
 }
 
 async function refreshHistory() {
@@ -952,6 +993,7 @@ function newMatch(teamA, teamB, overs, battingFirst, squads = null) {
     squads: squads || { A: [], B: [] },
     squadsSkipped: !squads || ((squads.A?.length || 0) + (squads.B?.length || 0) === 0),
     squadsAutoPicked: false,
+    tossDone: false,
     awards: null,
     overs,
     battingFirst,
@@ -1151,7 +1193,8 @@ function afterUndoMatch() {
   const m = state.current;
   const inn = m?.innings?.[m?.currentInnings];
   if (!inn) {
-    state.view = 'innings-setup';
+    const pre = viewBeforeFirstInnings(m);
+    state.view = pre || 'innings-setup';
     render();
     return;
   }
@@ -1240,17 +1283,18 @@ function goToMatchStart() {
     state.view = 'match-availability';
   } else {
     if (state.current) state.current.squadsSkipped = true;
-    enterInningsSetupView();
+    if (!enterTossView()) render();
   }
 }
 
-function startMatch(teamA, teamB, overs, battingFirst, squads = null) {
+function startMatch(teamA, teamB, overs, squads = null) {
   resetInningsPickers();
   state.overEditUnlocked = false;
   state.freeUndosUsed = 0;
-  state.current = newMatch(teamA, teamB, overs, battingFirst, squads);
+  state.current = newMatch(teamA, teamB, overs, 'A', squads);
   if (squads) {
-    state.view = 'innings-setup';
+    state.current.tossDone = false;
+    if (!enterTossView()) render();
   } else {
     goToMatchStart();
   }
@@ -1274,6 +1318,7 @@ function startInnings(strikerName, nonStrikerName, bowlerName, strikerId = null,
   if (!isFirst) inn.target = m.innings[0].score.runs + 1;
   m.innings.push(inn);
   m.currentInnings = m.innings.length - 1;
+  m.tossDone = true;
   state.overEditUnlocked = false;
   state.inningsPickUndo = [];
   state.view = 'score';
@@ -1448,7 +1493,7 @@ function stopPolling() {
 }
 
 let activeMatchPollTimer = null;
-const ACTIVE_MATCH_VIEWS = new Set(['score', 'innings-setup', 'innings-break', 'team-pick', 'match-availability']);
+const ACTIVE_MATCH_VIEWS = new Set(['score', 'innings-setup', 'innings-break', 'team-pick', 'match-availability', 'match-toss']);
 
 function startActiveMatchPoll(id) {
   if (activeMatchPollTimer && state._pollMatchId === id) return;
@@ -1552,6 +1597,7 @@ function render() {
     case 'setup': html = renderSetup(); break;
     case 'match-availability': html = renderMatchAvailability(); break;
     case 'team-pick': html = renderTeamPick(); break;
+    case 'match-toss': html = renderMatchToss(); break;
     case 'innings-setup': html = renderInningsSetup(); break;
     case 'score': html = renderScore(); break;
     case 'innings-break': html = renderInningsBreak(); break;
@@ -1885,17 +1931,14 @@ function renderSetup() {
       ${renderTopbar('New match', { ghost: true })}
       <div class="setup-body flex-grow-1 overflow-auto px-3 py-4">
         <div class="mb-4">
-          <label class="form-label small text-uppercase fw-bold text-muted">Teams · tap to set who bats first</label>
+          <label class="form-label small text-uppercase fw-bold text-muted">Teams</label>
           <div class="input-group mb-2">
             <input id="team-a-input" class="form-control form-control-lg" type="text" placeholder="${esc(DEFAULT_TEAM_A)}" value="${esc(s.teamA)}" />
-            <button type="button" class="btn ${s.battingFirst === 'A' ? 'btn-warning' : 'btn-outline-secondary'} rounded-circle ms-2 qc-bat-toggle" data-action="bat-first" data-team="A" aria-label="${esc(DEFAULT_TEAM_A)} bats first">A</button>
           </div>
           <div class="input-group">
             <input id="team-b-input" class="form-control form-control-lg" type="text" placeholder="${esc(DEFAULT_TEAM_B)}" value="${esc(s.teamB)}" />
-            <button type="button" class="btn ${s.battingFirst === 'B' ? 'btn-warning' : 'btn-outline-secondary'} rounded-circle ms-2 qc-bat-toggle" data-action="bat-first" data-team="B" aria-label="${esc(DEFAULT_TEAM_B)} bats first">B</button>
           </div>
         </div>
-        <button type="button" class="btn btn-outline-secondary w-100 mb-4" data-action="toss"><i class="bi bi-shuffle me-2"></i>Toss a coin</button>
         <div class="mb-4">
           <label class="form-label small text-uppercase fw-bold text-muted">Overs per innings</label>
           <div class="d-flex align-items-center justify-content-center gap-4 mb-3">
@@ -1914,6 +1957,132 @@ function renderSetup() {
         ` : ''}
       </div>
       ${renderBottomBar('Start match', 'start-match')}
+    </div>
+  `;
+}
+
+function tossCoinShortLabel(name, maxLen = 9) {
+  const t = String(name || '').trim();
+  if (t.length <= maxLen) return t;
+  return `${t.slice(0, maxLen - 1)}…`;
+}
+
+let tossFlipTimer = null;
+
+function clearTossFlipTimer() {
+  if (tossFlipTimer) {
+    clearTimeout(tossFlipTimer);
+    tossFlipTimer = null;
+  }
+}
+
+function startMatchTossFlip() {
+  const m = state.current;
+  if (!m || state.view !== 'match-toss') return;
+  if (state.tossCoin?.phase === 'flipping') return;
+
+  clearTossFlipTimer();
+  const side = Math.random() < 0.5 ? 'A' : 'B';
+  state.tossCoin = { phase: 'flipping', result: side };
+  render();
+
+  const FLIP_MS = 2400;
+  tossFlipTimer = setTimeout(() => {
+    tossFlipTimer = null;
+    if (state.view !== 'match-toss' || !state.current) return;
+    state.current.battingFirst = side;
+    state.tossCoin = { phase: 'landed', result: side };
+    persistMatch(state.current);
+    const face = side === 'A' ? 'Heads' : 'Tails';
+    showToast(`${face}! ${state.current.teams[side]} bats first`);
+    render();
+    tossFlipTimer = setTimeout(() => {
+      tossFlipTimer = null;
+      if (state.view === 'match-toss' && state.tossCoin?.phase === 'landed') {
+        state.tossCoin = { phase: 'idle', result: side };
+        render();
+      }
+    }, 2000);
+  }, FLIP_MS);
+}
+
+function renderTossCoinStage(m) {
+  const tc = state.tossCoin || { phase: 'idle', result: null };
+  const flipping = tc.phase === 'flipping';
+  const landed = tc.phase === 'landed';
+  const showTails = tc.result === 'B';
+  const landClass = landed || (tc.phase === 'idle' && tc.result)
+    ? (showTails ? 'toss-coin--tails-up' : 'toss-coin--heads-up')
+    : 'toss-coin--heads-up';
+  const animClass = flipping
+    ? (showTails ? 'toss-coin--flip-tails' : 'toss-coin--flip-heads')
+    : landClass;
+  const headsLabel = tossCoinShortLabel(m.teams.A);
+  const tailsLabel = tossCoinShortLabel(m.teams.B);
+  const status = flipping
+    ? 'Coin in the air…'
+    : landed
+      ? (tc.result === 'A' ? `Heads · ${m.teams.A} bats` : `Tails · ${m.teams.B} bats`)
+      : 'Tap below to flip';
+
+  return `
+    <div class="toss-stage" aria-live="polite">
+      <p class="toss-stage-status small text-uppercase fw-bold text-muted mb-2">${esc(status)}</p>
+      <div class="toss-coin-scene">
+        <div class="toss-coin-shadow${flipping ? ' is-active' : ''}" aria-hidden="true"></div>
+        <div class="toss-coin ${animClass}${flipping ? ' is-flipping' : ''}" role="img" aria-label="Coin toss">
+          <div class="toss-coin-edge" aria-hidden="true"></div>
+          <div class="toss-coin-face toss-coin-face--heads">
+            <span class="toss-coin-face-tag">Heads</span>
+            <span class="toss-coin-face-team">${esc(headsLabel)}</span>
+          </div>
+          <div class="toss-coin-face toss-coin-face--tails">
+            <span class="toss-coin-face-tag">Tails</span>
+            <span class="toss-coin-face-team">${esc(tailsLabel)}</span>
+          </div>
+        </div>
+      </div>
+      <div class="toss-legend d-flex justify-content-center gap-3 small text-muted mt-2">
+        <span><strong class="text-dark">Heads</strong> = ${esc(tossCoinShortLabel(m.teams.A, 14))}</span>
+        <span><strong class="text-dark">Tails</strong> = ${esc(tossCoinShortLabel(m.teams.B, 14))}</span>
+      </div>
+    </div>`;
+}
+
+function renderMatchToss() {
+  const m = state.current;
+  const bf = m.battingFirst === 'B' ? 'B' : 'A';
+  const batName = m.teams[bf];
+  const flipping = state.tossCoin?.phase === 'flipping';
+  return `
+    <div class="screen d-flex flex-column toss-screen">
+      ${renderTopbar('Toss', { back: 'back-from-toss', ghost: true })}
+      <div class="setup-head text-white px-4 py-3">
+        <h2 class="h5 fw-bold mb-1">${esc(m.teams.A)} vs ${esc(m.teams.B)}</h2>
+        <p class="mb-0 small opacity-75">${m.overs} overs per side${matchUsesSquads(m) ? ' · squads set' : ''}</p>
+      </div>
+      <div class="setup-body flex-grow-1 overflow-auto px-3 py-4">
+        ${renderTossCoinStage(m)}
+        <label class="form-label small text-uppercase fw-bold text-muted mt-2">Or pick manually</label>
+        <div class="d-grid gap-2 mb-3">
+          <button type="button" class="btn btn-lg text-start ${bf === 'A' ? 'btn-warning' : 'btn-outline-secondary'}" data-action="bat-first" data-team="A" ${flipping ? 'disabled' : ''}>
+            <span class="fw-bold">${esc(m.teams.A)}</span>
+            ${bf === 'A' ? '<span class="small ms-2 opacity-75">· batting first</span>' : ''}
+          </button>
+          <button type="button" class="btn btn-lg text-start ${bf === 'B' ? 'btn-warning' : 'btn-outline-secondary'}" data-action="bat-first" data-team="B" ${flipping ? 'disabled' : ''}>
+            <span class="fw-bold">${esc(m.teams.B)}</span>
+            ${bf === 'B' ? '<span class="small ms-2 opacity-75">· batting first</span>' : ''}
+          </button>
+        </div>
+        <button type="button" class="btn btn-primary w-100 toss-flip-btn" data-action="toss" ${flipping ? 'disabled' : ''}>
+          <i class="bi bi-coin me-2"></i>${flipping ? 'Flipping…' : 'Toss coin'}
+        </button>
+        <p class="small text-muted mt-3 mb-0">${esc(batName)} will bat first unless you change it above.</p>
+      </div>
+      ${flipping ? `
+      <div class="qc-bottom-bar border-top bg-body px-3 py-3 mt-auto">
+        <button type="button" class="btn btn-primary btn-lg w-100 fw-bold" disabled>Continue to openers</button>
+      </div>` : renderBottomBar('Continue to openers', 'confirm-toss')}
     </div>
   `;
 }
@@ -2394,11 +2563,12 @@ function renderTeamPick() {
   const tp = state.teamPick;
   const m = state.current;
   const isReview = tp.mode === 'review';
-  const picking = tp.picking;
+  const picking = isReview ? tp.picking : teamPickSideForNext(tp.squads);
   const avail = availableForPick();
   const teamName = m.teams[picking];
   const countA = tp.squads.A.length;
   const countB = tp.squads.B.length;
+  const sizeDiff = squadSizeDiff(tp.squads);
 
   if (isReview) {
     return `
@@ -2407,6 +2577,7 @@ function renderTeamPick() {
       <div class="setup-head text-white px-4 py-3">
         <h2 class="h5 fw-bold mb-1">${esc(m.teams.A)} vs ${esc(m.teams.B)}</h2>
         <p class="mb-0 small opacity-75">Move players between teams · sizes stay equal (or one extra if odd total)</p>
+        ${sizeDiff > 1 ? `<p class="mb-0 small text-warning mt-1">Teams are ${sizeDiff} apart — tap Reshuffle or move players to even up</p>` : ''}
       </div>
       <div class="px-3 py-3 flex-grow-1 overflow-auto">
         <div class="row g-2 squad-review-cols">
@@ -2441,7 +2612,7 @@ function renderTeamPick() {
       <div class="qc-bottom-bar border-top bg-body px-3 py-3 mt-auto d-grid gap-2">
         <button type="button" class="btn btn-outline-secondary" data-action="squad-review-reshuffle">Reshuffle auto-pick</button>
         <button type="button" class="btn btn-outline-secondary" data-action="undo-team-pick" ${state.teamPickUndo.length ? '' : 'disabled'}>↶ Undo</button>
-        <button type="button" class="btn btn-primary btn-lg fw-bold" data-action="finish-team-pick">Continue to match</button>
+        <button type="button" class="btn btn-primary btn-lg fw-bold" data-action="finish-team-pick">Continue to toss</button>
       </div>
     </div>`;
   }
@@ -2451,7 +2622,7 @@ function renderTeamPick() {
       ${renderTopbar('Pick squads', { back: 'back-from-team-pick', ghost: true })}
       <div class="setup-head text-white px-4 py-3">
         <h2 class="h5 fw-bold mb-1">${esc(m.teams.A)} vs ${esc(m.teams.B)}</h2>
-        <p class="mb-0 small opacity-75">Captains pick alternately · optional</p>
+        <p class="mb-0 small opacity-75">Captains pick alternately · ${esc(m.teams.A)} ${countA} · ${esc(m.teams.B)} ${countB}</p>
       </div>
       <div class="px-3 py-3">
         <div class="row g-2">
@@ -2481,7 +2652,7 @@ function renderTeamPick() {
         <button type="button" class="btn btn-outline-secondary" data-action="auto-pick-teams">Auto-pick teams</button>
         ${(countA + countB) > 0 ? `<button type="button" class="btn btn-outline-primary" data-action="enter-squad-review">Review squads</button>` : ''}
         <button type="button" class="btn btn-outline-secondary" data-action="undo-team-pick" ${state.teamPickUndo.length ? '' : 'disabled'}>↶ Undo last pick</button>
-        <button type="button" class="btn btn-primary btn-lg fw-bold" data-action="finish-team-pick">Continue to match</button>
+        <button type="button" class="btn btn-primary btn-lg fw-bold" data-action="finish-team-pick">Continue to toss</button>
         <button type="button" class="btn btn-link text-muted" data-action="skip-team-pick">Skip · type names later</button>
       </div>
     </div>
@@ -3078,10 +3249,13 @@ function handle(action, dataset) {
         state.freeUndosUsed = 0;
         persistMatch(m);
         state.detail = null;
-        const inn = m.innings[m.currentInnings];
-        if (!inn) state.view = 'innings-setup';
-        else if (inn.ended && m.currentInnings === 0) state.view = 'innings-break';
-        else state.view = 'score';
+        const pre = viewBeforeFirstInnings(m);
+        if (pre) state.view = pre;
+        else {
+          const inn = m.innings[m.currentInnings];
+          if (inn.ended && m.currentInnings === 0) state.view = 'innings-break';
+          else state.view = 'score';
+        }
         render();
       })();
       break;
@@ -3104,10 +3278,13 @@ function handle(action, dataset) {
         state.current = m;
         persistMatch(m);
       }
-      const inn = state.current.innings[state.current.currentInnings];
-      if (!inn) state.view = 'innings-setup';
-      else if (inn.ended && state.current.currentInnings === 0) state.view = 'innings-break';
-      else state.view = 'score';
+      const pre = viewBeforeFirstInnings(state.current);
+      if (pre) state.view = pre;
+      else {
+        const inn = state.current.innings[state.current.currentInnings];
+        if (inn.ended && state.current.currentInnings === 0) state.view = 'innings-break';
+        else state.view = 'score';
+      }
       render();
       showToast('You are now scoring');
       break;
@@ -3178,18 +3355,12 @@ function handle(action, dataset) {
       break;
     case 'team-pick-player': {
       const id = dataset.playerId;
-      let side = state.teamPick.picking;
+      const side = teamPickSideForNext(state.teamPick.squads);
       if (!id || state.teamPick.squads[side].includes(id)) break;
       if (state.teamPick.squads.A.includes(id) || state.teamPick.squads.B.includes(id)) break;
       if (!canAddToSquadSide(side, state.teamPick.squads)) {
-        const other = side === 'A' ? 'B' : 'A';
-        if (canAddToSquadSide(other, state.teamPick.squads)) {
-          side = other;
-          state.teamPick.picking = other;
-        } else {
-          showToast('Teams must stay within one player of each other');
-          break;
-        }
+        showToast('Teams must stay within one player of each other');
+        break;
       }
       pushTeamPickUndo();
       state.teamPick.squads[side].push(id);
@@ -3260,11 +3431,13 @@ function handle(action, dataset) {
       break;
     }
     case 'availability-review':
+      normalizeTeamPickSquads(state.teamPick.squads);
       state.teamPick.mode = 'review';
       state.view = 'team-pick';
       render();
       break;
     case 'enter-squad-review':
+      normalizeTeamPickSquads(state.teamPick.squads);
       state.teamPick.mode = 'review';
       render();
       break;
@@ -3308,7 +3481,7 @@ function handle(action, dataset) {
         state.current.squadsAutoPicked = false;
         persistMatch(state.current);
       }
-      if (!enterInningsSetupView()) render();
+      if (!enterTossView()) render();
       break;
     case 'back-from-availability': {
       const m = state.current;
@@ -3331,9 +3504,15 @@ function handle(action, dataset) {
         state.current.squadsAutoPicked = false;
         persistMatch(state.current);
       }
-      if (!enterInningsSetupView()) render();
+      if (!enterTossView()) render();
       break;
     case 'finish-team-pick':
+      normalizeTeamPickSquads(state.teamPick.squads);
+      if (squadSizeDiff(state.teamPick.squads) > 1) {
+        showToast('Teams must be within one player of each other — pick or move players to even up');
+        render();
+        break;
+      }
       if (state.current) {
         state.current.squads = clone(state.teamPick.squads);
         state.current.squadsSkipped = false;
@@ -3341,8 +3520,39 @@ function handle(action, dataset) {
         state.current.availablePlayerIds = [...(state.matchAvailability?.ids || [])];
         persistMatch(state.current);
       }
+      if (!enterTossView()) render();
+      break;
+    case 'confirm-toss':
+      if (state.current) {
+        state.current.tossDone = true;
+        persistMatch(state.current);
+      }
       if (!enterInningsSetupView()) render();
       break;
+    case 'back-from-toss': {
+      const m = state.current;
+      clearTossFlipTimer();
+      if (!m) { state.view = 'home'; render(); break; }
+      m.tossDone = false;
+      if (state.players.length > 0 && matchUsesSquads(m)) {
+        state.teamPick.squads = clone(m.squads);
+        state.teamPick.mode = 'review';
+        state.teamPick.autoBalanced = !!m.squadsAutoPicked;
+        state.view = 'team-pick';
+      } else if (state.players.length > 0) {
+        state.view = 'match-availability';
+      } else {
+        if (dbOn()) window.QCDB.deleteMatch(m.id).catch(() => { });
+        state.history = state.history.filter(x => x.id !== m.id);
+        saveHistory(state.history);
+        state.setup = { teamA: m.teams.A, teamB: m.teams.B, overs: m.overs, battingFirst: 'A', skipTeamPick: false };
+        state.current = null;
+        saveCurrent(null);
+        state.view = 'setup';
+      }
+      render();
+      break;
+    }
     case 'back-from-team-pick':
       if (state.teamPick.mode === 'review') {
         state.view = 'match-availability';
@@ -3422,14 +3632,26 @@ function handle(action, dataset) {
     case 'resume': {
       const m = state.current;
       if (!m) { state.view = 'home'; render(); break; }
-      const inn = m.innings[m.currentInnings];
-      if (!inn) state.view = 'innings-setup';
-      else if (inn.ended && m.currentInnings === 0) state.view = 'innings-break';
-      else state.view = 'score';
+      const pre = viewBeforeFirstInnings(m);
+      if (pre) state.view = pre;
+      else {
+        const inn = m.innings[m.currentInnings];
+        if (inn.ended && m.currentInnings === 0) state.view = 'innings-break';
+        else state.view = 'score';
+      }
       render(); break;
     }
     case 'bat-first':
-      state.setup.battingFirst = dataset.team; render(); break;
+      if (state.view === 'match-toss' && state.current) {
+        if (state.tossCoin?.phase === 'flipping') break;
+        clearTossFlipTimer();
+        state.current.battingFirst = dataset.team;
+        state.tossCoin = { phase: 'idle', result: dataset.team };
+        persistMatch(state.current);
+      } else {
+        state.setup.battingFirst = dataset.team;
+      }
+      render(); break;
     case 'overs-pick':
       state.setup.overs = parseInt(dataset.overs, 10); render(); break;
     case 'overs-step': {
@@ -3438,12 +3660,17 @@ function handle(action, dataset) {
       render(); break;
     }
     case 'toss': {
-      state.setup.battingFirst = Math.random() < 0.5 ? 'A' : 'B';
-      const name = state.setup.battingFirst === 'A'
+      if (state.view === 'match-toss' && state.current) {
+        startMatchTossFlip();
+        break;
+      }
+      const side = Math.random() < 0.5 ? 'A' : 'B';
+      state.setup.battingFirst = side;
+      const name = side === 'A'
         ? (state.setup.teamA || DEFAULT_TEAM_A)
         : (state.setup.teamB || DEFAULT_TEAM_B);
-      render();
       showToast(`${name} bats first`);
+      render();
       break;
     }
     case 'select-run': pickBall('runs', parseInt(dataset.runs, 10)); break;
@@ -3565,13 +3792,7 @@ function handle(action, dataset) {
       const m = state.current;
       if (!m) { state.view = 'home'; render(); break; }
       if (m.innings.length === 0) {
-        if (dbOn()) window.QCDB.deleteMatch(m.id).catch(() => { });
-        state.history = state.history.filter(x => x.id !== m.id);
-        saveHistory(state.history);
-        state.setup = { teamA: m.teams.A, teamB: m.teams.B, overs: m.overs, battingFirst: m.battingFirst, skipTeamPick: false };
-        state.current = null;
-        saveCurrent(null);
-        state.view = 'setup';
+        state.view = 'match-toss';
       } else {
         state.view = 'innings-break';
       }
@@ -3677,7 +3898,7 @@ document.addEventListener('DOMContentLoaded', () => {
       state.setup.teamA = a;
       state.setup.teamB = b;
       if (!a.trim() || !b.trim()) return showToast('Enter both team names');
-      startMatch(a, b, state.setup.overs, state.setup.battingFirst);
+      startMatch(a, b, state.setup.overs);
       render();
       return;
     }
