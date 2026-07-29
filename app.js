@@ -359,7 +359,7 @@ const state = {
   modal: null,
   toast: null,
   setup: { teamA: DEFAULT_TEAM_A, teamB: DEFAULT_TEAM_B, overs: DEFAULT_OVERS, battingFirst: 'A', skipTeamPick: false },
-  teamPick: { squads: { A: [], B: [] }, picking: 'A' },
+  teamPick: { squads: { A: [], B: [] }, picking: 'A', mode: 'pick', autoBalanced: false },
   teamPickUndo: [],
   loadingHistory: false,
   installTab: 'android',
@@ -589,6 +589,24 @@ function matchUsesSquads(match) {
     ((match.squads.A?.length || 0) + (match.squads.B?.length || 0) > 0);
 }
 
+function matchUsesAutoSquads(match) {
+  return !!(match?.squadsAutoPicked && matchUsesSquads(match));
+}
+
+function inningsSidesForMatch(match) {
+  const isFirst = !match.innings || match.innings.length === 0;
+  const batting = isFirst ? match.battingFirst : (match.battingFirst === 'A' ? 'B' : 'A');
+  const bowling = batting === 'A' ? 'B' : 'A';
+  return { batting, bowling };
+}
+
+function playersForSquadSide(match, side) {
+  const ids = match?.squads?.[side];
+  if (!ids?.length) return [];
+  const idSet = new Set(ids);
+  return state.players.filter(p => idSet.has(p.id));
+}
+
 /** Persist a player on the global roster and, when squads are in use, on that side's squad. */
 function ensurePlayerOnSide(match, side, name, playerId = null) {
   const id = ensurePlayerInRoster(name, playerId);
@@ -628,6 +646,7 @@ function pushTeamPickUndo() {
   state.teamPickUndo.push(clone({
     squads: clone(state.teamPick.squads),
     picking: state.teamPick.picking,
+    mode: state.teamPick.mode || 'pick',
   }));
   if (state.teamPickUndo.length > 24) state.teamPickUndo.shift();
 }
@@ -637,17 +656,38 @@ function undoTeamPick() {
   const snap = state.teamPickUndo.pop();
   state.teamPick.squads = snap.squads;
   state.teamPick.picking = snap.picking;
+  if (snap.mode) state.teamPick.mode = snap.mode;
   return true;
 }
 
-/** Opening lineup always shows the full saved roster; squad lists are optional pre-match only. */
-function rosterForInningsSetup() {
-  return state.players.slice();
+function enterSquadReview(squads, toastMsg) {
+  state.teamPick.squads = { A: [...squads.A], B: [...squads.B] };
+  state.teamPick.mode = 'review';
+  state.teamPick.autoBalanced = true;
+  state.teamPick.picking = 'A';
+  state.teamPickUndo = [];
+  state.view = 'team-pick';
+  render();
+  if (toastMsg) showToast(toastMsg);
 }
 
-/** Scoring modals: full saved roster; bowlers exclude anyone currently at the crease. */
+/** Auto-picked squads → batting/bowling side lists only; manual or skipped squads → full roster. */
+function rosterForInningsSetup(mode) {
+  const m = state.current;
+  if (!m || !matchUsesAutoSquads(m)) return state.players.slice();
+  const { batting, bowling } = inningsSidesForMatch(m);
+  const side = mode === 'bowl' ? bowling : batting;
+  return playersForSquadSide(m, side);
+}
+
+/** Scoring modals: squad-filtered when auto-picked; bowlers exclude crease batters. */
 function rosterForScoringPicker(inn, mode) {
+  const m = state.current;
   let list = state.players.slice();
+  if (m && matchUsesAutoSquads(m) && inn) {
+    const side = mode === 'bat' ? inn.batting : inn.bowling;
+    list = playersForSquadSide(m, side);
+  }
   if (mode === 'bowl' && inn) {
     list = list.filter(p => !batterNotOutOnField(inn, p));
   }
@@ -895,6 +935,7 @@ function newMatch(teamA, teamB, overs, battingFirst, squads = null) {
     teams: { A: (teamA || '').trim() || DEFAULT_TEAM_A, B: (teamB || '').trim() || DEFAULT_TEAM_B },
     squads: squads || { A: [], B: [] },
     squadsSkipped: !squads || ((squads.A?.length || 0) + (squads.B?.length || 0) === 0),
+    squadsAutoPicked: false,
     awards: null,
     overs,
     battingFirst,
@@ -1178,7 +1219,7 @@ function goToMatchStart() {
     const sorted = [...state.players].sort((a, b) =>
       a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }));
     state.matchAvailability = { ids: sorted.map(p => p.id) };
-    state.teamPick = { squads: { A: [], B: [] }, picking: 'A' };
+    state.teamPick = { squads: { A: [], B: [] }, picking: 'A', mode: 'pick', autoBalanced: false };
     state.teamPickUndo = [];
     state.view = 'match-availability';
   } else {
@@ -1876,11 +1917,13 @@ function renderInningsSetup() {
         ${target ? `<p class="mb-0 opacity-75 small">Chasing ${target} in ${m.overs} overs</p>` : `<p class="mb-0 opacity-75 small">${m.overs} overs to bat</p>`}
       </div>
       <div class="setup-body flex-grow-1 overflow-auto px-3 py-4">
-        ${state.players.length ? `<p class="small text-muted mb-3">${state.players.length} saved players — tap a name for each role</p>` : ''}
+        ${state.players.length ? `<p class="small text-muted mb-3">${matchUsesAutoSquads(m)
+          ? `Auto-picked squads — batters from ${esc(m.teams[batting])}, bowlers from ${esc(m.teams[bowling])}`
+          : `${state.players.length} saved players — tap a name for each role`}</p>` : ''}
         ${renderPlayerPicker({
           label: 'Striker',
           action: 'pick-striker',
-          players: rosterForInningsSetup(),
+          players: rosterForInningsSetup('bat'),
           mode: 'bat',
           manualKey: 'striker',
           inputId: 'striker-input',
@@ -1890,7 +1933,7 @@ function renderInningsSetup() {
         ${renderPlayerPicker({
           label: 'Non-striker',
           action: 'pick-non-striker',
-          players: rosterForInningsSetup(),
+          players: rosterForInningsSetup('bat'),
           mode: 'bat',
           manualKey: 'nonStriker',
           inputId: 'non-striker-input',
@@ -1900,7 +1943,7 @@ function renderInningsSetup() {
         ${renderPlayerPicker({
           label: 'Bowler',
           action: 'pick-bowler',
-          players: rosterForInningsSetup(),
+          players: rosterForInningsSetup('bowl'),
           mode: 'bowl',
           manualKey: 'bowler',
           inputId: 'bowler-input',
@@ -2277,6 +2320,7 @@ function renderMatchAvailability() {
   const checked = new Set(state.matchAvailability?.ids || []);
   const n = checked.size;
   const canSquads = n >= 2;
+  const draftCount = (state.teamPick?.squads?.A?.length || 0) + (state.teamPick?.squads?.B?.length || 0);
   const QP = window.QCPlayers;
   return `
     <div class="screen d-flex flex-column match-avail-screen">
@@ -2309,6 +2353,7 @@ function renderMatchAvailability() {
       </div>
       <div class="qc-bottom-bar border-top bg-body px-3 py-3 mt-auto d-grid gap-2">
         <button type="button" class="btn btn-primary btn-lg fw-bold" data-action="availability-auto" ${canSquads ? '' : 'disabled'}>Auto-pick balanced teams</button>
+        ${draftCount > 0 ? `<button type="button" class="btn btn-outline-primary" data-action="availability-review">Review teams (${draftCount})</button>` : ''}
         <button type="button" class="btn btn-outline-dark" data-action="availability-manual" ${canSquads ? '' : 'disabled'}>Pick teams manually</button>
         <button type="button" class="btn btn-link text-muted" data-action="availability-skip">Skip squads · type names later</button>
       </div>
@@ -2316,14 +2361,72 @@ function renderMatchAvailability() {
   `;
 }
 
+function renderSquadReviewRow(id, side, m) {
+  const other = side === 'A' ? 'B' : 'A';
+  const otherLabel = m.teams[other];
+  return `
+    <div class="squad-review-row">
+      <span class="squad-review-name">${esc(playerName(id))}</span>
+      <button type="button" class="btn btn-sm btn-outline-secondary squad-review-move" data-action="move-squad-player" data-player-id="${esc(id)}" data-from-side="${side}" title="Move to ${esc(otherLabel)}">→ ${esc(otherLabel)}</button>
+    </div>`;
+}
+
 function renderTeamPick() {
   const tp = state.teamPick;
   const m = state.current;
+  const isReview = tp.mode === 'review';
   const picking = tp.picking;
   const avail = availableForPick();
   const teamName = m.teams[picking];
   const countA = tp.squads.A.length;
   const countB = tp.squads.B.length;
+
+  if (isReview) {
+    return `
+    <div class="screen d-flex flex-column squad-review-screen">
+      ${renderTopbar('Review squads', { back: 'back-from-team-pick', ghost: true })}
+      <div class="setup-head text-white px-4 py-3">
+        <h2 class="h5 fw-bold mb-1">${esc(m.teams.A)} vs ${esc(m.teams.B)}</h2>
+        <p class="mb-0 small opacity-75">Move players between teams before you start</p>
+      </div>
+      <div class="px-3 py-3 flex-grow-1 overflow-auto">
+        <div class="row g-2 squad-review-cols">
+          <div class="col-6">
+            <div class="card h-100">
+              <div class="card-header py-2 d-flex justify-content-between">
+                <span class="small fw-bold">${esc(m.teams.A)}</span>
+                <span class="badge text-bg-secondary">${countA}</span>
+              </div>
+              <div class="card-body py-2 squad-review-list">
+                ${tp.squads.A.length
+                  ? tp.squads.A.map(id => renderSquadReviewRow(id, 'A', m)).join('')
+                  : '<span class="text-muted small">Empty</span>'}
+              </div>
+            </div>
+          </div>
+          <div class="col-6">
+            <div class="card h-100">
+              <div class="card-header py-2 d-flex justify-content-between">
+                <span class="small fw-bold">${esc(m.teams.B)}</span>
+                <span class="badge text-bg-secondary">${countB}</span>
+              </div>
+              <div class="card-body py-2 squad-review-list">
+                ${tp.squads.B.length
+                  ? tp.squads.B.map(id => renderSquadReviewRow(id, 'B', m)).join('')
+                  : '<span class="text-muted small">Empty</span>'}
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="qc-bottom-bar border-top bg-body px-3 py-3 mt-auto d-grid gap-2">
+        <button type="button" class="btn btn-outline-secondary" data-action="squad-review-reshuffle">Reshuffle auto-pick</button>
+        <button type="button" class="btn btn-outline-secondary" data-action="undo-team-pick" ${state.teamPickUndo.length ? '' : 'disabled'}>↶ Undo</button>
+        <button type="button" class="btn btn-primary btn-lg fw-bold" data-action="finish-team-pick">Continue to match</button>
+      </div>
+    </div>`;
+  }
+
   return `
     <div class="screen d-flex flex-column">
       ${renderTopbar('Pick squads', { back: 'back-from-team-pick', ghost: true })}
@@ -2357,6 +2460,7 @@ function renderTeamPick() {
       </div>
       <div class="qc-bottom-bar border-top bg-body px-3 py-3 mt-auto d-grid gap-2">
         <button type="button" class="btn btn-outline-secondary" data-action="auto-pick-teams">Auto-pick teams</button>
+        ${(countA + countB) > 0 ? `<button type="button" class="btn btn-outline-primary" data-action="enter-squad-review">Review squads</button>` : ''}
         <button type="button" class="btn btn-outline-secondary" data-action="undo-team-pick" ${state.teamPickUndo.length ? '' : 'disabled'}>↶ Undo last pick</button>
         <button type="button" class="btn btn-primary btn-lg fw-bold" data-action="finish-team-pick">Continue to match</button>
         <button type="button" class="btn btn-link text-muted" data-action="skip-team-pick">Skip · type names later</button>
@@ -3083,12 +3187,54 @@ function handle(action, dataset) {
       }
       state.teamPick.squads = res.squads;
       state.teamPick.picking = res.squads.A.length <= res.squads.B.length ? 'A' : 'B';
+      state.teamPick.mode = 'review';
+      state.teamPick.autoBalanced = true;
       const m = state.current;
       const msg = window.QCPlayers.formatBalanceSummary(res.summary, m?.teams?.A, m?.teams?.B);
       showToast(msg);
       render();
       break;
     }
+    case 'move-squad-player': {
+      const id = dataset.playerId;
+      const from = dataset.fromSide;
+      if (!id || (from !== 'A' && from !== 'B')) break;
+      const to = from === 'A' ? 'B' : 'A';
+      if (!state.teamPick.squads[from].includes(id)) break;
+      pushTeamPickUndo();
+      state.teamPick.squads[from] = state.teamPick.squads[from].filter(x => x !== id);
+      if (!state.teamPick.squads[to].includes(id)) state.teamPick.squads[to].push(id);
+      render();
+      break;
+    }
+    case 'squad-review-reshuffle': {
+      if (!canPickSquadsFromAvailability()) {
+        showToast('Need at least 2 available players');
+        break;
+      }
+      pushTeamPickUndo();
+      const res = runAutoBalance({ A: [], B: [] });
+      if (res.error) {
+        showToast(res.error);
+        break;
+      }
+      state.teamPick.squads = res.squads;
+      state.teamPick.mode = 'review';
+      state.teamPick.autoBalanced = true;
+      const m = state.current;
+      showToast(window.QCPlayers.formatBalanceSummary(res.summary, m?.teams?.A, m?.teams?.B));
+      render();
+      break;
+    }
+    case 'availability-review':
+      state.teamPick.mode = 'review';
+      state.view = 'team-pick';
+      render();
+      break;
+    case 'enter-squad-review':
+      state.teamPick.mode = 'review';
+      render();
+      break;
     case 'availability-select-all':
       state.matchAvailability = { ids: state.players.map(p => p.id) };
       render();
@@ -3102,7 +3248,7 @@ function handle(action, dataset) {
         showToast('Pick at least 2 players who are available');
         break;
       }
-      state.teamPick = { squads: { A: [], B: [] }, picking: 'A' };
+      state.teamPick = { squads: { A: [], B: [] }, picking: 'A', mode: 'pick', autoBalanced: false };
       state.teamPickUndo = [];
       state.view = 'team-pick';
       render();
@@ -3117,18 +3263,16 @@ function handle(action, dataset) {
         showToast(res.error);
         break;
       }
-      state.teamPick.squads = res.squads;
-      applyBalancedSquads(res.squads);
       const m = state.current;
       const msg = window.QCPlayers.formatBalanceSummary(res.summary, m?.teams?.A, m?.teams?.B);
-      if (!enterInningsSetupView()) render();
-      showToast(msg);
+      enterSquadReview(res.squads, msg);
       break;
     }
     case 'availability-skip':
       if (state.current) {
         state.current.squads = { A: [], B: [] };
         state.current.squadsSkipped = true;
+        state.current.squadsAutoPicked = false;
         persistMatch(state.current);
       }
       if (!enterInningsSetupView()) render();
@@ -3151,6 +3295,7 @@ function handle(action, dataset) {
       if (state.current) {
         state.current.squads = { A: [], B: [] };
         state.current.squadsSkipped = true;
+        state.current.squadsAutoPicked = false;
         persistMatch(state.current);
       }
       if (!enterInningsSetupView()) render();
@@ -3159,13 +3304,19 @@ function handle(action, dataset) {
       if (state.current) {
         state.current.squads = clone(state.teamPick.squads);
         state.current.squadsSkipped = false;
+        state.current.squadsAutoPicked = !!state.teamPick.autoBalanced;
         state.current.availablePlayerIds = [...(state.matchAvailability?.ids || [])];
         persistMatch(state.current);
       }
       if (!enterInningsSetupView()) render();
       break;
     case 'back-from-team-pick':
-      state.view = 'match-availability';
+      if (state.teamPick.mode === 'review') {
+        state.view = 'match-availability';
+      } else {
+        state.view = 'match-availability';
+        state.teamPick.mode = 'pick';
+      }
       render();
       break;
     case 'pick-striker':

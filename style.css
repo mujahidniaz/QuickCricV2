@@ -1487,6 +1487,37 @@ input { background: var(--paper); }
 }
 .avail-row .players-row-text { flex: 1; min-width: 0; }
 
+.squad-review-screen { background: var(--cream); }
+.squad-review-list { display: flex; flex-direction: column; gap: 0.35rem; }
+.squad-review-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.35rem;
+  padding: 0.35rem 0;
+  border-bottom: 1px solid var(--line-soft);
+}
+.squad-review-row:last-child { border-bottom: none; }
+.squad-review-name {
+  font-weight: 700;
+  font-size: 0.82rem;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+}
+.squad-review-move {
+  flex-shrink: 0;
+  font-size: 0.68rem;
+  font-weight: 800;
+  padding: 0.2rem 0.45rem;
+  max-width: 48%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 /* Legacy list classes (player detail / elsewhere) */
 .players-list { padding: 0.75rem; display: flex; flex-direction: column; gap: 0.5rem; }
 .player-list-item {
