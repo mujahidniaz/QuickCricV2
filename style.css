@@ -1464,6 +1464,29 @@ input { background: var(--paper); }
   line-height: 1.4;
 }
 
+.match-avail-screen { background: var(--cream); }
+.avail-toolbar { flex-shrink: 0; }
+.avail-row {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  width: 100%;
+  padding: 0.5rem 0.75rem;
+  margin: 0;
+  border-bottom: 1px solid var(--line-soft);
+  background: var(--paper);
+  cursor: pointer;
+}
+.avail-row.is-checked { background: rgba(19, 93, 64, 0.06); }
+.avail-row:active { background: var(--cream-deep); }
+.avail-check {
+  width: 1.15rem;
+  height: 1.15rem;
+  flex-shrink: 0;
+  accent-color: var(--green-mid);
+}
+.avail-row .players-row-text { flex: 1; min-width: 0; }
+
 /* Legacy list classes (player detail / elsewhere) */
 .players-list { padding: 0.75rem; display: flex; flex-direction: column; gap: 0.5rem; }
 .player-list-item {
@@ -1515,6 +1538,28 @@ input { background: var(--paper); }
 .bottom-bar .btn { flex: 1; }
 
 /* ===================== Score screen ===================== */
+.score-screen {
+  min-height: 0;
+  overflow: hidden;
+}
+.score-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+}
+.score-actions {
+  flex: 0 0 auto;
+  flex-shrink: 0;
+  padding-bottom: calc(6px + env(safe-area-inset-bottom, 0px));
+  border-top: 1px solid var(--line-soft);
+  box-shadow: 0 -6px 24px rgba(4, 18, 12, 0.07);
+  min-height: 0;
+  justify-content: flex-start;
+}
+
 .hero {
   background:
     radial-gradient(ellipse 100% 80% at 50% 0%, rgba(215, 255, 43, 0.14), transparent 55%),
@@ -1702,12 +1747,20 @@ input { background: var(--paper); }
   justify-content: center;
   gap: 10px;
   flex: 0 0 auto;
-  animation: fhShimmer 1.6s linear infinite, fhPulse 0.9s ease-in-out infinite alternate;
+  animation: fhShimmer 1.6s linear infinite;
   box-shadow: 0 -2px 0 rgba(0, 0, 0, 0.06) inset, 0 4px 14px rgba(255, 61, 46, 0.4);
 }
+.free-hit-banner--compact {
+  padding: 5px 10px;
+  font-size: 11px;
+  letter-spacing: 0.12em;
+  gap: 8px;
+  animation: fhShimmer 1.6s linear infinite;
+  box-shadow: 0 -1px 0 rgba(0, 0, 0, 0.06) inset;
+}
+.free-hit-banner--compact .fh-dot { width: 6px; height: 6px; }
 .fh-dot { width: 8px; height: 8px; border-radius: 50%; background: white; display: inline-block; animation: fhBlink 0.6s ease-in-out infinite alternate; }
 @keyframes fhShimmer { from { background-position: 0% 0%; } to { background-position: 200% 0%; } }
-@keyframes fhPulse { from { transform: scale(1); } to { transform: scale(1.015); } }
 @keyframes fhBlink { from { opacity: 0.3; } to { opacity: 1; } }
 
 .undo-row {
@@ -1879,6 +1932,12 @@ input { background: var(--paper); }
 .foot-links { display: flex; justify-content: center; gap: 18px; padding: 2px 0 0; }
 .foot-links button { font-size: 12px; color: var(--ink-faint); text-decoration: underline; text-underline-offset: 3px; font-weight: 500; }
 .foot-links .danger-link { color: var(--danger); }
+
+.actions.score-actions {
+  flex: 0 0 auto;
+  min-height: 0;
+  justify-content: flex-start;
+}
 
 /* ===================== Modal ===================== */
 .modal-bg {

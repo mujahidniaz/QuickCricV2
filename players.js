@@ -356,6 +356,175 @@
       });
   }
 
+  function normalizeScoreList(values) {
+    const max = Math.max(...values, 0.001);
+    return values.map(v => (v / max) * 100);
+  }
+
+  function rawBatSkill(p, poolAvgSR) {
+    const bat = p.batting || emptyBatting();
+    const inn = bat.innings || 0;
+    if (!inn) return 0;
+    const rpi = (bat.runs || 0) / inn;
+    const sr = bat.balls ? ((bat.runs || 0) / bat.balls) * 100 : 0;
+    const srMod = poolAvgSR > 0 ? (0.7 + 0.3 * (sr / poolAvgSR)) : 1;
+    return rpi * srMod;
+  }
+
+  function rawBowlSkill(p, poolAvgEcon) {
+    const bowl = p.bowling || emptyBowling();
+    const inn = bowl.innings || 0;
+    const balls = bowl.balls || 0;
+    if (!balls && !inn) return 0;
+    const wpi = inn ? (bowl.wickets || 0) / inn : 0;
+    if (wpi > 0) {
+      const econ = balls ? ((bowl.runs || 0) / balls) * 6 : poolAvgEcon || 8;
+      const econMod = econ > 0 && poolAvgEcon > 0 ? (0.7 + 0.3 * (poolAvgEcon / econ)) : 1;
+      return wpi * econMod;
+    }
+    return (balls / 6) * 0.5;
+  }
+
+  function classifyPlayerRole(batN, bowlN) {
+    const minSig = 12;
+    const close = 0.65;
+    if (batN < minSig && bowlN < minSig) return 'unknown';
+    if (batN >= minSig && bowlN >= minSig) {
+      const ratio = Math.min(batN, bowlN) / Math.max(batN, bowlN);
+      if (ratio >= close) return 'allrounder';
+    }
+    if (bowlN > batN * 1.15) return 'bowler';
+    if (batN > bowlN * 1.15) return 'batsman';
+    if (batN >= minSig && bowlN >= minSig) return 'allrounder';
+    if (bowlN >= minSig) return 'bowler';
+    if (batN >= minSig) return 'batsman';
+    return 'unknown';
+  }
+
+  /** Per-player normalized skills and role for team balancing. */
+  function teamBalanceScores(players) {
+    if (!players?.length) return [];
+    let sumSR = 0;
+    let countSR = 0;
+    let sumEcon = 0;
+    let countEcon = 0;
+    for (const p of players) {
+      const bat = p.batting || emptyBatting();
+      const bowl = p.bowling || emptyBowling();
+      if (bat.balls) {
+        sumSR += ((bat.runs || 0) / bat.balls) * 100;
+        countSR += 1;
+      }
+      if (bowl.balls) {
+        sumEcon += ((bowl.runs || 0) / bowl.balls) * 6;
+        countEcon += 1;
+      }
+    }
+    const poolAvgSR = countSR ? sumSR / countSR : 100;
+    const poolAvgEcon = countEcon ? sumEcon / countEcon : 8;
+
+    const rawBat = players.map(p => rawBatSkill(p, poolAvgSR));
+    const rawBowl = players.map(p => rawBowlSkill(p, poolAvgEcon));
+    const batN = normalizeScoreList(rawBat);
+    const bowlN = normalizeScoreList(rawBowl);
+
+    return players.map((p, i) => {
+      const role = classifyPlayerRole(batN[i], bowlN[i]);
+      let rating = 0;
+      if (role === 'batsman') rating = batN[i];
+      else if (role === 'bowler') rating = bowlN[i];
+      else if (role === 'allrounder') rating = batN[i] * 0.5 + bowlN[i] * 0.5;
+      else rating = Math.max(batN[i], bowlN[i]) * 0.25;
+      return { id: p.id, batScore: batN[i], bowlScore: bowlN[i], role, rating };
+    });
+  }
+
+  function squadRatingTotals(squads, scoreMap) {
+    const sum = (ids) => ids.reduce((t, id) => t + (scoreMap.get(id)?.rating || 0), 0);
+    return { A: sum(squads.A), B: sum(squads.B) };
+  }
+
+  function weakerSquadSide(totals) {
+    if (totals.A < totals.B) return 'A';
+    if (totals.B < totals.A) return 'B';
+    return Math.random() < 0.5 ? 'A' : 'B';
+  }
+
+  function draftBalanced(list, squads, scoreMap) {
+    const sorted = list.slice().sort((a, b) => {
+      const d = b.rating - a.rating;
+      if (d !== 0) return d;
+      return (Math.random() - 0.5);
+    });
+    for (const item of sorted) {
+      const totals = squadRatingTotals(squads, scoreMap);
+      const side = weakerSquadSide(totals);
+      squads[side].push(item.id);
+    }
+  }
+
+  function snakeDraftCategory(list, squads, scoreMap) {
+    const sorted = list.slice().sort((a, b) => {
+      const d = b.rating - a.rating;
+      if (d !== 0) return d;
+      return (Math.random() - 0.5);
+    });
+    let i = 0;
+    while (i < sorted.length) {
+      const side = weakerSquadSide(squadRatingTotals(squads, scoreMap));
+      squads[side].push(sorted[i].id);
+      i += 1;
+      if (i >= sorted.length) break;
+      const other = side === 'A' ? 'B' : 'A';
+      squads[other].push(sorted[i].id);
+      i += 1;
+    }
+  }
+
+  /**
+   * @param {object[]} players — pool to distribute (e.g. available today)
+   * @param {{ existingSquads?: { A: string[], B: string[] } }} options
+   */
+  function balanceTeams(players, options = {}) {
+    const existing = options.existingSquads || { A: [], B: [] };
+    const squads = { A: [...existing.A], B: [...existing.B] };
+    const taken = new Set([...squads.A, ...squads.B]);
+    const pool = (players || []).filter(p => p && !taken.has(p.id));
+    const scoreMap = new Map(teamBalanceScores(players || []).map(s => [s.id, s]));
+
+    const buckets = { bowler: [], batsman: [], allrounder: [], unknown: [] };
+    for (const s of teamBalanceScores(pool)) {
+      buckets[s.role]?.push(s);
+    }
+
+    snakeDraftCategory(buckets.bowler, squads, scoreMap);
+    snakeDraftCategory(buckets.batsman, squads, scoreMap);
+    draftBalanced(buckets.allrounder, squads, scoreMap);
+    draftBalanced(buckets.unknown, squads, scoreMap);
+
+    const countRole = (ids, role) =>
+      ids.filter(id => scoreMap.get(id)?.role === role).length;
+
+    const summary = {
+      totalA: squads.A.length,
+      totalB: squads.B.length,
+      batA: countRole(squads.A, 'batsman'),
+      batB: countRole(squads.B, 'batsman'),
+      bowlA: countRole(squads.A, 'bowler'),
+      bowlB: countRole(squads.B, 'bowler'),
+      arA: countRole(squads.A, 'allrounder'),
+      arB: countRole(squads.B, 'allrounder'),
+    };
+
+    return { squads, summary, error: null };
+  }
+
+  function formatBalanceSummary(summary, teamAName, teamBName) {
+    const a = teamAName || 'A';
+    const b = teamBName || 'B';
+    return `${a} ${summary.totalA} · ${b} ${summary.totalB} · ${summary.bowlA}+${summary.bowlB} bowlers · ${summary.batA}+${summary.batB} batters`;
+  }
+
   function matchBattingLine(innings, playerId, name) {
     let runs = 0, balls = 0, fours = 0, sixes = 0, out = false, faced = false;
     for (const inn of innings) {
@@ -667,6 +836,9 @@
     fmtOvers,
     battingRankings,
     bowlingRankings,
+    teamBalanceScores,
+    balanceTeams,
+    formatBalanceSummary,
     computeAwards,
     applyMatchStats,
     mergePlayersInto,

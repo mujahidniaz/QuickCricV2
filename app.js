@@ -374,6 +374,7 @@ const state = {
   playersTab: 'roster',
   adminUnlocked: false,
   adminMerge: { sourceId: '', targetId: '' },
+  matchAvailability: { ids: [] },
 };
 
 function emptyBall() { return { runs: null, extra: null, wicket: false }; }
@@ -754,9 +755,44 @@ function renderPlayerPicker(opts) {
   `;
 }
 
+function availableIdsSet() {
+  const ids = state.matchAvailability?.ids;
+  if (ids?.length) return new Set(ids);
+  return new Set(state.players.map(p => p.id));
+}
+
+function playersAvailableToday() {
+  const allowed = availableIdsSet();
+  return state.players.filter(p => allowed.has(p.id));
+}
+
+function availabilityCount() {
+  return state.matchAvailability?.ids?.length || 0;
+}
+
+function canPickSquadsFromAvailability() {
+  return availabilityCount() >= 2;
+}
+
 function availableForPick() {
   const picked = new Set([...state.teamPick.squads.A, ...state.teamPick.squads.B]);
-  return state.players.filter(p => !picked.has(p.id));
+  const allowed = availableIdsSet();
+  return state.players.filter(p => allowed.has(p.id) && !picked.has(p.id));
+}
+
+function applyBalancedSquads(squads) {
+  if (!state.current) return;
+  state.current.squads = { A: [...squads.A], B: [...squads.B] };
+  state.current.squadsSkipped = false;
+  state.current.availablePlayerIds = [...(state.matchAvailability?.ids || [])];
+  persistMatch(state.current);
+}
+
+function runAutoBalance(existingSquads = null) {
+  const pool = playersAvailableToday();
+  if (pool.length < 2) return { error: 'Need at least 2 available players' };
+  const fixed = existingSquads || { A: [], B: [] };
+  return window.QCPlayers.balanceTeams(pool, { existingSquads: fixed });
 }
 
 async function refreshHistory() {
@@ -1137,11 +1173,14 @@ function addBowler(inn, name, playerId = null) {
 // ---------- Transitions ----------
 function goToMatchStart() {
   resetInningsPickers();
-  const useTeamPick = state.players.length > 0 && !state.setup.skipTeamPick;
-  if (useTeamPick) {
+  const useAvailability = state.players.length > 0 && !state.setup.skipTeamPick;
+  if (useAvailability) {
+    const sorted = [...state.players].sort((a, b) =>
+      a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }));
+    state.matchAvailability = { ids: sorted.map(p => p.id) };
     state.teamPick = { squads: { A: [], B: [] }, picking: 'A' };
     state.teamPickUndo = [];
-    state.view = 'team-pick';
+    state.view = 'match-availability';
   } else {
     if (state.current) state.current.squadsSkipped = true;
     enterInningsSetupView();
@@ -1352,7 +1391,7 @@ function stopPolling() {
 }
 
 let activeMatchPollTimer = null;
-const ACTIVE_MATCH_VIEWS = new Set(['score', 'innings-setup', 'innings-break', 'team-pick']);
+const ACTIVE_MATCH_VIEWS = new Set(['score', 'innings-setup', 'innings-break', 'team-pick', 'match-availability']);
 
 function startActiveMatchPoll(id) {
   if (activeMatchPollTimer && state._pollMatchId === id) return;
@@ -1419,7 +1458,7 @@ async function loadSharedById(id) {
 }
 
 // ---------- Renderers ----------
-const SCROLL_RESTORE_SEL = '.setup-body, .scroll, .break-screen, .result-screen';
+const SCROLL_RESTORE_SEL = '.setup-body, .scroll, .break-screen, .result-screen, .score-body';
 
 function captureScrollPositions(container) {
   return [...container.querySelectorAll(SCROLL_RESTORE_SEL)].map(el => el.scrollTop);
@@ -1454,6 +1493,7 @@ function render() {
   switch (view) {
     case 'home': html = renderHome(); break;
     case 'setup': html = renderSetup(); break;
+    case 'match-availability': html = renderMatchAvailability(); break;
     case 'team-pick': html = renderTeamPick(); break;
     case 'innings-setup': html = renderInningsSetup(); break;
     case 'score': html = renderScore(); break;
@@ -1921,11 +1961,12 @@ function renderScore() {
   const canEditOver = !showingLast && overBallCount > 0;
 
   return `
-    <div class="screen">
+    <div class="screen score-screen">
       ${renderTopbar(team, {
         back: 'home',
         right: `${iconBtn('toggle-audio', audio.enabled ? 'volume-up-fill' : 'volume-mute-fill', audio.enabled ? '' : 'muted', 'Toggle sound')}${iconBtn('share', 'box-arrow-up', '', 'Share')}`,
       })}
+      <div class="score-body">
       <div class="hero">
         <div class="team">${esc(team)}${m.currentInnings === 1 ? ' · 2nd innings' : ''}</div>
         <div class="rate">scoring at ${rate} per over</div>
@@ -1964,11 +2005,12 @@ function renderScore() {
           ${showingLast ? `<div class="over-sum">${overRuns}/${overWkts}</div>` : ''}
         </div>
       </div>
-      ${inn.freeHit ? `<div class="free-hit-banner"><span class="fh-dot"></span>Free hit · next ball<span class="fh-dot"></span></div>` : ''}
+      ${inn.freeHit ? `<div class="free-hit-banner free-hit-banner--compact"><span class="fh-dot"></span>Free hit<span class="fh-dot"></span></div>` : ''}
       <div class="undo-row">
         ${showingLast ? '' : `<button data-action="undo" ${canUndo ? '' : 'disabled'}>${undoActionLabel(m)}</button>`}
       </div>
-      <div class="actions">
+      </div>
+      <div class="actions score-actions">
         <div class="input-cluster">
           <button class="wkt-btn ${b.wicket ? 'selected' : ''}" data-action="select-wkt">WKT</button>
           <div class="extras-panel">
@@ -2064,7 +2106,7 @@ function renderLivePanel(m) {
           ${overBalls.length >= 6 ? `<div class="over-sum">${overRuns}/${overWkts}</div>` : ''}
         </div>
       </div>
-      ${inn.freeHit ? `<div class="free-hit-banner"><span class="fh-dot"></span>Free hit · next ball<span class="fh-dot"></span></div>` : ''}
+      ${inn.freeHit ? `<div class="free-hit-banner free-hit-banner--compact"><span class="fh-dot"></span>Free hit<span class="fh-dot"></span></div>` : ''}
     </div>
   `;
 }
@@ -2228,6 +2270,52 @@ function renderAwards(m) {
   `;
 }
 
+function renderMatchAvailability() {
+  const m = state.current;
+  const sorted = [...state.players].sort((a, b) =>
+    a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }));
+  const checked = new Set(state.matchAvailability?.ids || []);
+  const n = checked.size;
+  const canSquads = n >= 2;
+  const QP = window.QCPlayers;
+  return `
+    <div class="screen d-flex flex-column match-avail-screen">
+      ${renderTopbar('Available today', { back: 'back-from-availability', ghost: true })}
+      <div class="setup-head text-white px-4 py-3">
+        <h2 class="h5 fw-bold mb-1">${esc(m?.teams?.A || '')} vs ${esc(m?.teams?.B || '')}</h2>
+        <p class="mb-0 small opacity-75">${n} of ${sorted.length} players available</p>
+      </div>
+      <div class="avail-toolbar px-3 py-2 d-flex gap-2 border-bottom bg-white">
+        <button type="button" class="btn btn-sm btn-outline-secondary" data-action="availability-select-all">Select all</button>
+        <button type="button" class="btn btn-sm btn-outline-secondary" data-action="availability-clear">Clear</button>
+      </div>
+      <div class="scroll flex-grow-1 overflow-auto players-list-scroll">
+        <div class="players-table">
+          <div class="players-table-body">
+            ${sorted.map(p => {
+              const on = checked.has(p.id);
+              return `
+              <label class="avail-row${on ? ' is-checked' : ''}">
+                <input type="checkbox" class="avail-check" data-player-id="${esc(p.id)}" ${on ? 'checked' : ''} />
+                <span class="players-row-avatar">${esc(p.name.charAt(0).toUpperCase())}</span>
+                <span class="players-row-text">
+                  <span class="players-row-name">${esc(p.name)}</span>
+                  <span class="players-row-meta">${p.batting.runs} runs · ${p.bowling.wickets} wkts · SR ${QP.batSR(p.batting)}</span>
+                </span>
+              </label>`;
+            }).join('')}
+          </div>
+        </div>
+      </div>
+      <div class="qc-bottom-bar border-top bg-body px-3 py-3 mt-auto d-grid gap-2">
+        <button type="button" class="btn btn-primary btn-lg fw-bold" data-action="availability-auto" ${canSquads ? '' : 'disabled'}>Auto-pick balanced teams</button>
+        <button type="button" class="btn btn-outline-dark" data-action="availability-manual" ${canSquads ? '' : 'disabled'}>Pick teams manually</button>
+        <button type="button" class="btn btn-link text-muted" data-action="availability-skip">Skip squads · type names later</button>
+      </div>
+    </div>
+  `;
+}
+
 function renderTeamPick() {
   const tp = state.teamPick;
   const m = state.current;
@@ -2268,6 +2356,7 @@ function renderTeamPick() {
         </div>
       </div>
       <div class="qc-bottom-bar border-top bg-body px-3 py-3 mt-auto d-grid gap-2">
+        <button type="button" class="btn btn-outline-secondary" data-action="auto-pick-teams">Auto-pick teams</button>
         <button type="button" class="btn btn-outline-secondary" data-action="undo-team-pick" ${state.teamPickUndo.length ? '' : 'disabled'}>↶ Undo last pick</button>
         <button type="button" class="btn btn-primary btn-lg fw-bold" data-action="finish-team-pick">Continue to match</button>
         <button type="button" class="btn btn-link text-muted" data-action="skip-team-pick">Skip · type names later</button>
@@ -2981,6 +3070,83 @@ function handle(action, dataset) {
         render();
       }
       break;
+    case 'auto-pick-teams': {
+      if (!canPickSquadsFromAvailability()) {
+        showToast('Need at least 2 available players');
+        break;
+      }
+      pushTeamPickUndo();
+      const res = runAutoBalance(state.teamPick.squads);
+      if (res.error) {
+        showToast(res.error);
+        break;
+      }
+      state.teamPick.squads = res.squads;
+      state.teamPick.picking = res.squads.A.length <= res.squads.B.length ? 'A' : 'B';
+      const m = state.current;
+      const msg = window.QCPlayers.formatBalanceSummary(res.summary, m?.teams?.A, m?.teams?.B);
+      showToast(msg);
+      render();
+      break;
+    }
+    case 'availability-select-all':
+      state.matchAvailability = { ids: state.players.map(p => p.id) };
+      render();
+      break;
+    case 'availability-clear':
+      state.matchAvailability = { ids: [] };
+      render();
+      break;
+    case 'availability-manual':
+      if (!canPickSquadsFromAvailability()) {
+        showToast('Pick at least 2 players who are available');
+        break;
+      }
+      state.teamPick = { squads: { A: [], B: [] }, picking: 'A' };
+      state.teamPickUndo = [];
+      state.view = 'team-pick';
+      render();
+      break;
+    case 'availability-auto': {
+      if (!canPickSquadsFromAvailability()) {
+        showToast('Pick at least 2 players who are available');
+        break;
+      }
+      const res = runAutoBalance({ A: [], B: [] });
+      if (res.error) {
+        showToast(res.error);
+        break;
+      }
+      state.teamPick.squads = res.squads;
+      applyBalancedSquads(res.squads);
+      const m = state.current;
+      const msg = window.QCPlayers.formatBalanceSummary(res.summary, m?.teams?.A, m?.teams?.B);
+      if (!enterInningsSetupView()) render();
+      showToast(msg);
+      break;
+    }
+    case 'availability-skip':
+      if (state.current) {
+        state.current.squads = { A: [], B: [] };
+        state.current.squadsSkipped = true;
+        persistMatch(state.current);
+      }
+      if (!enterInningsSetupView()) render();
+      break;
+    case 'back-from-availability': {
+      const m = state.current;
+      if (!m) { state.view = 'home'; render(); break; }
+      if (dbOn()) window.QCDB.deleteMatch(m.id).catch(() => { });
+      state.history = state.history.filter(x => x.id !== m.id);
+      saveHistory(state.history);
+      state.setup = { teamA: m.teams.A, teamB: m.teams.B, overs: m.overs, battingFirst: m.battingFirst, skipTeamPick: false };
+      state.current = null;
+      saveCurrent(null);
+      state.matchAvailability = { ids: [] };
+      state.view = 'setup';
+      render();
+      break;
+    }
     case 'skip-team-pick':
       if (state.current) {
         state.current.squads = { A: [], B: [] };
@@ -2993,23 +3159,15 @@ function handle(action, dataset) {
       if (state.current) {
         state.current.squads = clone(state.teamPick.squads);
         state.current.squadsSkipped = false;
+        state.current.availablePlayerIds = [...(state.matchAvailability?.ids || [])];
         persistMatch(state.current);
       }
       if (!enterInningsSetupView()) render();
       break;
-    case 'back-from-team-pick': {
-      const m = state.current;
-      if (!m) { state.view = 'home'; render(); break; }
-      if (dbOn()) window.QCDB.deleteMatch(m.id).catch(() => { });
-      state.history = state.history.filter(x => x.id !== m.id);
-      saveHistory(state.history);
-      state.setup = { teamA: m.teams.A, teamB: m.teams.B, overs: m.overs, battingFirst: m.battingFirst, skipTeamPick: false };
-      state.current = null;
-      saveCurrent(null);
-      state.view = 'setup';
+    case 'back-from-team-pick':
+      state.view = 'match-availability';
       render();
       break;
-    }
     case 'pick-striker':
     case 'pick-non-striker':
     case 'pick-bowler':
@@ -3491,6 +3649,16 @@ document.addEventListener('DOMContentLoaded', () => {
   });
 
   app.addEventListener('change', (e) => {
+    if (e.target.classList?.contains('avail-check')) {
+      const id = e.target.dataset.playerId;
+      if (!id) return;
+      const ids = new Set(state.matchAvailability?.ids || []);
+      if (e.target.checked) ids.add(id);
+      else ids.delete(id);
+      state.matchAvailability = { ids: [...ids] };
+      render();
+      return;
+    }
     if (e.target.id === 'admin-merge-source') {
       state.adminMerge.sourceId = e.target.value || '';
       render();
