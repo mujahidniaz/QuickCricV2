@@ -444,6 +444,43 @@
     return { A: sum(squads.A), B: sum(squads.B) };
   }
 
+  function squadCountsWithinOne(countA, countB) {
+    return Math.abs(countA - countB) <= 1;
+  }
+
+  function canAddToSquadSide(side, squads) {
+    const a = squads.A.length + (side === 'A' ? 1 : 0);
+    const b = squads.B.length + (side === 'B' ? 1 : 0);
+    return squadCountsWithinOne(a, b);
+  }
+
+  function sideForNextPick(squads, scoreMap) {
+    const options = ['A', 'B'].filter(s => canAddToSquadSide(s, squads));
+    if (!options.length) return 'A';
+    if (options.length === 1) return options[0];
+    const totals = squadRatingTotals(squads, scoreMap);
+    const weaker = weakerSquadSide(totals);
+    return options.includes(weaker) ? weaker : options[0];
+  }
+
+  function rebalanceSquadsBySize(squads, scoreMap) {
+    for (;;) {
+      const diff = squads.A.length - squads.B.length;
+      if (Math.abs(diff) <= 1) break;
+      const from = diff > 0 ? 'A' : 'B';
+      const to = from === 'A' ? 'B' : 'A';
+      const ids = squads[from];
+      let pickIdx = 0;
+      let minRating = Infinity;
+      for (let i = 0; i < ids.length; i++) {
+        const r = scoreMap.get(ids[i])?.rating || 0;
+        if (r <= minRating) { minRating = r; pickIdx = i; }
+      }
+      const [id] = ids.splice(pickIdx, 1);
+      squads[to].push(id);
+    }
+  }
+
   function weakerSquadSide(totals) {
     if (totals.A < totals.B) return 'A';
     if (totals.B < totals.A) return 'B';
@@ -457,8 +494,7 @@
       return (Math.random() - 0.5);
     });
     for (const item of sorted) {
-      const totals = squadRatingTotals(squads, scoreMap);
-      const side = weakerSquadSide(totals);
+      const side = sideForNextPick(squads, scoreMap);
       squads[side].push(item.id);
     }
   }
@@ -469,15 +505,9 @@
       if (d !== 0) return d;
       return (Math.random() - 0.5);
     });
-    let i = 0;
-    while (i < sorted.length) {
-      const side = weakerSquadSide(squadRatingTotals(squads, scoreMap));
-      squads[side].push(sorted[i].id);
-      i += 1;
-      if (i >= sorted.length) break;
-      const other = side === 'A' ? 'B' : 'A';
-      squads[other].push(sorted[i].id);
-      i += 1;
+    for (const item of sorted) {
+      const side = sideForNextPick(squads, scoreMap);
+      squads[side].push(item.id);
     }
   }
 
@@ -501,6 +531,7 @@
     snakeDraftCategory(buckets.batsman, squads, scoreMap);
     draftBalanced(buckets.allrounder, squads, scoreMap);
     draftBalanced(buckets.unknown, squads, scoreMap);
+    rebalanceSquadsBySize(squads, scoreMap);
 
     const countRole = (ids, role) =>
       ids.filter(id => scoreMap.get(id)?.role === role).length;

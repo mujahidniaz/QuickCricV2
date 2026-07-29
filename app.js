@@ -607,6 +607,22 @@ function playersForSquadSide(match, side) {
   return state.players.filter(p => idSet.has(p.id));
 }
 
+function squadCountsWithinOne(countA, countB) {
+  return Math.abs(countA - countB) <= 1;
+}
+
+function canAddToSquadSide(side, squads) {
+  const a = squads.A.length + (side === 'A' ? 1 : 0);
+  const b = squads.B.length + (side === 'B' ? 1 : 0);
+  return squadCountsWithinOne(a, b);
+}
+
+function canMoveSquadPlayer(fromSide, squads) {
+  const a = squads.A.length + (fromSide === 'A' ? -1 : 1);
+  const b = squads.B.length + (fromSide === 'B' ? -1 : 1);
+  return squadCountsWithinOne(a, b);
+}
+
 /** Persist a player on the global roster and, when squads are in use, on that side's squad. */
 function ensurePlayerOnSide(match, side, name, playerId = null) {
   const id = ensurePlayerInRoster(name, playerId);
@@ -2361,13 +2377,16 @@ function renderMatchAvailability() {
   `;
 }
 
-function renderSquadReviewRow(id, side, m) {
+function renderSquadReviewRow(id, side, m, squads) {
   const other = side === 'A' ? 'B' : 'A';
   const otherLabel = m.teams[other];
+  const canMove = canMoveSquadPlayer(side, squads);
   return `
     <div class="squad-review-row">
       <span class="squad-review-name">${esc(playerName(id))}</span>
-      <button type="button" class="btn btn-sm btn-outline-secondary squad-review-move" data-action="move-squad-player" data-player-id="${esc(id)}" data-from-side="${side}" title="Move to ${esc(otherLabel)}">→ ${esc(otherLabel)}</button>
+      ${canMove
+        ? `<button type="button" class="btn btn-sm btn-outline-secondary squad-review-move" data-action="move-squad-player" data-player-id="${esc(id)}" data-from-side="${side}" title="Move to ${esc(otherLabel)}">→ ${esc(otherLabel)}</button>`
+        : `<span class="squad-review-move-hint text-muted small" title="Teams must stay within one player of each other">—</span>`}
     </div>`;
 }
 
@@ -2387,7 +2406,7 @@ function renderTeamPick() {
       ${renderTopbar('Review squads', { back: 'back-from-team-pick', ghost: true })}
       <div class="setup-head text-white px-4 py-3">
         <h2 class="h5 fw-bold mb-1">${esc(m.teams.A)} vs ${esc(m.teams.B)}</h2>
-        <p class="mb-0 small opacity-75">Move players between teams before you start</p>
+        <p class="mb-0 small opacity-75">Move players between teams · sizes stay equal (or one extra if odd total)</p>
       </div>
       <div class="px-3 py-3 flex-grow-1 overflow-auto">
         <div class="row g-2 squad-review-cols">
@@ -2399,7 +2418,7 @@ function renderTeamPick() {
               </div>
               <div class="card-body py-2 squad-review-list">
                 ${tp.squads.A.length
-                  ? tp.squads.A.map(id => renderSquadReviewRow(id, 'A', m)).join('')
+                  ? tp.squads.A.map(id => renderSquadReviewRow(id, 'A', m, tp.squads)).join('')
                   : '<span class="text-muted small">Empty</span>'}
               </div>
             </div>
@@ -2412,7 +2431,7 @@ function renderTeamPick() {
               </div>
               <div class="card-body py-2 squad-review-list">
                 ${tp.squads.B.length
-                  ? tp.squads.B.map(id => renderSquadReviewRow(id, 'B', m)).join('')
+                  ? tp.squads.B.map(id => renderSquadReviewRow(id, 'B', m, tp.squads)).join('')
                   : '<span class="text-muted small">Empty</span>'}
               </div>
             </div>
@@ -3159,9 +3178,19 @@ function handle(action, dataset) {
       break;
     case 'team-pick-player': {
       const id = dataset.playerId;
-      const side = state.teamPick.picking;
+      let side = state.teamPick.picking;
       if (!id || state.teamPick.squads[side].includes(id)) break;
       if (state.teamPick.squads.A.includes(id) || state.teamPick.squads.B.includes(id)) break;
+      if (!canAddToSquadSide(side, state.teamPick.squads)) {
+        const other = side === 'A' ? 'B' : 'A';
+        if (canAddToSquadSide(other, state.teamPick.squads)) {
+          side = other;
+          state.teamPick.picking = other;
+        } else {
+          showToast('Teams must stay within one player of each other');
+          break;
+        }
+      }
       pushTeamPickUndo();
       state.teamPick.squads[side].push(id);
       state.teamPick.picking = side === 'A' ? 'B' : 'A';
@@ -3201,6 +3230,10 @@ function handle(action, dataset) {
       if (!id || (from !== 'A' && from !== 'B')) break;
       const to = from === 'A' ? 'B' : 'A';
       if (!state.teamPick.squads[from].includes(id)) break;
+      if (!canMoveSquadPlayer(from, state.teamPick.squads)) {
+        showToast('Move would make one team more than one player ahead');
+        break;
+      }
       pushTeamPickUndo();
       state.teamPick.squads[from] = state.teamPick.squads[from].filter(x => x !== id);
       if (!state.teamPick.squads[to].includes(id)) state.teamPick.squads[to].push(id);
