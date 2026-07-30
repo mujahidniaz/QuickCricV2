@@ -444,6 +444,73 @@
     return { A: sum(squads.A), B: sum(squads.B) };
   }
 
+  function squadSkillTotals(squads, scoreMap, skillKey) {
+    const sum = (ids) => ids.reduce((t, id) => {
+      const s = scoreMap.get(id);
+      if (!s) return t;
+      if (skillKey === 'batScore') return t + (s.batScore || 0);
+      if (skillKey === 'bowlScore') return t + (s.bowlScore || 0);
+      return t + (s.rating || 0);
+    }, 0);
+    return { A: sum(squads.A), B: sum(squads.B) };
+  }
+
+  function skillValue(item, skillKey) {
+    if (skillKey === 'batScore') return item.batScore || 0;
+    if (skillKey === 'bowlScore') return item.bowlScore || 0;
+    return item.rating || 0;
+  }
+
+  /** Snake order: A, B, B, A, A, B, … */
+  function snakePreferredSide(pickIndex) {
+    const round = Math.floor(pickIndex / 2);
+    const inRound = pickIndex % 2;
+    if (round % 2 === 0) return inRound === 0 ? 'A' : 'B';
+    return inRound === 0 ? 'B' : 'A';
+  }
+
+  function sideForCategoryPick(squads, pickIndex, scoreMap) {
+    let preferred = snakePreferredSide(pickIndex);
+    if (!canAddToSquadSide(preferred, squads)) {
+      const other = preferred === 'A' ? 'B' : 'A';
+      if (canAddToSquadSide(other, squads)) preferred = other;
+      else {
+        rebalanceSquadsBySize(squads, scoreMap);
+        preferred = squads.A.length <= squads.B.length ? 'A' : 'B';
+      }
+    }
+    return preferred;
+  }
+
+  /** Swap players across teams if it evens a skill total without breaking squad sizes. */
+  function improveSkillBalance(squads, scoreMap, skillKey) {
+    for (let pass = 0; pass < 8; pass++) {
+      const totals = squadSkillTotals(squads, scoreMap, skillKey);
+      const diff = totals.A - totals.B;
+      if (Math.abs(diff) < 8) break;
+      let best = null;
+      let bestImprovement = 0;
+      for (const idA of squads.A) {
+        for (const idB of squads.B) {
+          const a = scoreMap.get(idA);
+          const b = scoreMap.get(idB);
+          if (!a || !b) continue;
+          const va = skillValue(a, skillKey);
+          const vb = skillValue(b, skillKey);
+          const newDiff = (totals.A - va + vb) - (totals.B - vb + va);
+          const improvement = Math.abs(diff) - Math.abs(newDiff);
+          if (improvement > bestImprovement + 0.5) {
+            bestImprovement = improvement;
+            best = { idA, idB };
+          }
+        }
+      }
+      if (!best) break;
+      squads.A = squads.A.map(id => (id === best.idA ? best.idB : id));
+      squads.B = squads.B.map(id => (id === best.idB ? best.idA : id));
+    }
+  }
+
   function squadCountsWithinOne(countA, countB) {
     return Math.abs(countA - countB) <= 1;
   }
@@ -485,8 +552,8 @@
     const ids = [...squads.A, ...squads.B];
     squads.A = [];
     squads.B = [];
-    const items = ids.map(id => scoreMap.get(id) || { id, rating: 0, role: 'unknown' });
-    draftBalanced(items, squads, scoreMap);
+    const items = ids.map(id => scoreMap.get(id) || { id, rating: 0, batScore: 0, bowlScore: 0, role: 'unknown' });
+    draftBalanced(items, squads, scoreMap, 'rating');
     rebalanceSquadsBySize(squads, scoreMap);
     return squads;
   }
@@ -515,28 +582,20 @@
     return Math.random() < 0.5 ? 'A' : 'B';
   }
 
-  function draftBalanced(list, squads, scoreMap) {
+  function snakeDraftCategory(list, squads, scoreMap, skillKey = 'rating') {
     const sorted = list.slice().sort((a, b) => {
-      const d = b.rating - a.rating;
+      const d = skillValue(b, skillKey) - skillValue(a, skillKey);
       if (d !== 0) return d;
       return (Math.random() - 0.5);
     });
-    for (const item of sorted) {
-      const side = sideForNextPick(squads, scoreMap);
+    sorted.forEach((item, i) => {
+      const side = sideForCategoryPick(squads, i, scoreMap);
       squads[side].push(item.id);
-    }
+    });
   }
 
-  function snakeDraftCategory(list, squads, scoreMap) {
-    const sorted = list.slice().sort((a, b) => {
-      const d = b.rating - a.rating;
-      if (d !== 0) return d;
-      return (Math.random() - 0.5);
-    });
-    for (const item of sorted) {
-      const side = sideForNextPick(squads, scoreMap);
-      squads[side].push(item.id);
-    }
+  function draftBalanced(list, squads, scoreMap, skillKey = 'rating') {
+    snakeDraftCategory(list, squads, scoreMap, skillKey);
   }
 
   /**
@@ -558,10 +617,12 @@
       buckets[s.role]?.push(s);
     }
 
-    snakeDraftCategory(buckets.bowler, squads, scoreMap);
-    snakeDraftCategory(buckets.batsman, squads, scoreMap);
-    draftBalanced(buckets.allrounder, squads, scoreMap);
-    draftBalanced(buckets.unknown, squads, scoreMap);
+    snakeDraftCategory(buckets.bowler, squads, scoreMap, 'bowlScore');
+    snakeDraftCategory(buckets.batsman, squads, scoreMap, 'batScore');
+    draftBalanced(buckets.allrounder, squads, scoreMap, 'rating');
+    draftBalanced(buckets.unknown, squads, scoreMap, 'rating');
+    improveSkillBalance(squads, scoreMap, 'batScore');
+    improveSkillBalance(squads, scoreMap, 'bowlScore');
     normalizeSquadSizes(players, squads);
 
     const countRole = (ids, role) =>
