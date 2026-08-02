@@ -1929,7 +1929,12 @@ input { background: var(--paper); }
   margin-top: 4px;
   margin-bottom: 6px;
 }
-.over-strip-nav--edit { margin-top: 8px; }
+.over-strip-nav--edit { margin-top: 8px; flex-wrap: wrap; }
+.over-edit-hint {
+  font-size: 11px;
+  color: rgba(247, 244, 236, 0.55);
+  letter-spacing: 0.2px;
+}
 .ball-pill-btn {
   cursor: pointer;
   font: inherit;

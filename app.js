@@ -1045,9 +1045,10 @@ function selFromLogEntry(entry) {
 }
 
 function liveOverNo(inn) {
-  const ballsInCurrentOver = inn.score.balls % 6;
-  const currentOver = Math.floor(inn.score.balls / 6);
-  if (ballsInCurrentOver === 0 && inn.score.balls > 0 && inn.needNewBowler) return currentOver - 1;
+  const balls = inn.score?.balls || 0;
+  const currentOver = Math.floor(balls / 6);
+  // Between overs (e.g. 1.0, 2.0): show the over that just finished, even after bowler is picked.
+  if (balls > 0 && balls % 6 === 0) return currentOver - 1;
   return currentOver;
 }
 
@@ -1299,12 +1300,7 @@ function undoActionLabel(match) {
 
 function currentOverNo(inn) {
   if (!inn) return 0;
-  const balls = inn.score?.balls || 0;
-  const ballsInOver = balls % 6;
-  const over = Math.floor(balls / 6);
-  // At over end waiting for new bowler, still treat as the completed over.
-  if (ballsInOver === 0 && balls > 0 && inn.needNewBowler) return over - 1;
-  return over;
+  return liveOverNo(inn);
 }
 
 function undoWouldLeaveCurrentOver(match) {
@@ -2428,24 +2424,13 @@ function renderScore() {
   const bowler = inn.bowlers[inn.currentBowler];
   const rate = fmtRate(inn.score.runs, inn.score.balls);
 
-  const ballsInCurrentOver = inn.score.balls % 6;
-  const currentOver = Math.floor(inn.score.balls / 6);
-  const liveOver = (ballsInCurrentOver === 0 && inn.score.balls > 0 && inn.needNewBowler) ? currentOver - 1 : currentOver;
+  const liveOver = liveOverNo(inn);
   const hasLastOver = liveOver >= 1;
   const showingLast = state.showLastOver && hasLastOver;
   const overToShow = showingLast ? liveOver - 1 : liveOver;
   const overBalls = inn.ballLog.filter(b => b.overNo === overToShow);
   const legalCount = overBalls.filter(b => b.legal).length;
   const remainingLegal = Math.max(0, 6 - legalCount);
-  const overSlots = [...overBalls, ...Array(remainingLegal).fill(null)];
-  let overRuns = 0;
-  let overWkts = 0;
-  for (const b of overBalls) {
-    const runs = Number(b.runs) || 0;
-    const extraRun = (b.extra === 'wd' || b.extra === 'nb') ? 1 : 0;
-    overRuns += runs + extraRun;
-    if (b.wicket === true) overWkts += 1;
-  }
 
   let targetPill = '';
   if (m.currentInnings === 1 && inn.target != null) {
@@ -2462,7 +2447,8 @@ function renderScore() {
     inn.batters[inn.striker] && inn.batters[inn.nonStriker] &&
     !inn.batters[inn.striker].out && !inn.batters[inn.nonStriker].out;
   const overBallCount = overBalls.length;
-  const canEditOver = !inn.ended && overBallCount > 0;
+  const canEditOver = !inn.ended && inn.ballLog.length > 0;
+  const atOverBreak = inn.score.balls > 0 && inn.score.balls % 6 === 0 && !inn.ended;
   const editMode = state.overEditUnlocked;
   const overStripsHtml = editMode
     ? editableOverNumbers(inn).map((overNo) => renderOverStrip(inn, overNo, {
@@ -2472,9 +2458,9 @@ function renderScore() {
       })).join('')
     : renderOverStrip(inn, overToShow, {
         editable: false,
-        label: showingLast ? 'Last over' : 'This over',
-        showSum: showingLast,
-        emptySlots: remainingLegal,
+        label: showingLast ? 'Last over' : (atOverBreak ? 'Over just bowled' : 'This over'),
+        showSum: showingLast || atOverBreak,
+        emptySlots: atOverBreak ? 0 : remainingLegal,
       });
 
   return `
@@ -2516,6 +2502,7 @@ function renderScore() {
       </div>` : ''}
       ${!editMode ? `<div class="over-strip-nav over-strip-nav--edit">
         ${canEditOver ? `<button class="over-toggle" data-action="edit-over">Edit over</button>` : ''}
+        ${atOverBreak && canEditOver ? `<span class="over-edit-hint">Fix a ball before the next over</span>` : ''}
       </div>` : `<div class="over-strip-nav over-strip-nav--edit">
         <button class="over-toggle" data-action="done-edit-over">Done editing</button>
       </div>`}
@@ -2613,10 +2600,7 @@ function renderLivePanel(m) {
   const bowler = inn.bowlers[inn.currentBowler];
   const rate = fmtRate(inn.score.runs, inn.score.balls);
 
-  const ballsInCurrentOver = inn.score.balls % 6;
-  const currentOver = Math.floor(inn.score.balls / 6);
-  const liveOver = (ballsInCurrentOver === 0 && inn.score.balls > 0 && inn.needNewBowler)
-    ? currentOver - 1 : currentOver;
+  const liveOver = liveOverNo(inn);
   const overBalls = inn.ballLog.filter(b => b.overNo === liveOver);
   const legalCount = overBalls.filter(b => b.legal).length;
   const remainingLegal = Math.max(0, 6 - legalCount);
