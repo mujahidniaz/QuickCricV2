@@ -1040,73 +1040,74 @@ function ballLabel(d) {
   return parts.join('+') || '0';
 }
 
-function snapshotForUndo(m) {
-  return clone({
-    innings: m.innings,
-    currentInnings: m.currentInnings,
-    status: m.status,
-    result: m.result,
-    squads: m.squads,
-  });
+function selFromLogEntry(entry) {
+  return { runs: entry.runs ?? 0, extra: entry.extra || null, wicket: !!entry.wicket };
 }
 
-function pushUndo(match, kind = 'ball') {
-  if (!match) return;
-  const snap = snapshotForUndo(match);
-  snap.undoKind = kind;
-  match.undo.push(snap);
-  if (match.undo.length > MAX_UNDO) match.undo.shift();
+function liveOverNo(inn) {
+  const ballsInCurrentOver = inn.score.balls % 6;
+  const currentOver = Math.floor(inn.score.balls / 6);
+  if (ballsInCurrentOver === 0 && inn.score.balls > 0 && inn.needNewBowler) return currentOver - 1;
+  return currentOver;
 }
 
-function lastUndoKind(match) {
-  const snap = match?.undo?.[match.undo.length - 1];
-  return snap?.undoKind || 'ball';
+function editableOverNumbers(inn) {
+  const live = liveOverNo(inn);
+  const overs = [];
+  if (live >= 1) overs.push(live - 1);
+  overs.push(live);
+  return overs;
 }
 
-function undoActionLabel(match) {
-  const kind = lastUndoKind(match);
-  if (kind === 'pick') return '↶ Undo player pick';
-  if (kind === 'swap') return '↶ Undo swap strike';
-  if (kind === 'innings-start') return '↶ Undo start innings';
-  return '↶ Undo last ball';
+function ballLogGlobalIndex(inn, overNo, slotInOver) {
+  let count = 0;
+  for (let i = 0; i < inn.ballLog.length; i++) {
+    if (inn.ballLog[i].overNo === overNo) {
+      if (count === slotInOver) return i;
+      count++;
+    }
+  }
+  return -1;
 }
 
-function currentOverNo(inn) {
-  if (!inn) return 0;
-  const balls = inn.score?.balls || 0;
-  const ballsInOver = balls % 6;
-  const over = Math.floor(balls / 6);
-  // At over end waiting for new bowler, still treat as the completed over.
-  if (ballsInOver === 0 && balls > 0 && inn.needNewBowler) return over - 1;
-  return over;
+function isLogIndexEditable(inn, logIndex) {
+  if (!state.overEditUnlocked || logIndex < 0) return false;
+  const entry = inn.ballLog[logIndex];
+  if (!entry) return false;
+  const live = liveOverNo(inn);
+  return entry.overNo === live || entry.overNo === live - 1;
 }
 
-function undoWouldLeaveCurrentOver(match) {
-  if (!match?.undo?.length) return false;
-  const inn = match.innings[match.currentInnings];
-  if (!inn) return false;
-  const snap = match.undo[match.undo.length - 1];
-  const snapInn = snap.innings?.[snap.currentInnings];
-  if (!snapInn) return false;
-  if (snap.currentInnings !== match.currentInnings) return false;
-  return currentOverNo(snapInn) === currentOverNo(inn);
+function findBowlerIdx(inn, name) {
+  const key = (name || '').trim().toLowerCase();
+  if (!key) return -1;
+  return inn.bowlers.findIndex(b => b.name.toLowerCase() === key);
 }
 
-function canUndoNow(match) {
-  if (!match?.undo?.length) return false;
-  const kind = lastUndoKind(match);
-  if (kind === 'pick' || kind === 'swap' || kind === 'innings-start') return true;
-  if (state.overEditUnlocked) return undoWouldLeaveCurrentOver(match) || state.freeUndosUsed < FREE_UNDO;
-  return state.freeUndosUsed < FREE_UNDO;
+function ensureBowlerByName(inn, match, name) {
+  const idx = findBowlerIdx(inn, name);
+  if (idx >= 0) {
+    inn.currentBowler = idx;
+    inn.needNewBowler = false;
+    return;
+  }
+  const pid = ensurePlayerOnSide(match, inn.bowling, name, null);
+  inn.currentBowler = inn.bowlers.length;
+  inn.bowlers.push(newBowler(name, pid));
+  inn.needNewBowler = false;
 }
 
-function recordBall(match, sel) {
-  pushUndo(match, 'ball');
-  state.freeUndosUsed = 0;
+function addReplayBatter(inn, match, template) {
+  const idx = inn.batters.length;
+  const pid = ensurePlayerOnSide(match, inn.batting, template.name, template.playerId);
+  inn.batters.push(newBatter(template.name, pid));
+  if (inn.batters[inn.striker]?.out) inn.striker = idx;
+  else if (inn.batters[inn.nonStriker]?.out) inn.nonStriker = idx;
+  else inn.striker = idx;
+  inn.needNewBatter = false;
+}
 
-  const inn = match.innings[match.currentInnings];
-  const overBefore = currentOverNo(inn);
-  const wasFreeHit = inn.freeHit;
+function applyBallCore(inn, sel, match) {
   const d = decomposeBall(sel);
   const striker = inn.batters[inn.striker];
   const bowler = inn.bowlers[inn.currentBowler];
@@ -1135,15 +1136,16 @@ function recordBall(match, sel) {
   }
 
   const overNo = Math.floor((inn.score.balls - (d.isLegalBall ? 1 : 0)) / 6);
-  inn.ballLog.push({
+  const logEntry = {
     runs: d.runs, extra: d.extra, wicket: d.wicket, total: d.totalRuns,
     label: ballLabel(d), legal: d.isLegalBall, overNo,
     batter: striker.name, bowler: bowler.name,
-  });
+  };
 
   const maxBalls = match.overs * 6;
   const target = (match.currentInnings === 1) ? inn.target : null;
-  let endNow = false, reason = null;
+  let endNow = false;
+  let reason = null;
   if (inn.score.balls >= maxBalls) { endNow = true; reason = 'overs'; }
   else if (inn.score.wickets >= 10) { endNow = true; reason = 'allout'; }
   else if (target != null && inn.score.runs >= target) { endNow = true; reason = 'chased'; }
@@ -1157,6 +1159,8 @@ function recordBall(match, sel) {
     inn.needNewBatter = false;
     inn.needNewBowler = false;
   } else {
+    inn.ended = false;
+    inn.endReason = null;
     if (d.isLegalBall && inn.score.balls % 6 === 0) {
       [inn.striker, inn.nonStriker] = [inn.nonStriker, inn.striker];
       inn.needNewBowler = true;
@@ -1164,10 +1168,237 @@ function recordBall(match, sel) {
     if (d.wicket) inn.needNewBatter = true;
   }
 
+  return logEntry;
+}
+
+function replayInningsBallLog(match, inningsIdx, entries, editIndex, editSel) {
+  const oldInn = match.innings[inningsIdx];
+  const inn = newInnings(oldInn.batting, oldInn.bowling);
+  if (oldInn.target != null) inn.target = oldInn.target;
+
+  if (!oldInn.batters[0] || !oldInn.batters[1] || !oldInn.bowlers[0]) return false;
+
+  inn.batters.push(newBatter(oldInn.batters[0].name, oldInn.batters[0].playerId));
+  inn.batters.push(newBatter(oldInn.batters[1].name, oldInn.batters[1].playerId));
+  inn.bowlers.push(newBowler(oldInn.bowlers[0].name, oldInn.bowlers[0].playerId));
+
+  let nextBatterFromOld = 2;
+  const newLog = [];
+
+  for (let i = 0; i < entries.length; i++) {
+    if (inn.ended) break;
+    const entry = entries[i];
+    const sel = (i === editIndex && editSel) ? editSel : selFromLogEntry(entry);
+
+    if (inn.needNewBatter && nextBatterFromOld < oldInn.batters.length) {
+      addReplayBatter(inn, match, oldInn.batters[nextBatterFromOld++]);
+    }
+    if (inn.needNewBowler || findBowlerIdx(inn, entry.bowler) !== inn.currentBowler) {
+      ensureBowlerByName(inn, match, entry.bowler);
+    }
+
+    newLog.push(applyBallCore(inn, sel, match));
+  }
+
+  inn.ballLog = newLog;
+  match.innings[inningsIdx] = inn;
+  if (inn.ended) {
+    if (match.currentInnings === 1) {
+      match.status = 'completed';
+      match.result = computeResult(match);
+      match.endedAt = match.endedAt || Date.now();
+    }
+  } else {
+    match.status = 'in_progress';
+    match.result = '';
+    match.endedAt = null;
+  }
+  return true;
+}
+
+function editBallAt(match, logIndex, newSel) {
+  const inn = match.innings[match.currentInnings];
+  if (!inn || !isLogIndexEditable(inn, logIndex)) return false;
+  const b = newSel;
+  if (b.runs == null && !b.extra && !b.wicket) return false;
+
+  pushUndo(match, 'ball-edit');
+  state.freeUndosUsed = 0;
+  const entries = clone(inn.ballLog);
+  if (!replayInningsBallLog(match, match.currentInnings, entries, logIndex, {
+    runs: b.runs ?? 0,
+    extra: b.extra || null,
+    wicket: !!b.wicket,
+  })) return false;
+
+  persistMatch(match);
+  return true;
+}
+
+function editPickBall(field, value) {
+  if (state.modal?.type !== 'editBall') return;
+  const b = state.modal.sel;
+  if (field === 'runs' && b.runs === value) { b.runs = null; render(); return; }
+  if (field === 'extra' && b.extra === value) { b.extra = null; render(); return; }
+  if (field === 'wicket' && b.wicket) { b.wicket = false; render(); return; }
+
+  const presentCount = (b.runs != null ? 1 : 0) + (b.extra ? 1 : 0) + (b.wicket ? 1 : 0);
+  const targetPresent = field === 'runs' ? (b.runs != null) : field === 'extra' ? !!b.extra : !!b.wicket;
+  if (!targetPresent && presentCount >= 2) {
+    showToast('Max 2 selections');
+    return;
+  }
+  if (field === 'runs') b.runs = value;
+  else if (field === 'extra') b.extra = value;
+  else if (field === 'wicket') b.wicket = true;
+  render();
+}
+
+function finishEditBall() {
+  state.modal = null;
+  state.ball = emptyBall();
+  const m = state.current;
+  const inn = m?.innings?.[m?.currentInnings];
+  if (!inn) { render(); return; }
+  repairScoringState(inn);
+  if (inn.ended) afterInningsEnd();
+  else { syncScoringModal(); render(); }
+}
+
+function snapshotForUndo(m) {
+  return clone({
+    innings: m.innings,
+    currentInnings: m.currentInnings,
+    status: m.status,
+    result: m.result,
+    squads: m.squads,
+  });
+}
+
+function pushUndo(match, kind = 'ball') {
+  if (!match) return;
+  const snap = snapshotForUndo(match);
+  snap.undoKind = kind;
+  match.undo.push(snap);
+  if (match.undo.length > MAX_UNDO) match.undo.shift();
+}
+
+function lastUndoKind(match) {
+  const snap = match?.undo?.[match.undo.length - 1];
+  return snap?.undoKind || 'ball';
+}
+
+function undoActionLabel(match) {
+  const kind = lastUndoKind(match);
+  if (kind === 'pick') return '↶ Undo player pick';
+  if (kind === 'swap') return '↶ Undo swap strike';
+  if (kind === 'innings-start') return '↶ Undo start innings';
+  if (kind === 'ball-edit') return '↶ Undo ball edit';
+  return '↶ Undo last ball';
+}
+
+function currentOverNo(inn) {
+  if (!inn) return 0;
+  const balls = inn.score?.balls || 0;
+  const ballsInOver = balls % 6;
+  const over = Math.floor(balls / 6);
+  // At over end waiting for new bowler, still treat as the completed over.
+  if (ballsInOver === 0 && balls > 0 && inn.needNewBowler) return over - 1;
+  return over;
+}
+
+function undoWouldLeaveCurrentOver(match) {
+  if (!match?.undo?.length) return false;
+  const inn = match.innings[match.currentInnings];
+  if (!inn) return false;
+  const snap = match.undo[match.undo.length - 1];
+  const snapInn = snap.innings?.[snap.currentInnings];
+  if (!snapInn) return false;
+  if (snap.currentInnings !== match.currentInnings) return false;
+  return currentOverNo(snapInn) === currentOverNo(inn);
+}
+
+function repairScoringState(inn) {
+  if (!inn || inn.ended) return false;
+  let changed = false;
+  const st = inn.striker;
+  const ns = inn.nonStriker;
+  const atStriker = inn.batters[st];
+  const atNonStriker = inn.batters[ns];
+
+  if (atStriker?.out || atNonStriker?.out) {
+    if (!inn.needNewBatter) { inn.needNewBatter = true; changed = true; }
+    const offCrease = inn.batters.findIndex((b, i) => !b.out && i !== st && i !== ns);
+    if (offCrease >= 0) {
+      if (atStriker?.out) inn.striker = offCrease;
+      else if (atNonStriker?.out) inn.nonStriker = offCrease;
+      inn.needNewBatter = false;
+      changed = true;
+    }
+  }
+  return changed;
+}
+
+/** Re-open batter/bowler picker after leaving mid-match (e.g. back to home). */
+function syncScoringModal() {
+  const m = state.current;
+  if (!m || state.view !== 'score') return;
+  const inn = m.innings?.[m.currentInnings];
+  if (!inn || inn.ended) {
+    if (state.modal?.type === 'newBatter' || state.modal?.type === 'newBowler') state.modal = null;
+    return;
+  }
+  if (repairScoringState(inn)) persistMatch(m);
+  if (inn.needNewBatter) {
+    state.modal = {
+      type: 'newBatter',
+      manual: state.modal?.type === 'newBatter' ? !!state.modal.manual : false,
+      pick: state.modal?.type === 'newBatter' ? state.modal.pick || null : null,
+    };
+  } else if (inn.needNewBowler) {
+    state.modal = {
+      type: 'newBowler',
+      manual: state.modal?.type === 'newBowler' ? !!state.modal.manual : false,
+      pick: state.modal?.type === 'newBowler' ? state.modal.pick || null : null,
+    };
+  } else if (state.modal?.type === 'newBatter' || state.modal?.type === 'newBowler') {
+    state.modal = null;
+  }
+}
+
+function canUndoNow(match) {
+  if (!match?.undo?.length) return false;
+  const kind = lastUndoKind(match);
+  if (kind === 'pick' || kind === 'swap' || kind === 'innings-start' || kind === 'ball-edit') return true;
+  if (kind !== 'ball') return false;
+
+  const inn = match.innings?.[match.currentInnings];
+  if (!inn) return false;
+
+  // Over complete or wicket pending — never free-undo the last ball.
+  if (inn.needNewBowler || inn.needNewBatter) {
+    return state.overEditUnlocked && undoWouldLeaveCurrentOver(match);
+  }
+
+  if (state.overEditUnlocked) return undoWouldLeaveCurrentOver(match);
+  return state.freeUndosUsed < FREE_UNDO && undoWouldLeaveCurrentOver(match);
+}
+
+function recordBall(match, sel) {
+  pushUndo(match, 'ball');
+  state.freeUndosUsed = 0;
+
+  const inn = match.innings[match.currentInnings];
+  const overBefore = currentOverNo(inn);
+  const wasFreeHit = inn.freeHit;
+  const logEntry = applyBallCore(inn, sel, match);
+  inn.ballLog.push(logEntry);
+
   if (currentOverNo(inn) !== overBefore) state.overEditUnlocked = false;
 
+  const d = decomposeBall(sel);
   audio.onBall(d, wasFreeHit);
-  if (!endNow && d.isLegalBall && inn.score.balls % 6 === 0) audio.onOverEnd();
+  if (!inn.ended && d.isLegalBall && inn.score.balls % 6 === 0) audio.onOverEnd();
   persistMatch(match);
   showEventBanner(buildEventBanner(d));
 }
@@ -1226,6 +1457,10 @@ function swapStrike(match) {
 function addBatter(inn, name, playerId = null) {
   const trimmed = (name || '').trim();
   if (!trimmed) return false;
+  if (!inn.needNewBatter) {
+    showToast('No batter slot to fill');
+    return false;
+  }
   if (batterOutInInnings(inn, { id: playerId, name: trimmed })) {
     showToast('That batter is already out');
     return false;
@@ -1239,8 +1474,19 @@ function addBatter(inn, name, playerId = null) {
   playerId = ensurePlayerOnSide(state.current, inn.batting, trimmed, playerId);
   const idx = inn.batters.length;
   inn.batters.push(newBatter(trimmed, playerId));
-  if (inn.batters[inn.striker]?.out) inn.striker = idx;
-  else if (inn.batters[inn.nonStriker]?.out) inn.nonStriker = idx;
+
+  const strikerOut = inn.batters[inn.striker]?.out;
+  const nonStrikerOut = inn.batters[inn.nonStriker]?.out;
+  if (strikerOut) inn.striker = idx;
+  else if (nonStrikerOut) inn.nonStriker = idx;
+  else {
+    const outIdx = inn.batters.findIndex((b, i) => i < idx && b.out);
+    if (outIdx === inn.striker) inn.striker = idx;
+    else if (outIdx === inn.nonStriker) inn.nonStriker = idx;
+    else if (outIdx >= 0) inn.striker = idx;
+    else inn.striker = idx;
+  }
+
   inn.needNewBatter = false;
   return true;
 }
@@ -1248,6 +1494,10 @@ function addBatter(inn, name, playerId = null) {
 function addBowler(inn, name, playerId = null) {
   const trimmed = (name || '').trim();
   if (!trimmed) return false;
+  if (!inn.needNewBowler) {
+    showToast('No bowler slot to fill');
+    return false;
+  }
   if (isConsecutiveBowler(inn, { id: playerId, name: trimmed })) {
     showToast("Can't bowl consecutive overs");
     return false;
@@ -1420,6 +1670,19 @@ function pickBall(field, value) {
 }
 
 function commitBall() {
+  const inn = state.current?.innings?.[state.current?.currentInnings];
+  if (inn?.needNewBatter) {
+    syncScoringModal();
+    render();
+    showToast('Pick the next batter first');
+    return;
+  }
+  if (inn?.needNewBowler) {
+    syncScoringModal();
+    render();
+    showToast('Pick the next bowler first');
+    return;
+  }
   const b = state.ball;
   if (b.runs == null && !b.extra && !b.wicket) return;
   recordBall(state.current, { runs: b.runs ?? 0, extra: b.extra, wicket: b.wicket });
@@ -1592,6 +1855,7 @@ function render() {
 
   let html = '';
   let view = state.shared ? 'view' : state.view;
+  if (view === 'score') syncScoringModal();
   switch (view) {
     case 'home': html = renderHome(); break;
     case 'setup': html = renderSetup(); break;
@@ -2143,12 +2407,24 @@ function renderInningsSetup() {
   `;
 }
 
+function creaseRow(inn, idx, needPick) {
+  const b = inn.batters[idx];
+  if (b?.out) {
+    return { name: 'Pick next batter', figs: '—', pending: true };
+  }
+  if (needPick && !b) {
+    return { name: 'Pick next batter', figs: '—', pending: true };
+  }
+  if (!b) return { name: '—', figs: '—', pending: false };
+  return { name: b.name, figs: `${b.runs} (${b.balls})`, pending: false };
+}
+
 function renderScore() {
   const m = state.current;
   const inn = m.innings[m.currentInnings];
   const team = m.teams[inn.batting];
-  const striker = inn.batters[inn.striker];
-  const nonStriker = inn.batters[inn.nonStriker];
+  const strikerRow = creaseRow(inn, inn.striker, inn.needNewBatter);
+  const nonStrikerRow = creaseRow(inn, inn.nonStriker, inn.needNewBatter);
   const bowler = inn.bowlers[inn.currentBowler];
   const rate = fmtRate(inn.score.runs, inn.score.balls);
 
@@ -2180,13 +2456,26 @@ function renderScore() {
 
   const b = state.ball;
   const selCount = (b.runs != null ? 1 : 0) + (b.extra ? 1 : 0) + (b.wicket ? 1 : 0);
-  const canNext = selCount > 0;
+  const canNext = selCount > 0 && !inn.needNewBatter && !inn.needNewBowler && !inn.ended;
   const canUndo = canUndoNow(m);
-  const canSwap = !inn.ended && !inn.needNewBatter &&
+  const canSwap = !inn.ended && !inn.needNewBatter && !inn.needNewBowler &&
     inn.batters[inn.striker] && inn.batters[inn.nonStriker] &&
     !inn.batters[inn.striker].out && !inn.batters[inn.nonStriker].out;
   const overBallCount = overBalls.length;
-  const canEditOver = !showingLast && overBallCount > 0;
+  const canEditOver = !inn.ended && overBallCount > 0;
+  const editMode = state.overEditUnlocked;
+  const overStripsHtml = editMode
+    ? editableOverNumbers(inn).map((overNo) => renderOverStrip(inn, overNo, {
+        editable: true,
+        label: overNo === liveOver ? 'This over · tap a ball' : `Over ${overNo + 1} · tap a ball`,
+        showSum: true,
+      })).join('')
+    : renderOverStrip(inn, overToShow, {
+        editable: false,
+        label: showingLast ? 'Last over' : 'This over',
+        showSum: showingLast,
+        emptySlots: remainingLegal,
+      });
 
   return `
     <div class="screen score-screen">
@@ -2201,38 +2490,35 @@ function renderScore() {
         <div class="score-line">${inn.score.runs}/${inn.score.wickets}</div>
         <div class="overs">${fmtOvers(inn.score.balls)} / ${m.overs}.0 overs</div>
         ${targetPill ? `<div class="target">${esc(targetPill)}</div>` : ''}
-        ${state.overEditUnlocked ? `<div class="pin-badge">Edit over unlocked</div>` : ''}
+        ${editMode ? `<div class="pin-badge">Tap any ball in this or the previous over to edit</div>` : ''}
       </div>
       <div class="stats">
-        <div class="row">
-          <span class="name striker">${esc(striker.name)}</span>
-          <span class="figs">${striker.runs} (${striker.balls})</span>
+        <div class="row${strikerRow.pending ? ' crease-pending' : ''}">
+          <span class="name striker">${esc(strikerRow.name)}</span>
+          <span class="figs">${esc(strikerRow.figs)}</span>
         </div>
         <div class="row bowler-row">
           <span class="name">${esc(bowler.name)}</span>
           <span class="figs">${fmtOvers(bowler.balls)} · ${bowler.runs}/${bowler.wickets}</span>
         </div>
-        <div class="row">
-          <span class="name">${esc(nonStriker.name)}</span>
-          <span class="figs">${nonStriker.runs} (${nonStriker.balls})</span>
+        <div class="row${nonStrikerRow.pending ? ' crease-pending' : ''}">
+          <span class="name">${esc(nonStrikerRow.name)}</span>
+          <span class="figs">${esc(nonStrikerRow.figs)}</span>
         </div>
         <div class="row stats-actions">
           <button type="button" class="strike-swap-btn" data-action="swap-strike" ${canSwap ? '' : 'disabled'} title="Swap striker and non-striker">⇄ Swap strike</button>
         </div>
       </div>
-      <div class="over-strip">
-        <div class="over-strip-head">
-          <div class="heading">${showingLast ? 'Last over' : 'This over'}</div>
-          <div class="over-strip-actions">
-            ${canEditOver ? `<button class="over-toggle" data-action="edit-over">${state.overEditUnlocked ? 'Editing over' : 'Edit over'}</button>` : ''}
-            ${hasLastOver ? `<button class="over-toggle" data-action="toggle-last-over">${showingLast ? 'Show this over' : 'View last over'}</button>` : ''}
-          </div>
-        </div>
-        <div class="balls">
-          ${overSlots.map(renderBallPill).join('')}
-          ${showingLast ? `<div class="over-sum">${overRuns}/${overWkts}</div>` : ''}
-        </div>
-      </div>
+      ${overStripsHtml}
+      ${!editMode && hasLastOver ? `
+      <div class="over-strip-nav">
+        <button class="over-toggle" data-action="toggle-last-over">${showingLast ? 'Show this over' : 'View last over'}</button>
+      </div>` : ''}
+      ${!editMode ? `<div class="over-strip-nav over-strip-nav--edit">
+        ${canEditOver ? `<button class="over-toggle" data-action="edit-over">Edit over</button>` : ''}
+      </div>` : `<div class="over-strip-nav over-strip-nav--edit">
+        <button class="over-toggle" data-action="done-edit-over">Done editing</button>
+      </div>`}
       ${inn.freeHit ? `<div class="free-hit-banner free-hit-banner--compact"><span class="fh-dot"></span>Free hit<span class="fh-dot"></span></div>` : ''}
       <div class="undo-row">
         ${showingLast ? '' : `<button data-action="undo" ${canUndo ? '' : 'disabled'}>${undoActionLabel(m)}</button>`}
@@ -2264,7 +2550,46 @@ function renderScore() {
   `;
 }
 
-function renderBallPill(b) {
+function overStripTotals(overBalls) {
+  let overRuns = 0;
+  let overWkts = 0;
+  for (const b of overBalls) {
+    overRuns += (Number(b.runs) || 0) + ((b.extra === 'wd' || b.extra === 'nb') ? 1 : 0);
+    if (b.wicket === true) overWkts += 1;
+  }
+  return { overRuns, overWkts };
+}
+
+function renderOverStrip(inn, overNo, opts = {}) {
+  const {
+    editable = false,
+    label = 'This over',
+    showSum = false,
+    emptySlots = 0,
+  } = opts;
+  const overBalls = inn.ballLog.filter(b => b.overNo === overNo);
+  const { overRuns, overWkts } = overStripTotals(overBalls);
+  const pills = editable
+    ? overBalls.map((b, slotIdx) => {
+        const logIndex = ballLogGlobalIndex(inn, overNo, slotIdx);
+        return renderBallPill(b, { editable: isLogIndexEditable(inn, logIndex), logIndex });
+      }).join('')
+    : [...overBalls, ...Array(emptySlots).fill(null)].map(b => renderBallPill(b)).join('');
+
+  return `
+    <div class="over-strip${editable ? ' over-strip--editable' : ''}">
+      <div class="over-strip-head">
+        <div class="heading">${esc(label)}</div>
+      </div>
+      <div class="balls">
+        ${pills}
+        ${showSum && overBalls.length ? `<div class="over-sum">${overRuns}/${overWkts}</div>` : ''}
+      </div>
+    </div>
+  `;
+}
+
+function renderBallPill(b, opts = {}) {
   if (!b) return `<div class="ball-pill empty">·</div>`;
   let cls = 'ball-pill';
   if (b.extra) cls += ' extra';
@@ -2272,7 +2597,11 @@ function renderBallPill(b) {
   else if (b.runs === 4) cls += ' run4';
   else if (b.runs === 6) cls += ' run6';
   else if (b.runs === 0) cls += ' dot';
-  return `<div class="${cls}">${esc(b.label)}</div>`;
+  const inner = esc(b.label);
+  if (opts.editable && opts.logIndex != null) {
+    return `<button type="button" class="${cls} ball-pill-btn" data-action="edit-ball" data-log-index="${opts.logIndex}" title="Edit this ball">${inner}</button>`;
+  }
+  return `<div class="${cls}">${inner}</div>`;
 }
 
 function renderLivePanel(m) {
@@ -3100,6 +3429,7 @@ function renderModal() {
         blockOnField: true,
         inputId: 'new-batter-input',
         modalManual: state.modal.manual,
+        selected: state.modal.pick,
       })}
     `, `${canUndoNow(state.current) && lastUndoKind(state.current) === 'pick'
       ? `<button type="button" class="btn btn-outline-secondary w-100 mb-2" data-action="undo">${esc(undoActionLabel(state.current))}</button>`
@@ -3116,19 +3446,52 @@ function renderModal() {
         blockConsecutive: true,
         inputId: 'new-bowler-input',
         modalManual: state.modal.manual,
+        selected: state.modal.pick,
       })}
     `, `${canUndoNow(state.current) && lastUndoKind(state.current) === 'pick'
       ? `<button type="button" class="btn btn-outline-secondary w-100 mb-2" data-action="undo">${esc(undoActionLabel(state.current))}</button>`
       : ''}<button type="button" class="btn btn-primary btn-lg w-100" data-action="confirm-new-bowler">Continue</button>`);
   }
   if (state.modal.type === 'editOverPin') {
-    return renderBsSheet('Edit this over', 'Enter the edit PIN to undo any ball in the current over.', `
+    return renderBsSheet('Edit overs', 'Enter the PIN, then tap any ball in this over or the previous over to change it.', `
       <label class="form-label" for="edit-over-pin-input">PIN</label>
       <input id="edit-over-pin-input" class="form-control form-control-lg text-center font-monospace fw-bold pin-input" type="text" inputmode="numeric" maxlength="4" pattern="[0-9]{4}" placeholder="····" autocomplete="off" enterkeyhint="done" />
     `, `
-      <button type="button" class="btn btn-primary btn-lg w-100" data-action="confirm-edit-over-pin">Unlock over edit</button>
+      <button type="button" class="btn btn-primary btn-lg w-100" data-action="confirm-edit-over-pin">Unlock ball edit</button>
       <button type="button" class="btn btn-link w-100" data-action="cancel-edit-over-pin">Cancel</button>
     `);
+  }
+  if (state.modal.type === 'editBall') {
+    const inn = state.current.innings[state.current.currentInnings];
+    const entry = inn.ballLog[state.modal.logIndex];
+    const sel = state.modal.sel;
+    const selCount = (sel.runs != null ? 1 : 0) + (sel.extra ? 1 : 0) + (sel.wicket ? 1 : 0);
+    const canSave = selCount > 0;
+    return renderBsSheet(
+      `Edit ball · over ${entry.overNo + 1}`,
+      `${esc(entry.batter)} · ${esc(entry.bowler)} · was ${esc(entry.label)}`,
+      `
+        <div class="edit-ball-picker">
+          <div class="input-cluster edit-ball-cluster">
+            <button type="button" class="wkt-btn ${sel.wicket ? 'selected' : ''}" data-action="edit-ball-wkt">WKT</button>
+            <div class="extras-panel">
+              <div class="heading">Extras</div>
+              <div class="extras-btns">
+                ${['wd', 'nb', 'lb', 'b'].map(e => `<button type="button" class="extra-btn ${sel.extra === e ? 'selected' : ''}" data-action="edit-ball-extra" data-extra="${e}">${e}</button>`).join('')}
+              </div>
+            </div>
+          </div>
+          <div class="runs-grid edit-ball-runs">
+            <button type="button" class="run-btn dot ${sel.runs === 0 ? 'selected' : ''}" data-action="edit-ball-run" data-runs="0">DOT</button>
+            ${[1, 2, 3, 4, 5, 6].map(n => `<button type="button" class="run-btn ${sel.runs === n ? 'selected' : ''}" data-action="edit-ball-run" data-runs="${n}">${n}</button>`).join('')}
+          </div>
+        </div>
+      `,
+      `
+        <button type="button" class="btn btn-primary btn-lg w-100 mb-2" data-action="confirm-edit-ball" ${canSave ? '' : 'disabled'}>Save ball</button>
+        <button type="button" class="btn btn-outline-secondary w-100" data-action="cancel-edit-ball">Cancel</button>
+      `,
+    );
   }
   if (state.modal.type === 'deletePlayerPin') {
     const p = playerById(state.modal.playerId);
@@ -3198,7 +3561,16 @@ function renderModal() {
 // ---------- Action dispatch ----------
 function handle(action, dataset) {
   switch (action) {
-    case 'home': state.view = 'home'; state.detail = null; render(); break;
+    case 'home':
+      state.view = 'home';
+      state.detail = null;
+      state.overEditUnlocked = false;
+      state.freeUndosUsed = 0;
+      if (state.modal?.type === 'newBatter' || state.modal?.type === 'newBowler') {
+        state.modal = null;
+      }
+      render();
+      break;
     case 'terms': state.view = 'terms'; render(); break;
     case 'admin-open':
       if (state.adminUnlocked) {
@@ -3602,15 +3974,24 @@ function handle(action, dataset) {
         break;
       }
       if (action === 'pick-new-batter') {
-        if (!addBatter(state.current.innings[state.current.currentInnings], dataset.playerName, dataset.playerId)) break;
-        persistMatch(state.current);
-        const inn = state.current.innings[state.current.currentInnings];
-        state.modal = inn.needNewBowler ? { type: 'newBowler', manual: false } : null;
+        if (!state.modal || state.modal.type !== 'newBatter') break;
+        state.modal.pick = { name: dataset.playerName, id: dataset.playerId || null };
+        state.modal.manual = false;
+        const input = $('new-batter-input');
+        if (input) {
+          input.value = dataset.playerName || '';
+          input.dataset.playerId = dataset.playerId || '';
+        }
         render();
       } else if (action === 'pick-new-bowler') {
-        if (!addBowler(state.current.innings[state.current.currentInnings], dataset.playerName, dataset.playerId)) break;
-        persistMatch(state.current);
-        state.modal = null;
+        if (!state.modal || state.modal.type !== 'newBowler') break;
+        state.modal.pick = { name: dataset.playerName, id: dataset.playerId || null };
+        state.modal.manual = false;
+        const input = $('new-bowler-input');
+        if (input) {
+          input.value = dataset.playerName || '';
+          input.dataset.playerId = dataset.playerId || '';
+        }
         render();
       }
       break;
@@ -3632,6 +4013,8 @@ function handle(action, dataset) {
     case 'resume': {
       const m = state.current;
       if (!m) { state.view = 'home'; render(); break; }
+      state.overEditUnlocked = false;
+      state.freeUndosUsed = 0;
       const pre = viewBeforeFirstInnings(m);
       if (pre) state.view = pre;
       else {
@@ -3683,10 +4066,53 @@ function handle(action, dataset) {
       break;
     case 'edit-over':
       if (state.overEditUnlocked) {
-        showToast('Over editing already unlocked — use Undo');
+        showToast('Already editing — tap a ball or tap Done editing');
         break;
       }
+      {
+        const m = state.current;
+        const inn = m?.innings?.[m?.currentInnings];
+        if (inn?.needNewBatter) {
+          showToast('Pick the next batter first');
+          break;
+        }
+      }
       state.modal = { type: 'editOverPin' };
+      render();
+      break;
+    case 'done-edit-over':
+      state.overEditUnlocked = false;
+      state.showLastOver = false;
+      render();
+      showToast('Ball editing locked');
+      break;
+    case 'edit-ball': {
+      const logIndex = parseInt(dataset.logIndex, 10);
+      const inn = state.current?.innings?.[state.current?.currentInnings];
+      if (!inn || !isLogIndexEditable(inn, logIndex)) {
+        showToast('That ball cannot be edited');
+        break;
+      }
+      const entry = inn.ballLog[logIndex];
+      state.modal = {
+        type: 'editBall',
+        logIndex,
+        sel: selFromLogEntry(entry),
+      };
+      render();
+      break;
+    }
+    case 'edit-ball-run':
+      editPickBall('runs', parseInt(dataset.runs, 10));
+      break;
+    case 'edit-ball-extra':
+      editPickBall('extra', dataset.extra);
+      break;
+    case 'edit-ball-wkt':
+      editPickBall('wicket', true);
+      break;
+    case 'cancel-edit-ball':
+      state.modal = null;
       render();
       break;
     case 'cancel-edit-over-pin':
@@ -3731,9 +4157,14 @@ function handle(action, dataset) {
         showEventBanner({ kind: 'undo', big: 'UNDO', sub: 'Last action undone' }, 1300);
         afterUndoMatch();
       } else if (state.current?.undo?.length && !state.overEditUnlocked) {
-        state.modal = { type: 'editOverPin' };
-        render();
-        showToast('Enter PIN to edit earlier balls in this over');
+        const inn = state.current.innings?.[state.current.currentInnings];
+        if (inn?.needNewBatter || inn?.needNewBowler) {
+          showToast('Enter PIN via Edit over to undo earlier balls');
+        } else {
+          state.modal = { type: 'editOverPin' };
+          render();
+          showToast('Enter PIN to edit earlier balls in this over');
+        }
       }
       break;
     case 'end-innings':
@@ -3908,9 +4339,19 @@ document.addEventListener('DOMContentLoaded', () => {
       if (pin !== EDIT_OVER_PIN) return showToast('Wrong PIN · try again');
       state.overEditUnlocked = true;
       state.freeUndosUsed = 0;
+      state.showLastOver = false;
       state.modal = null;
       render();
-      showToast('Over editing unlocked — undo any ball in this over');
+      showToast('Tap any ball in this or the previous over to edit');
+      return;
+    }
+    if (action === 'confirm-edit-ball') {
+      if (state.modal?.type !== 'editBall') return;
+      const sel = state.modal.sel;
+      if (sel.runs == null && !sel.extra && !sel.wicket) return showToast('Pick runs, an extra, or a wicket');
+      if (!editBallAt(state.current, state.modal.logIndex, sel)) return showToast('Could not save ball');
+      showToast('Ball updated');
+      finishEditBall();
       return;
     }
     if (action === 'confirm-delete-player-pin') {
@@ -4001,19 +4442,21 @@ document.addEventListener('DOMContentLoaded', () => {
       return;
     }
     if (action === 'confirm-new-batter') {
-      const v = $('new-batter-input')?.value || '';
-      const pid = $('new-batter-input')?.dataset.playerId || null;
-      if (!v.trim()) return showToast('Pick a batter or type a name');
       const inn = state.current.innings[state.current.currentInnings];
+      const pick = state.modal?.pick;
+      const v = pick?.name || $('new-batter-input')?.value || '';
+      const pid = pick?.id || $('new-batter-input')?.dataset.playerId || null;
+      if (!v.trim()) return showToast('Pick a batter or type a name');
       if (!addBatter(inn, v, pid)) return;
       persistMatch(state.current);
-      state.modal = inn.needNewBowler ? { type: 'newBowler', manual: false } : null;
+      state.modal = inn.needNewBowler ? { type: 'newBowler', manual: false, pick: null } : null;
       render();
       return;
     }
     if (action === 'confirm-new-bowler') {
-      const v = $('new-bowler-input')?.value || '';
-      const pid = $('new-bowler-input')?.dataset.playerId || null;
+      const pick = state.modal?.pick;
+      const v = pick?.name || $('new-bowler-input')?.value || '';
+      const pid = pick?.id || $('new-bowler-input')?.dataset.playerId || null;
       if (!v.trim()) return showToast('Pick a bowler or type a name');
       if (!addBowler(state.current.innings[state.current.currentInnings], v, pid)) return;
       persistMatch(state.current);

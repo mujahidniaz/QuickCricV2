@@ -1174,6 +1174,12 @@ input { background: var(--paper); }
   }
 }
 
+.crease-pending .name,
+.crease-pending .figs {
+  color: var(--striker);
+  font-style: italic;
+}
+
 .btn-primary {
   --bs-btn-bg: #135d40;
   --bs-btn-border-color: #135d40;
@@ -1906,6 +1912,38 @@ input { background: var(--paper); }
   letter-spacing: 0.2px;
 }
 .over-toggle:hover, .over-toggle:active { opacity: 0.9; }
+.over-strip--editable {
+  margin-bottom: 8px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+.over-strip--editable:last-of-type {
+  border-bottom: none;
+  margin-bottom: 0;
+  padding-bottom: 0;
+}
+.over-strip-nav {
+  display: flex;
+  justify-content: center;
+  gap: 12px;
+  margin-top: 4px;
+  margin-bottom: 6px;
+}
+.over-strip-nav--edit { margin-top: 8px; }
+.ball-pill-btn {
+  cursor: pointer;
+  font: inherit;
+  transition: transform 0.12s ease, box-shadow 0.12s ease;
+}
+.ball-pill-btn:active { transform: scale(0.94); }
+.over-strip--editable .ball-pill-btn {
+  outline: 2px solid rgba(215, 255, 43, 0.35);
+  outline-offset: 1px;
+}
+.edit-ball-picker { padding-top: 4px; }
+.edit-ball-cluster { margin-bottom: 10px; }
+.edit-ball-runs { margin-bottom: 4px; }
+
 .over-strip .balls {
   display: flex;
   gap: 6px;
