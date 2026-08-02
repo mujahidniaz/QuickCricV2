@@ -368,6 +368,7 @@ const state = {
   showLastOver: false,
   overEditUnlocked: false,
   freeUndosUsed: 0,
+  editOverIntent: null,
   inningsManual: { striker: false, nonStriker: false, bowler: false },
   inningsPick: { striker: null, nonStriker: null, bowler: null },
   inningsPickUndo: [],
@@ -1069,6 +1070,70 @@ function ballLogGlobalIndex(inn, overNo, slotInOver) {
     }
   }
   return -1;
+}
+
+function lastBallLogIndex(inn) {
+  const overNo = liveOverNo(inn);
+  for (let i = inn.ballLog.length - 1; i >= 0; i--) {
+    if (inn.ballLog[i].overNo === overNo) return i;
+  }
+  return -1;
+}
+
+function openEditBallByIndex(logIndex) {
+  const inn = state.current?.innings?.[state.current?.currentInnings];
+  if (!inn || !isLogIndexEditable(inn, logIndex)) return false;
+  state.modal = {
+    type: 'editBall',
+    logIndex,
+    sel: selFromLogEntry(inn.ballLog[logIndex]),
+  };
+  return true;
+}
+
+function requestBallEdit(intent) {
+  const m = state.current;
+  const inn = m?.innings?.[m?.currentInnings];
+  if (inn?.needNewBatter) {
+    showToast('Pick the next batter first');
+    return;
+  }
+  if (!inn?.ballLog?.length) {
+    showToast('No balls to edit yet');
+    return;
+  }
+  state.editOverIntent = intent || null;
+  if (state.overEditUnlocked) {
+    if (intent === 'fixLastBall') {
+      const idx = lastBallLogIndex(inn);
+      if (idx < 0 || !openEditBallByIndex(idx)) showToast('No ball to edit');
+    } else {
+      showToast('Tap a ball in the over to edit it');
+    }
+    render();
+    return;
+  }
+  state.modal = { type: 'editOverPin' };
+  render();
+}
+
+function finishEditOverUnlock() {
+  const intent = state.editOverIntent;
+  state.editOverIntent = null;
+  state.overEditUnlocked = true;
+  state.freeUndosUsed = 0;
+  state.showLastOver = false;
+  state.modal = null;
+  render();
+  if (intent === 'fixLastBall') {
+    const inn = state.current?.innings?.[state.current?.currentInnings];
+    const idx = inn ? lastBallLogIndex(inn) : -1;
+    if (idx >= 0 && openEditBallByIndex(idx)) {
+      render();
+      return;
+    }
+  }
+  showToast('Tap a ball to edit, or use Fix last ball');
 }
 
 function isLogIndexEditable(inn, logIndex) {
@@ -2496,16 +2561,19 @@ function renderScore() {
         </div>
       </div>
       ${overStripsHtml}
+      ${!editMode && canEditOver ? `
+      <div class="over-edit-bar">
+        <button type="button" class="over-edit-primary" data-action="edit-over">Edit over</button>
+        ${atOverBreak ? `<button type="button" class="over-edit-secondary" data-action="fix-last-ball">Fix last ball</button>` : ''}
+      </div>` : ''}
+      ${editMode ? `<div class="over-edit-bar over-edit-bar--active">
+        <span class="over-edit-active-label">Tap a ball to change it</span>
+        <button type="button" class="over-edit-secondary" data-action="done-edit-over">Done</button>
+      </div>` : ''}
       ${!editMode && hasLastOver ? `
       <div class="over-strip-nav">
-        <button class="over-toggle" data-action="toggle-last-over">${showingLast ? 'Show this over' : 'View last over'}</button>
+        <button type="button" class="over-toggle" data-action="toggle-last-over">${showingLast ? 'Show this over' : 'View last over'}</button>
       </div>` : ''}
-      ${!editMode ? `<div class="over-strip-nav over-strip-nav--edit">
-        ${canEditOver ? `<button class="over-toggle" data-action="edit-over">Edit over</button>` : ''}
-        ${atOverBreak && canEditOver ? `<span class="over-edit-hint">Fix a ball before the next over</span>` : ''}
-      </div>` : `<div class="over-strip-nav over-strip-nav--edit">
-        <button class="over-toggle" data-action="done-edit-over">Done editing</button>
-      </div>`}
       ${inn.freeHit ? `<div class="free-hit-banner free-hit-banner--compact"><span class="fh-dot"></span>Free hit<span class="fh-dot"></span></div>` : ''}
       <div class="undo-row">
         ${showingLast ? '' : `<button data-action="undo" ${canUndo ? '' : 'disabled'}>${undoActionLabel(m)}</button>`}
@@ -3550,6 +3618,7 @@ function handle(action, dataset) {
       state.detail = null;
       state.overEditUnlocked = false;
       state.freeUndosUsed = 0;
+      state.editOverIntent = null;
       if (state.modal?.type === 'newBatter' || state.modal?.type === 'newBowler') {
         state.modal = null;
       }
@@ -4050,22 +4119,17 @@ function handle(action, dataset) {
       break;
     case 'edit-over':
       if (state.overEditUnlocked) {
-        showToast('Already editing — tap a ball or tap Done editing');
+        showToast('Tap a ball in the over to edit it');
         break;
       }
-      {
-        const m = state.current;
-        const inn = m?.innings?.[m?.currentInnings];
-        if (inn?.needNewBatter) {
-          showToast('Pick the next batter first');
-          break;
-        }
-      }
-      state.modal = { type: 'editOverPin' };
-      render();
+      requestBallEdit(null);
+      break;
+    case 'fix-last-ball':
+      requestBallEdit('fixLastBall');
       break;
     case 'done-edit-over':
       state.overEditUnlocked = false;
+      state.editOverIntent = null;
       state.showLastOver = false;
       render();
       showToast('Ball editing locked');
@@ -4100,6 +4164,7 @@ function handle(action, dataset) {
       render();
       break;
     case 'cancel-edit-over-pin':
+      state.editOverIntent = null;
       state.modal = null;
       render();
       break;
@@ -4321,12 +4386,7 @@ document.addEventListener('DOMContentLoaded', () => {
       const pin = ($('edit-over-pin-input')?.value || '').trim();
       if (!pin) return showToast('Enter the PIN');
       if (pin !== EDIT_OVER_PIN) return showToast('Wrong PIN · try again');
-      state.overEditUnlocked = true;
-      state.freeUndosUsed = 0;
-      state.showLastOver = false;
-      state.modal = null;
-      render();
-      showToast('Tap any ball in this or the previous over to edit');
+      finishEditOverUnlock();
       return;
     }
     if (action === 'confirm-edit-ball') {

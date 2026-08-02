@@ -1922,6 +1922,54 @@ input { background: var(--paper); }
   margin-bottom: 0;
   padding-bottom: 0;
 }
+.over-edit-bar {
+  display: flex;
+  gap: 8px;
+  justify-content: center;
+  align-items: center;
+  flex-wrap: wrap;
+  padding: 10px 16px 4px;
+  margin-top: 2px;
+}
+.over-edit-bar--active {
+  padding-top: 8px;
+  padding-bottom: 8px;
+}
+.over-edit-primary,
+.over-edit-secondary {
+  border: 0;
+  border-radius: 10px;
+  font-size: 13px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  padding: 10px 16px;
+  cursor: pointer;
+  min-height: 44px;
+}
+.over-edit-primary {
+  background: var(--accent);
+  color: var(--accent-ink);
+  box-shadow: 0 2px 12px rgba(215, 255, 43, 0.35);
+  flex: 1 1 140px;
+  max-width: 220px;
+}
+.over-edit-secondary {
+  background: rgba(247, 244, 236, 0.12);
+  color: var(--cream);
+  border: 1px solid rgba(247, 244, 236, 0.28);
+  flex: 1 1 120px;
+  max-width: 180px;
+}
+.over-edit-active-label {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--accent);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  flex: 1 1 auto;
+  text-align: center;
+}
 .over-strip-nav {
   display: flex;
   justify-content: center;
