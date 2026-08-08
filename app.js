@@ -433,14 +433,14 @@ function buildEventBanner(d) {
   return { kind: 'runs', big: `${d.runs} RUN${d.runs > 1 ? 'S' : ''}`, sub: 'Off the bat' };
 }
 
-function showEventBanner(banner, ms = 1800) {
+function showEventBanner(banner, ms = 1800, skipRender = false) {
   state.eventBanner = banner;
   clearTimeout(showEventBanner._t);
   showEventBanner._t = setTimeout(() => {
     state.eventBanner = null;
     document.querySelector('.event-banner')?.remove();
   }, ms);
-  render();
+  if (!skipRender) scheduleRender();
 }
 
 function clearEventBanner() {
@@ -450,7 +450,7 @@ function clearEventBanner() {
 
 function showToast(msg, ms = 1500) {
   state.toast = msg;
-  render();
+  scheduleRender();
   clearTimeout(showToast._t);
   showToast._t = setTimeout(() => {
     state.toast = null;
@@ -463,6 +463,13 @@ function loadHistory() {
   if (dbOn()) return [];
   try { return JSON.parse(localStorage.getItem(STORE_HIST) || '[]'); } catch { return []; }
 }
+function matchForStorage(m) {
+  if (!m) return m;
+  const copy = { ...m };
+  delete copy.undo;
+  return copy;
+}
+
 function saveHistory(arr) {
   if (dbOn()) return;
   try { localStorage.setItem(STORE_HIST, JSON.stringify(arr)); } catch { }
@@ -471,12 +478,17 @@ function loadCurrent() {
   if (dbOn()) return null;
   try { return JSON.parse(localStorage.getItem(STORE_CURRENT) || 'null'); } catch { return null; }
 }
+let localSaveTimer = null;
+
 function saveCurrent(m) {
   if (m) {
-    if (!dbOn()) {
-      try { localStorage.setItem(STORE_CURRENT, JSON.stringify(m)); } catch { }
-    }
-    if (dbOn()) window.QCDB.syncMatch(m);
+    const stored = matchForStorage(m);
+    if (localSaveTimer) clearTimeout(localSaveTimer);
+    localSaveTimer = setTimeout(() => {
+      try { localStorage.setItem(STORE_CURRENT, JSON.stringify(stored)); } catch { }
+      localSaveTimer = null;
+    }, 200);
+    if (dbOn()) window.QCDB.syncMatch(stored);
   } else {
     if (!dbOn()) {
       try { localStorage.removeItem(STORE_CURRENT); } catch { }
@@ -1304,9 +1316,9 @@ function editBallAt(match, logIndex, newSel) {
 function editPickBall(field, value) {
   if (state.modal?.type !== 'editBall') return;
   const b = state.modal.sel;
-  if (field === 'runs' && b.runs === value) { b.runs = null; render(); return; }
-  if (field === 'extra' && b.extra === value) { b.extra = null; render(); return; }
-  if (field === 'wicket' && b.wicket) { b.wicket = false; render(); return; }
+  if (field === 'runs' && b.runs === value) { b.runs = null; scheduleRender(); return; }
+  if (field === 'extra' && b.extra === value) { b.extra = null; scheduleRender(); return; }
+  if (field === 'wicket' && b.wicket) { b.wicket = false; scheduleRender(); return; }
 
   const presentCount = (b.runs != null ? 1 : 0) + (b.extra ? 1 : 0) + (b.wicket ? 1 : 0);
   const targetPresent = field === 'runs' ? (b.runs != null) : field === 'extra' ? !!b.extra : !!b.wicket;
@@ -1317,7 +1329,7 @@ function editPickBall(field, value) {
   if (field === 'runs') b.runs = value;
   else if (field === 'extra') b.extra = value;
   else if (field === 'wicket') b.wicket = true;
-  render();
+  scheduleRender();
 }
 
 function finishEditBall() {
@@ -1332,13 +1344,12 @@ function finishEditBall() {
 }
 
 function snapshotForUndo(m) {
-  return clone({
-    innings: m.innings,
+  return {
+    innings: clone(m.innings),
     currentInnings: m.currentInnings,
     status: m.status,
     result: m.result,
-    squads: m.squads,
-  });
+  };
 }
 
 function pushUndo(match, kind = 'ball') {
@@ -1461,7 +1472,7 @@ function recordBall(match, sel) {
   audio.onBall(d, wasFreeHit);
   if (!inn.ended && d.isLegalBall && inn.score.balls % 6 === 0) audio.onOverEnd();
   persistMatch(match);
-  showEventBanner(buildEventBanner(d));
+  showEventBanner(buildEventBanner(d), 1800, true);
 }
 
 function undoBall(match) {
@@ -1712,11 +1723,32 @@ function afterInningsEnd() {
 }
 
 // ---------- Selection helpers ----------
+function updateScoreInputUI() {
+  const root = $('app');
+  if (!root || state.view !== 'score' || state.shared) return false;
+  const b = state.ball;
+  root.querySelectorAll('[data-action="select-run"]').forEach((btn) => {
+    const n = parseInt(btn.dataset.runs, 10);
+    btn.classList.toggle('selected', b.runs === n);
+  });
+  root.querySelectorAll('[data-action="select-extra"]').forEach((btn) => {
+    btn.classList.toggle('selected', b.extra === btn.dataset.extra);
+  });
+  const wkt = root.querySelector('[data-action="select-wkt"]');
+  if (wkt) wkt.classList.toggle('selected', !!b.wicket);
+  const inn = state.current?.innings?.[state.current?.currentInnings];
+  const selCount = (b.runs != null ? 1 : 0) + (b.extra ? 1 : 0) + (b.wicket ? 1 : 0);
+  const canNext = selCount > 0 && !inn?.needNewBatter && !inn?.needNewBowler && !inn?.ended;
+  const nextBtn = root.querySelector('[data-action="next-ball"]');
+  if (nextBtn) nextBtn.disabled = !canNext;
+  return true;
+}
+
 function pickBall(field, value) {
   const b = state.ball;
-  if (field === 'runs' && b.runs === value) { b.runs = null; render(); return; }
-  if (field === 'extra' && b.extra === value) { b.extra = null; render(); return; }
-  if (field === 'wicket' && b.wicket) { b.wicket = false; render(); return; }
+  if (field === 'runs' && b.runs === value) { b.runs = null; updateScoreInputUI() || scheduleRender(); return; }
+  if (field === 'extra' && b.extra === value) { b.extra = null; updateScoreInputUI() || scheduleRender(); return; }
+  if (field === 'wicket' && b.wicket) { b.wicket = false; updateScoreInputUI() || scheduleRender(); return; }
 
   const presentCount = (b.runs != null ? 1 : 0) + (b.extra ? 1 : 0) + (b.wicket ? 1 : 0);
   const targetPresent = field === 'runs' ? (b.runs != null) : field === 'extra' ? !!b.extra : !!b.wicket;
@@ -1727,7 +1759,7 @@ function pickBall(field, value) {
   if (field === 'runs') b.runs = value;
   else if (field === 'extra') b.extra = value;
   else if (field === 'wicket') b.wicket = true;
-  render();
+  updateScoreInputUI() || scheduleRender();
 }
 
 function commitBall() {
@@ -1846,7 +1878,8 @@ function stopActiveMatchPoll() {
 
 function syncActiveMatchPoll() {
   const m = state.current;
-  if (dbOn() && m?.id && m.status === 'in_progress' && ACTIVE_MATCH_VIEWS.has(state.view)) {
+  const scoringHere = m && state.view === 'score' && canScore(m);
+  if (dbOn() && m?.id && m.status === 'in_progress' && ACTIVE_MATCH_VIEWS.has(state.view) && !scoringHere) {
     startActiveMatchPoll(m.id);
   } else {
     stopActiveMatchPoll();
@@ -1898,7 +1931,22 @@ function restoreScrollPositions(container, tops) {
   });
 }
 
+let renderScheduled = false;
+
+function scheduleRender() {
+  if (renderScheduled) return;
+  renderScheduled = true;
+  requestAnimationFrame(() => {
+    renderScheduled = false;
+    renderNow();
+  });
+}
+
 function render() {
+  scheduleRender();
+}
+
+function renderNow() {
   const root = $('app');
 
   const scrollTops = captureScrollPositions(root);
