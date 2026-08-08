@@ -1476,26 +1476,28 @@ function renderInlineScorePicker(inn) {
   const subtitle = isBatter ? 'Wicket — tap a name below' : 'Over complete — tap the next bowler';
   const canUndoPick = canUndoNow(state.current) && lastUndoKind(state.current) === 'pick';
   return `
-    <div class="score-inline-pick">
+    <div class="score-inline-pick score-inline-pick--panel">
       <div class="score-inline-pick-head">
         <div class="score-inline-pick-title">${esc(title)}</div>
         <div class="score-inline-pick-sub">${esc(subtitle)}</div>
       </div>
-      ${renderPlayerPicker({
-        action: isBatter ? 'pick-new-batter' : 'pick-new-bowler',
-        role: isBatter ? 'batter' : 'bowler',
-        players: rosterForScoringPicker(inn, isBatter ? 'bat' : 'bowl'),
-        inn,
-        mode: isBatter ? 'bat' : 'bowl',
-        blockOnField: isBatter,
-        blockConsecutive: !isBatter,
-        inputId: isBatter ? 'new-batter-input' : 'new-bowler-input',
-        modalManual: sp.manual,
-        selected: sp.pick,
-        compact: true,
-        fluid: true,
-        dark: true,
-      })}
+      <div class="score-inline-pick-scroll">
+        ${renderPlayerPicker({
+          action: isBatter ? 'pick-new-batter' : 'pick-new-bowler',
+          role: isBatter ? 'batter' : 'bowler',
+          players: rosterForScoringPicker(inn, isBatter ? 'bat' : 'bowl'),
+          inn,
+          mode: isBatter ? 'bat' : 'bowl',
+          blockOnField: isBatter,
+          blockConsecutive: !isBatter,
+          inputId: isBatter ? 'new-batter-input' : 'new-bowler-input',
+          modalManual: sp.manual,
+          selected: sp.pick,
+          compact: true,
+          fluid: true,
+          dark: false,
+        })}
+      </div>
       <div class="score-inline-pick-actions">
         ${canUndoPick ? `<button type="button" class="score-inline-pick-undo" data-action="undo">${esc(undoActionLabel(state.current))}</button>` : ''}
         <button type="button" class="score-inline-pick-continue" data-action="${isBatter ? 'confirm-new-batter' : 'confirm-new-bowler'}">Continue</button>
@@ -1786,6 +1788,11 @@ function afterInningsEnd() {
 }
 
 // ---------- Selection helpers ----------
+function scoringPickActive() {
+  const inn = state.current?.innings?.[state.current?.currentInnings];
+  return !!(inn && (inn.needNewBatter || inn.needNewBowler) && !inn.ended);
+}
+
 function updateScoreInputUI() {
   const root = $('app');
   if (!root || state.view !== 'score' || state.shared) return false;
@@ -1808,6 +1815,7 @@ function updateScoreInputUI() {
 }
 
 function pickBall(field, value) {
+  if (scoringPickActive()) return;
   const b = state.ball;
   if (field === 'runs' && b.runs === value) { b.runs = null; updateScoreInputUI() || scheduleRender(); return; }
   if (field === 'extra' && b.extra === value) { b.extra = null; updateScoreInputUI() || scheduleRender(); return; }
@@ -1826,6 +1834,10 @@ function pickBall(field, value) {
 }
 
 function commitBall() {
+  if (scoringPickActive()) {
+    showToast(state.scorePick?.type === 'batter' ? 'Pick the next batter first' : 'Pick the next bowler first');
+    return;
+  }
   const inn = state.current?.innings?.[state.current?.currentInnings];
   if (inn?.needNewBatter) {
     syncScoringModal();
@@ -2646,7 +2658,7 @@ function renderScore() {
       });
 
   return `
-    <div class="screen score-screen">
+    <div class="screen score-screen${pickingPlayer ? ' score-screen--picking' : ''}">
       ${renderTopbar(team, {
         back: 'home',
         right: `${iconBtn('toggle-audio', audio.enabled ? 'volume-up-fill' : 'volume-mute-fill', audio.enabled ? '' : 'muted', 'Toggle sound')}${iconBtn('share', 'box-arrow-up', '', 'Share')}`,
@@ -2677,7 +2689,7 @@ function renderScore() {
           <button type="button" class="strike-swap-btn" data-action="swap-strike" ${canSwap ? '' : 'disabled'} title="Swap striker and non-striker">⇄ Swap strike</button>
         </div>
       </div>
-      ${pickingPlayer ? renderInlineScorePicker(inn) : `${overStripsHtml}
+      ${!pickingPlayer ? `${overStripsHtml}
       ${!editMode && canEditOver ? `
       <div class="over-edit-bar">
         <button type="button" class="over-edit-primary" data-action="edit-over">Edit over</button>
@@ -2690,13 +2702,14 @@ function renderScore() {
       ${!editMode && hasLastOver ? `
       <div class="over-strip-nav">
         <button type="button" class="over-toggle" data-action="toggle-last-over">${showingLast ? 'Show this over' : 'View last over'}</button>
-      </div>` : ''}`}
+      </div>` : ''}
       ${inn.freeHit ? `<div class="free-hit-banner free-hit-banner--compact"><span class="fh-dot"></span>Free hit<span class="fh-dot"></span></div>` : ''}
       <div class="undo-row">
         ${showingLast ? '' : `<button data-action="undo" ${canUndo ? '' : 'disabled'}>${undoActionLabel(m)}</button>`}
+      </div>` : ''}
       </div>
-      </div>
-      <div class="actions score-actions">
+      <div class="actions score-actions${pickingPlayer ? ' score-actions--pick' : ''}">
+      ${pickingPlayer ? renderInlineScorePicker(inn) : `
         <div class="input-cluster">
           <button class="wkt-btn ${b.wicket ? 'selected' : ''}" data-action="select-wkt">WKT</button>
           <div class="extras-panel">
@@ -2716,7 +2729,7 @@ function renderScore() {
         <div class="foot-links d-flex justify-content-center gap-3 py-1">
           <button type="button" class="btn btn-link btn-sm text-muted p-0" data-action="end-innings">End innings</button>
           <button type="button" class="btn btn-link btn-sm text-danger p-0" data-action="abort-show">Abort match</button>
-        </div>
+        </div>`}
       </div>
     </div>
   `;

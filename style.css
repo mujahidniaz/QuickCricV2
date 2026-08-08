@@ -1788,6 +1788,55 @@ input { background: var(--paper); }
   min-height: 0;
   overflow: hidden;
 }
+.score-screen--picking .score-body {
+  flex: 0 1 auto;
+}
+.score-actions--pick {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  padding: 10px 12px calc(8px + env(safe-area-inset-bottom, 0px));
+  background: var(--cream);
+  border-top: 1px solid var(--line);
+}
+.score-actions--pick .score-inline-pick--panel {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  margin: 0;
+  padding: 12px 12px 10px;
+  border-radius: 14px;
+  background: var(--paper);
+  border: 1px solid var(--line-soft);
+  box-shadow: var(--shadow-1);
+}
+.score-actions--pick .score-inline-pick-head {
+  flex: 0 0 auto;
+}
+.score-actions--pick .score-inline-pick-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+  margin: 0 -2px;
+  padding: 0 2px;
+}
+.score-actions--pick .score-inline-pick-actions {
+  flex: 0 0 auto;
+  margin-top: 10px;
+}
+.score-actions--pick .score-inline-pick-title {
+  color: var(--green-mid);
+}
+.score-actions--pick .score-inline-pick-sub {
+  color: var(--ink-soft);
+}
+.score-actions--pick .score-inline-pick-undo {
+  color: var(--ink-soft);
+}
 .score-body {
   flex: 1 1 auto;
   min-height: 0;
@@ -2863,13 +2912,9 @@ input { background: var(--paper); }
 
 .player-picker--role-batter .player-picker-new { color: var(--pick-batter-accent); }
 
-/* Inline picker on score screen — score stays visible above */
-.score-inline-pick {
-  margin: 4px 12px 8px;
-  padding: 10px 12px 12px;
-  border-radius: 14px;
-  background: rgba(255, 255, 255, 0.07);
-  border: 1px solid rgba(255, 255, 255, 0.14);
+/* Inline picker on score screen (bottom panel replaces scoring pad) */
+.score-inline-pick--panel {
+  margin: 0;
 }
 .score-inline-pick-head {
   text-align: center;
