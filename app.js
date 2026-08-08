@@ -369,6 +369,7 @@ const state = {
   overEditUnlocked: false,
   freeUndosUsed: 0,
   editOverIntent: null,
+  scorePick: null,
   inningsManual: { striker: false, nonStriker: false, bowler: false },
   inningsPick: { striker: null, nonStriker: null, bowler: null },
   inningsPickUndo: [],
@@ -829,6 +830,8 @@ function renderPlayerPicker(opts) {
     selected = null,
     modalManual = false,
     compact = true,
+    fluid = true,
+    dark = false,
   } = opts;
   const list = players || [];
   const showManual = manualKey ? state.inningsManual[manualKey] : modalManual;
@@ -853,8 +856,10 @@ function renderPlayerPicker(opts) {
   const toggleField = manualKey ? ` data-field="${manualKey}"` : '';
   const roleClass = role ? ` player-picker--role-${role}` : '';
   const compactClass = compact ? ' player-picker--compact' : '';
+  const fluidClass = fluid ? ' player-picker-grid--fluid' : '';
+  const darkClass = dark ? ' player-picker--dark' : '';
   return `
-    <div class="player-picker${roleClass}${compactClass}">
+    <div class="player-picker${roleClass}${compactClass}${darkClass}">
       ${label ? `
         <div class="player-picker-label">
           <span class="player-picker-dot" aria-hidden="true"></span>
@@ -863,7 +868,7 @@ function renderPlayerPicker(opts) {
         </div>
       ` : ''}
       ${list.length ? `
-        <div class="player-picker-grid">${items}</div>
+        <div class="player-picker-grid${fluidClass}">${items}</div>
       ` : `<p class="player-picker-empty">No saved players — add a name below</p>`}
       ${!showManual ? `
         <button type="button" class="player-picker-new" data-action="${toggleAction}"${toggleField}>
@@ -1434,31 +1439,74 @@ function repairScoringState(inn) {
   return changed;
 }
 
-/** Re-open batter/bowler picker after leaving mid-match (e.g. back to home). */
-function syncScoringModal() {
+/** Inline batter/bowler picker on score screen (replaces over strip). */
+function syncScorePick() {
   const m = state.current;
   if (!m || state.view !== 'score') return;
   const inn = m.innings?.[m.currentInnings];
   if (!inn || inn.ended) {
+    state.scorePick = null;
     if (state.modal?.type === 'newBatter' || state.modal?.type === 'newBowler') state.modal = null;
     return;
   }
   if (repairScoringState(inn)) persistMatch(m);
   if (inn.needNewBatter) {
-    state.modal = {
-      type: 'newBatter',
-      manual: state.modal?.type === 'newBatter' ? !!state.modal.manual : false,
-      pick: state.modal?.type === 'newBatter' ? state.modal.pick || null : null,
+    state.scorePick = {
+      type: 'batter',
+      manual: state.scorePick?.type === 'batter' ? !!state.scorePick.manual : false,
+      pick: state.scorePick?.type === 'batter' ? state.scorePick.pick || null : null,
     };
   } else if (inn.needNewBowler) {
-    state.modal = {
-      type: 'newBowler',
-      manual: state.modal?.type === 'newBowler' ? !!state.modal.manual : false,
-      pick: state.modal?.type === 'newBowler' ? state.modal.pick || null : null,
+    state.scorePick = {
+      type: 'bowler',
+      manual: state.scorePick?.type === 'bowler' ? !!state.scorePick.manual : false,
+      pick: state.scorePick?.type === 'bowler' ? state.scorePick.pick || null : null,
     };
-  } else if (state.modal?.type === 'newBatter' || state.modal?.type === 'newBowler') {
-    state.modal = null;
+  } else {
+    state.scorePick = null;
   }
+  if (state.modal?.type === 'newBatter' || state.modal?.type === 'newBowler') state.modal = null;
+}
+
+function renderInlineScorePicker(inn) {
+  const sp = state.scorePick;
+  if (!sp) return '';
+  const isBatter = sp.type === 'batter';
+  const title = isBatter ? 'Pick next batter' : 'Pick next bowler';
+  const subtitle = isBatter ? 'Wicket — tap a name below' : 'Over complete — tap the next bowler';
+  const canUndoPick = canUndoNow(state.current) && lastUndoKind(state.current) === 'pick';
+  return `
+    <div class="score-inline-pick">
+      <div class="score-inline-pick-head">
+        <div class="score-inline-pick-title">${esc(title)}</div>
+        <div class="score-inline-pick-sub">${esc(subtitle)}</div>
+      </div>
+      ${renderPlayerPicker({
+        action: isBatter ? 'pick-new-batter' : 'pick-new-bowler',
+        role: isBatter ? 'batter' : 'bowler',
+        players: rosterForScoringPicker(inn, isBatter ? 'bat' : 'bowl'),
+        inn,
+        mode: isBatter ? 'bat' : 'bowl',
+        blockOnField: isBatter,
+        blockConsecutive: !isBatter,
+        inputId: isBatter ? 'new-batter-input' : 'new-bowler-input',
+        modalManual: sp.manual,
+        selected: sp.pick,
+        compact: true,
+        fluid: true,
+        dark: true,
+      })}
+      <div class="score-inline-pick-actions">
+        ${canUndoPick ? `<button type="button" class="score-inline-pick-undo" data-action="undo">${esc(undoActionLabel(state.current))}</button>` : ''}
+        <button type="button" class="score-inline-pick-continue" data-action="${isBatter ? 'confirm-new-batter' : 'confirm-new-bowler'}">Continue</button>
+      </div>
+    </div>
+  `;
+}
+
+/** @deprecated alias */
+function syncScoringModal() {
+  syncScorePick();
 }
 
 function canUndoNow(match) {
@@ -1528,11 +1576,7 @@ function afterUndoMatch() {
     afterInningsEnd();
     return;
   }
-  if (inn.needNewBatter) {
-    state.modal = { type: 'newBatter', manual: false };
-  } else if (inn.needNewBowler) {
-    state.modal = { type: 'newBowler', manual: false };
-  }
+  syncScorePick();
   render();
 }
 
@@ -1724,13 +1768,8 @@ function afterBall() {
   const inn = state.current.innings[state.current.currentInnings];
   if (inn.ended) {
     afterInningsEnd();
-  } else if (inn.needNewBatter) {
-    state.modal = { type: 'newBatter', manual: false };
-    render();
-  } else if (inn.needNewBowler) {
-    state.modal = { type: 'newBowler', manual: false };
-    render();
   } else {
+    syncScorePick();
     render();
   }
 }
@@ -1990,7 +2029,7 @@ function renderNow() {
 
   let html = '';
   let view = state.shared ? 'view' : state.view;
-  if (view === 'score') syncScoringModal();
+  if (view === 'score') syncScorePick();
   switch (view) {
     case 'home': html = renderHome(); break;
     case 'setup': html = renderSetup(); break;
@@ -2047,13 +2086,13 @@ function renderNow() {
         try { el.setSelectionRange(selStart, selEnd); } catch { }
       }
     }
-  } else if (state.modal?.type === 'newBatter') {
+  } else if (state.scorePick?.type === 'batter') {
     try {
       $('new-batter-input')?.focus({ preventScroll: true });
     } catch {
       $('new-batter-input')?.focus();
     }
-  } else if (state.modal?.type === 'newBowler') {
+  } else if (state.scorePick?.type === 'bowler') {
     try {
       $('new-bowler-input')?.focus({ preventScroll: true });
     } catch {
@@ -2591,8 +2630,9 @@ function renderScore() {
   const overBallCount = overBalls.length;
   const canEditOver = !inn.ended && inn.ballLog.length > 0;
   const atOverBreak = inn.score.balls > 0 && inn.score.balls % 6 === 0 && !inn.ended;
-  const editMode = state.overEditUnlocked;
-  const overStripsHtml = editMode
+  const editMode = state.overEditUnlocked && !inn.needNewBatter && !inn.needNewBowler;
+  const pickingPlayer = inn.needNewBatter || inn.needNewBowler;
+  const overStripsHtml = !pickingPlayer && editMode
     ? editableOverNumbers(inn).map((overNo) => renderOverStrip(inn, overNo, {
         editable: true,
         label: overNo === liveOver ? 'This over · tap a ball' : `Over ${overNo + 1} · tap a ball`,
@@ -2637,7 +2677,7 @@ function renderScore() {
           <button type="button" class="strike-swap-btn" data-action="swap-strike" ${canSwap ? '' : 'disabled'} title="Swap striker and non-striker">⇄ Swap strike</button>
         </div>
       </div>
-      ${overStripsHtml}
+      ${pickingPlayer ? renderInlineScorePicker(inn) : `${overStripsHtml}
       ${!editMode && canEditOver ? `
       <div class="over-edit-bar">
         <button type="button" class="over-edit-primary" data-action="edit-over">Edit over</button>
@@ -2650,7 +2690,7 @@ function renderScore() {
       ${!editMode && hasLastOver ? `
       <div class="over-strip-nav">
         <button type="button" class="over-toggle" data-action="toggle-last-over">${showingLast ? 'Show this over' : 'View last over'}</button>
-      </div>` : ''}
+      </div>` : ''}`}
       ${inn.freeHit ? `<div class="free-hit-banner free-hit-banner--compact"><span class="fh-dot"></span>Free hit<span class="fh-dot"></span></div>` : ''}
       <div class="undo-row">
         ${showingLast ? '' : `<button data-action="undo" ${canUndo ? '' : 'disabled'}>${undoActionLabel(m)}</button>`}
@@ -3547,42 +3587,6 @@ function renderModal() {
   if (!state.modal) return '';
   if (state.modal.type === 'abort') return renderAbortModal();
   if (state.modal.type === 'install') return renderInstallModal();
-  if (state.modal.type === 'newBatter') {
-    const inn = state.current.innings[state.current.currentInnings];
-    return renderBsSheet('Next batter', 'A wicket fell. Pick a batter or add a new name.', `
-      ${renderPlayerPicker({
-        action: 'pick-new-batter',
-        role: 'batter',
-        players: rosterForScoringPicker(inn, 'bat'),
-        inn,
-        mode: 'bat',
-        blockOnField: true,
-        inputId: 'new-batter-input',
-        modalManual: state.modal.manual,
-        selected: state.modal.pick,
-      })}
-    `, `${canUndoNow(state.current) && lastUndoKind(state.current) === 'pick'
-      ? `<button type="button" class="btn btn-outline-secondary w-100 mb-2" data-action="undo">${esc(undoActionLabel(state.current))}</button>`
-      : ''}<button type="button" class="btn btn-primary btn-lg w-100" data-action="confirm-new-batter">Continue</button>`);
-  }
-  if (state.modal.type === 'newBowler') {
-    const inn = state.current.innings[state.current.currentInnings];
-    return renderBsSheet('Next bowler', 'Over complete. Pick the next bowler.', `
-      ${renderPlayerPicker({
-        action: 'pick-new-bowler',
-        role: 'bowler',
-        players: rosterForScoringPicker(inn, 'bowl'),
-        inn,
-        mode: 'bowl',
-        blockConsecutive: true,
-        inputId: 'new-bowler-input',
-        modalManual: state.modal.manual,
-        selected: state.modal.pick,
-      })}
-    `, `${canUndoNow(state.current) && lastUndoKind(state.current) === 'pick'
-      ? `<button type="button" class="btn btn-outline-secondary w-100 mb-2" data-action="undo">${esc(undoActionLabel(state.current))}</button>`
-      : ''}<button type="button" class="btn btn-primary btn-lg w-100" data-action="confirm-new-bowler">Continue</button>`);
-  }
   if (state.modal.type === 'editOverPin') {
     return renderBsSheet('Edit overs', 'Enter the PIN, then tap any ball in this over or the previous over to change it.', `
       <label class="form-label" for="edit-over-pin-input">PIN</label>
@@ -3698,6 +3702,7 @@ function handle(action, dataset) {
       state.overEditUnlocked = false;
       state.freeUndosUsed = 0;
       state.editOverIntent = null;
+      state.scorePick = null;
       if (state.modal?.type === 'newBatter' || state.modal?.type === 'newBowler') {
         state.modal = null;
       }
@@ -4106,9 +4111,9 @@ function handle(action, dataset) {
         break;
       }
       if (action === 'pick-new-batter') {
-        if (!state.modal || state.modal.type !== 'newBatter') break;
-        state.modal.pick = { name: dataset.playerName, id: dataset.playerId || null };
-        state.modal.manual = false;
+        if (!state.scorePick || state.scorePick.type !== 'batter') break;
+        state.scorePick.pick = { name: dataset.playerName, id: dataset.playerId || null };
+        state.scorePick.manual = false;
         const input = $('new-batter-input');
         if (input) {
           input.value = dataset.playerName || '';
@@ -4116,9 +4121,9 @@ function handle(action, dataset) {
         }
         render();
       } else if (action === 'pick-new-bowler') {
-        if (!state.modal || state.modal.type !== 'newBowler') break;
-        state.modal.pick = { name: dataset.playerName, id: dataset.playerId || null };
-        state.modal.manual = false;
+        if (!state.scorePick || state.scorePick.type !== 'bowler') break;
+        state.scorePick.pick = { name: dataset.playerName, id: dataset.playerId || null };
+        state.scorePick.manual = false;
         const input = $('new-bowler-input');
         if (input) {
           input.value = dataset.playerName || '';
@@ -4137,7 +4142,10 @@ function handle(action, dataset) {
       break;
     }
     case 'toggle-modal-manual':
-      if (state.modal) {
+      if (state.scorePick) {
+        state.scorePick.manual = !state.scorePick.manual;
+        render();
+      } else if (state.modal) {
         state.modal.manual = !state.modal.manual;
         render();
       }
@@ -4566,24 +4574,24 @@ document.addEventListener('DOMContentLoaded', () => {
     }
     if (action === 'confirm-new-batter') {
       const inn = state.current.innings[state.current.currentInnings];
-      const pick = state.modal?.pick;
+      const pick = state.scorePick?.type === 'batter' ? state.scorePick.pick : null;
       const v = pick?.name || $('new-batter-input')?.value || '';
       const pid = pick?.id || $('new-batter-input')?.dataset.playerId || null;
       if (!v.trim()) return showToast('Pick a batter or type a name');
       if (!addBatter(inn, v, pid)) return;
       persistMatch(state.current);
-      state.modal = inn.needNewBowler ? { type: 'newBowler', manual: false, pick: null } : null;
+      syncScorePick();
       render();
       return;
     }
     if (action === 'confirm-new-bowler') {
-      const pick = state.modal?.pick;
+      const pick = state.scorePick?.type === 'bowler' ? state.scorePick.pick : null;
       const v = pick?.name || $('new-bowler-input')?.value || '';
       const pid = pick?.id || $('new-bowler-input')?.dataset.playerId || null;
       if (!v.trim()) return showToast('Pick a bowler or type a name');
       if (!addBowler(state.current.innings[state.current.currentInnings], v, pid)) return;
       persistMatch(state.current);
-      state.modal = null;
+      syncScorePick();
       render();
       return;
     }

@@ -2695,16 +2695,34 @@ input { background: var(--paper); }
   font-size: 11px;
   font-weight: 700;
   color: var(--ink);
-  max-width: 52%;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  text-align: right;
+  word-break: break-word;
 }
 .player-picker-grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 5px;
   margin-bottom: 4px;
+}
+.player-picker-grid--fluid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+.player-picker-grid--fluid .player-picker-chip {
+  flex: 0 1 auto;
+  width: auto;
+  min-width: 3.5rem;
+  max-width: 100%;
+  min-height: 0;
+  padding: 6px 9px;
+}
+.player-picker-grid--fluid .player-picker-chip-name {
+  white-space: normal;
+  overflow: visible;
+  text-overflow: unset;
+  word-break: break-word;
+  font-size: clamp(10px, 2.6vw, 12px);
 }
 .player-picker-chip {
   display: flex;
@@ -2725,11 +2743,18 @@ input { background: var(--paper); }
   font-weight: 700;
   font-size: 11px;
   color: var(--ink);
-  line-height: 1.15;
+  line-height: 1.2;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   width: 100%;
+}
+.player-picker-grid--fluid .player-picker-chip-name {
+  white-space: normal;
+  overflow: visible;
+  text-overflow: unset;
+  word-break: break-word;
+  width: auto;
 }
 .player-picker-chip-note {
   font-size: 8px;
@@ -2835,6 +2860,87 @@ input { background: var(--paper); }
   box-shadow: 0 0 0 1px var(--pick-batter-accent);
 }
 .player-picker--role-batter .player-picker-new { color: var(--pick-batter-accent); }
+
+.player-picker--role-batter .player-picker-new { color: var(--pick-batter-accent); }
+
+/* Inline picker on score screen — score stays visible above */
+.score-inline-pick {
+  margin: 4px 12px 8px;
+  padding: 10px 12px 12px;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.07);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+}
+.score-inline-pick-head {
+  text-align: center;
+  margin-bottom: 8px;
+}
+.score-inline-pick-title {
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--accent);
+}
+.score-inline-pick-sub {
+  font-size: 11px;
+  color: rgba(247, 244, 236, 0.62);
+  margin-top: 2px;
+}
+.score-inline-pick-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 8px;
+}
+.score-inline-pick-undo {
+  border: 0;
+  background: transparent;
+  color: rgba(247, 244, 236, 0.75);
+  font-size: 11px;
+  font-weight: 700;
+  padding: 4px;
+  cursor: pointer;
+}
+.score-inline-pick-continue {
+  border: 0;
+  border-radius: 10px;
+  background: var(--accent);
+  color: var(--accent-ink);
+  font-size: 13px;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  padding: 11px 14px;
+  cursor: pointer;
+  box-shadow: 0 2px 12px rgba(215, 255, 43, 0.28);
+}
+.score-screen .player-picker--dark.player-picker--compact {
+  background: transparent;
+  border: 0;
+  padding: 0;
+  margin-bottom: 0;
+}
+.score-screen .player-picker--dark .player-picker-label-text {
+  color: rgba(247, 244, 236, 0.72);
+}
+.score-screen .player-picker--dark .player-picker-picked {
+  color: var(--cream);
+}
+.score-screen .player-picker--dark .player-picker-new {
+  color: rgba(247, 244, 236, 0.72);
+}
+.score-screen .player-picker--dark .player-picker-input {
+  background: rgba(255, 255, 255, 0.1);
+  border-color: rgba(255, 255, 255, 0.2);
+  color: var(--cream);
+}
+.score-screen .player-picker--dark.player-picker--role-bowler .player-picker-chip {
+  background: rgba(244, 241, 255, 0.92);
+}
+.score-screen .player-picker--dark.player-picker--role-batter .player-picker-chip {
+  background: rgba(238, 249, 243, 0.92);
+}
 
 @media (min-width: 380px) {
   .player-picker-grid {

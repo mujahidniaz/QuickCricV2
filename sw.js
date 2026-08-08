@@ -1,5 +1,5 @@
 // Bump this on every deploy so clients pick up the new service worker.
-const CACHE = 'quickcric-v71';
+const CACHE = 'quickcric-v72';
 const ASSETS = [
   './',
   'index.html',
