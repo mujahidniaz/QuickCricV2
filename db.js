@@ -23,7 +23,9 @@
       throw new Error(`DB ${res.status}: ${txt || res.statusText}`);
     }
     if (res.status === 204) return null;
-    return res.json();
+    const text = await res.text();
+    if (!text) return null;
+    return JSON.parse(text);
   }
 
   function toRow(m) {

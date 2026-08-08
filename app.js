@@ -470,13 +470,20 @@ function matchForStorage(m) {
   return copy;
 }
 
+/** Undo is kept in memory only — ensure it exists after cloud/local loads. */
+function normalizeMatch(m) {
+  if (!m) return m;
+  if (!Array.isArray(m.undo)) m.undo = [];
+  return m;
+}
+
 function saveHistory(arr) {
   if (dbOn()) return;
   try { localStorage.setItem(STORE_HIST, JSON.stringify(arr)); } catch { }
 }
 function loadCurrent() {
   if (dbOn()) return null;
-  try { return JSON.parse(localStorage.getItem(STORE_CURRENT) || 'null'); } catch { return null; }
+  try { return normalizeMatch(JSON.parse(localStorage.getItem(STORE_CURRENT) || 'null')); } catch { return null; }
 }
 let localSaveTimer = null;
 
@@ -813,6 +820,7 @@ function renderPlayerPicker(opts) {
     players,
     inn = null,
     mode = 'bat',
+    role = mode === 'bowl' ? 'bowler' : 'batter',
     manualKey = null,
     inputId = null,
     excludeName = '',
@@ -820,6 +828,7 @@ function renderPlayerPicker(opts) {
     blockConsecutive = false,
     selected = null,
     modalManual = false,
+    compact = true,
   } = opts;
   const list = players || [];
   const showManual = manualKey ? state.inningsManual[manualKey] : modalManual;
@@ -842,21 +851,28 @@ function renderPlayerPicker(opts) {
     ? `toggle-innings-manual`
     : 'toggle-modal-manual';
   const toggleField = manualKey ? ` data-field="${manualKey}"` : '';
+  const roleClass = role ? ` player-picker--role-${role}` : '';
+  const compactClass = compact ? ' player-picker--compact' : '';
   return `
-    <div class="player-picker">
-      ${label ? `<label class="form-label small text-uppercase fw-bold text-muted">${esc(label)}</label>` : ''}
+    <div class="player-picker${roleClass}${compactClass}">
+      ${label ? `
+        <div class="player-picker-label">
+          <span class="player-picker-dot" aria-hidden="true"></span>
+          <span class="player-picker-label-text">${esc(label)}</span>
+          ${selected?.name ? `<span class="player-picker-picked">${esc(selected.name)}</span>` : ''}
+        </div>
+      ` : ''}
       ${list.length ? `
         <div class="player-picker-grid">${items}</div>
-      ` : `<p class="player-picker-empty">No saved players yet — add a new name below.</p>`}
+      ` : `<p class="player-picker-empty">No saved players — add a name below</p>`}
       ${!showManual ? `
-        <button type="button" class="btn btn-sm btn-link player-picker-new px-0" data-action="${toggleAction}"${toggleField}>
-          <i class="bi bi-plus-lg me-1"></i>Add new name
+        <button type="button" class="player-picker-new" data-action="${toggleAction}"${toggleField}>
+          + New name
         </button>
       ` : ''}
       ${inputId ? `
         <div class="player-picker-manual${showManual ? '' : ' d-none'}">
-          <label class="form-label" for="${esc(inputId)}">Type a name</label>
-          <input id="${esc(inputId)}" class="form-control form-control-lg" type="text" placeholder="Enter name…" autocomplete="off" autocapitalize="words" />
+          <input id="${esc(inputId)}" class="form-control form-control-sm player-picker-input" type="text" placeholder="Type name…" autocomplete="off" autocapitalize="words" />
         </div>
       ` : ''}
     </div>
@@ -910,14 +926,20 @@ async function refreshHistory() {
   state.loadingHistory = true;
   try {
     const remote = await window.QCDB.loadMatches();
-    state.history = remote;
+    state.history = remote.map(normalizeMatch);
     try {
       localStorage.removeItem(STORE_HIST);
       localStorage.removeItem(STORE_CURRENT);
     } catch { }
     if (state.current) {
-      const fresh = remote.find(x => x.id === state.current.id);
-      state.current = fresh && fresh.status !== 'completed' ? fresh : null;
+      const fresh = state.history.find(x => x.id === state.current.id);
+      if (!fresh || fresh.status === 'completed') {
+        if (!canScore(state.current)) state.current = null;
+      } else if (!canScore(state.current)) {
+        state.current = fresh;
+      } else {
+        normalizeMatch(state.current);
+      }
     }
     purgeStaleInProgress();
   } catch (err) {
@@ -1354,6 +1376,7 @@ function snapshotForUndo(m) {
 
 function pushUndo(match, kind = 'ball') {
   if (!match) return;
+  normalizeMatch(match);
   const snap = snapshotForUndo(match);
   snap.undoKind = kind;
   match.undo.push(snap);
@@ -1614,6 +1637,7 @@ function startMatch(teamA, teamB, overs, squads = null) {
   state.overEditUnlocked = false;
   state.freeUndosUsed = 0;
   state.current = newMatch(teamA, teamB, overs, 'A', squads);
+  normalizeMatch(state.current);
   if (squads) {
     state.current.tossDone = false;
     if (!enterTossView()) render();
@@ -1860,9 +1884,10 @@ function startActiveMatchPoll(id) {
     try {
       const r = await window.QCDB.loadMatch(id);
       if (!r?.match) return;
-      if (JSON.stringify(r.match) === JSON.stringify(state.current)) return;
-      state.current = r.match;
-      state.history = [r.match, ...state.history.filter(x => x.id !== id)];
+      const remote = normalizeMatch(r.match);
+      if (JSON.stringify(remote) === JSON.stringify(state.current)) return;
+      state.current = remote;
+      state.history = [remote, ...state.history.filter(x => x.id !== id)];
       render();
     } catch { /* ignore */ }
   }, POLL_INTERVAL_MS);
@@ -1878,7 +1903,8 @@ function stopActiveMatchPoll() {
 
 function syncActiveMatchPoll() {
   const m = state.current;
-  const scoringHere = m && state.view === 'score' && canScore(m);
+  // Never pull remote over local while this device is scoring — cloud copy has no undo stack.
+  const scoringHere = m && canScore(m);
   if (dbOn() && m?.id && m.status === 'in_progress' && ACTIVE_MATCH_VIEWS.has(state.view) && !scoringHere) {
     startActiveMatchPoll(m.id);
   } else {
@@ -2474,12 +2500,13 @@ function renderInningsSetup() {
         <h2 class="h4 fw-bold mb-1">${esc(team)} batting</h2>
         ${target ? `<p class="mb-0 opacity-75 small">Chasing ${target} in ${m.overs} overs</p>` : `<p class="mb-0 opacity-75 small">${m.overs} overs to bat</p>`}
       </div>
-      <div class="setup-body flex-grow-1 overflow-auto px-3 py-4">
-        ${state.players.length ? `<p class="small text-muted mb-3">${matchUsesAutoSquads(m)
-          ? `Auto-picked squads — batters from ${esc(m.teams[batting])}, bowlers from ${esc(m.teams[bowling])}`
-          : `${state.players.length} saved players — tap a name for each role`}</p>` : ''}
+      <div class="setup-body flex-grow-1 overflow-auto px-3 py-3 innings-pickers">
+        ${state.players.length ? `<p class="innings-pickers-hint">${matchUsesAutoSquads(m)
+          ? `${esc(m.teams[batting])} bat · ${esc(m.teams[bowling])} bowl`
+          : 'Tap a name for each role'}</p>` : ''}
         ${renderPlayerPicker({
           label: 'Striker',
+          role: 'striker',
           action: 'pick-striker',
           players: rosterForInningsSetup('bat'),
           mode: 'bat',
@@ -2490,6 +2517,7 @@ function renderInningsSetup() {
         })}
         ${renderPlayerPicker({
           label: 'Non-striker',
+          role: 'nonStriker',
           action: 'pick-non-striker',
           players: rosterForInningsSetup('bat'),
           mode: 'bat',
@@ -2500,6 +2528,7 @@ function renderInningsSetup() {
         })}
         ${renderPlayerPicker({
           label: 'Bowler',
+          role: 'bowler',
           action: 'pick-bowler',
           players: rosterForInningsSetup('bowl'),
           mode: 'bowl',
@@ -3523,6 +3552,7 @@ function renderModal() {
     return renderBsSheet('Next batter', 'A wicket fell. Pick a batter or add a new name.', `
       ${renderPlayerPicker({
         action: 'pick-new-batter',
+        role: 'batter',
         players: rosterForScoringPicker(inn, 'bat'),
         inn,
         mode: 'bat',
@@ -3540,6 +3570,7 @@ function renderModal() {
     return renderBsSheet('Next bowler', 'Over complete. Pick the next bowler.', `
       ${renderPlayerPicker({
         action: 'pick-new-bowler',
+        role: 'bowler',
         players: rosterForScoringPicker(inn, 'bowl'),
         inn,
         mode: 'bowl',
@@ -3712,7 +3743,7 @@ function handle(action, dataset) {
         if (dbOn()) {
           try {
             const r = await window.QCDB.loadMatch(matchId);
-            if (r?.match) m = r.match;
+            if (r?.match) m = normalizeMatch(r.match);
           } catch { /* fall back to cached list row */ }
         }
         if (!m) { showToast('Match not found'); return; }

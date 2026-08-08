@@ -50,6 +50,26 @@
   --six: #2f7bff;
   --four: #17d67f;
 
+  --pick-striker-bg: #fff9ec;
+  --pick-striker-border: #f5dfa8;
+  --pick-striker-accent: #c99200;
+  --pick-striker-selected: #fff3d4;
+
+  --pick-nonstriker-bg: #eef9f3;
+  --pick-nonstriker-border: #bfe8d0;
+  --pick-nonstriker-accent: #1a9660;
+  --pick-nonstriker-selected: #dff5ea;
+
+  --pick-bowler-bg: #f4f1ff;
+  --pick-bowler-border: #d5ccf5;
+  --pick-bowler-accent: #6f5dc7;
+  --pick-bowler-selected: #ebe6ff;
+
+  --pick-batter-bg: #eef9f3;
+  --pick-batter-border: #bfe8d0;
+  --pick-batter-accent: #1a9660;
+  --pick-batter-selected: #dff5ea;
+
   --radius-sm: 10px;
   --radius: 16px;
   --radius-lg: 24px;
@@ -2630,63 +2650,197 @@ input { background: var(--paper); }
 .team-pick-bar { flex-direction: column; gap: 8px; }
 .team-pick-bar .btn-ghost { order: 2; }
 
-/* Player chips in scoring */
-.player-picker { margin-bottom: 1.1rem; }
+.setup-body { padding: 16px 14px 12px; display: flex; flex-direction: column; gap: 10px; flex: 1; overflow-y: auto; }
+.innings-pickers { gap: 8px; }
+.innings-pickers-hint {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+  margin: 0 0 4px;
+  text-align: center;
+}
+
+/* Player chips — compact, color-coded by role */
+.player-picker { margin-bottom: 0.5rem; }
+.player-picker--compact {
+  padding: 8px 10px;
+  border-radius: 12px;
+  background: var(--paper);
+  border: 1px solid var(--line-soft);
+}
+.player-picker-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 6px;
+  min-height: 20px;
+}
+.player-picker-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.player-picker-label-text {
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink-soft);
+}
+.player-picker-picked {
+  margin-left: auto;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--ink);
+  max-width: 52%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .player-picker-grid {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 0.5rem;
-  margin-bottom: 0.35rem;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 5px;
+  margin-bottom: 4px;
 }
 .player-picker-chip {
   display: flex;
   flex-direction: column;
-  align-items: flex-start;
-  gap: 0.15rem;
-  text-align: left;
-  padding: 0.7rem 0.75rem;
-  background: var(--paper);
-  border: 1.5px solid var(--line-soft);
-  border-radius: var(--radius-sm);
-  box-shadow: var(--shadow-1);
-  min-height: 52px;
-  transition: border-color 0.15s, transform 0.15s;
-}
-.player-picker-chip:active:not(:disabled) { transform: scale(0.98); }
-.player-picker-chip.is-selected {
-  border-color: var(--green-mid);
-  background: rgba(19, 93, 64, 0.08);
-  box-shadow: 0 0 0 1px rgba(19, 93, 64, 0.15);
-}
-.player-picker-chip.is-disabled {
-  opacity: 0.55;
+  align-items: center;
+  justify-content: center;
+  gap: 1px;
+  text-align: center;
+  padding: 6px 4px;
+  min-height: 34px;
   background: var(--line-soft);
-  cursor: not-allowed;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  transition: border-color 0.12s, background 0.12s, transform 0.12s;
 }
+.player-picker-chip:active:not(:disabled) { transform: scale(0.97); }
 .player-picker-chip-name {
   font-weight: 700;
-  font-size: 0.9rem;
+  font-size: 11px;
   color: var(--ink);
-  line-height: 1.2;
+  line-height: 1.15;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  width: 100%;
 }
 .player-picker-chip-note {
-  font-size: 0.65rem;
-  font-weight: 700;
+  font-size: 8px;
+  font-weight: 800;
   text-transform: uppercase;
-  letter-spacing: 0.04em;
+  letter-spacing: 0.03em;
   color: var(--ink-faint);
+  line-height: 1;
+}
+.player-picker-chip.is-disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 .player-picker-empty {
-  font-size: 0.85rem;
+  font-size: 11px;
   color: var(--ink-faint);
-  margin: 0 0 0.35rem;
+  margin: 0 0 4px;
+  text-align: center;
 }
 .player-picker-new {
-  font-weight: 700;
-  color: var(--green-mid);
-  text-decoration: none;
+  display: inline-block;
+  border: 0;
+  background: transparent;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--ink-soft);
+  padding: 2px 0 0;
+  cursor: pointer;
 }
-.player-picker-manual { margin-top: 0.35rem; }
+.player-picker-input {
+  margin-top: 4px;
+  font-size: 14px;
+  border-radius: 8px;
+}
+.player-picker-manual { margin-top: 0; }
+
+/* Striker — soft amber */
+.player-picker--role-striker.player-picker--compact {
+  background: var(--pick-striker-bg);
+  border-color: var(--pick-striker-border);
+}
+.player-picker--role-striker .player-picker-dot { background: var(--pick-striker-accent); }
+.player-picker--role-striker .player-picker-chip {
+  background: rgba(255, 255, 255, 0.72);
+  border-color: var(--pick-striker-border);
+}
+.player-picker--role-striker .player-picker-chip.is-selected {
+  background: var(--pick-striker-selected);
+  border-color: var(--pick-striker-accent);
+  box-shadow: 0 0 0 1px var(--pick-striker-accent);
+}
+.player-picker--role-striker .player-picker-new { color: var(--pick-striker-accent); }
+
+/* Non-striker — soft mint */
+.player-picker--role-nonStriker.player-picker--compact {
+  background: var(--pick-nonstriker-bg);
+  border-color: var(--pick-nonstriker-border);
+}
+.player-picker--role-nonStriker .player-picker-dot { background: var(--pick-nonstriker-accent); }
+.player-picker--role-nonStriker .player-picker-chip {
+  background: rgba(255, 255, 255, 0.72);
+  border-color: var(--pick-nonstriker-border);
+}
+.player-picker--role-nonStriker .player-picker-chip.is-selected {
+  background: var(--pick-nonstriker-selected);
+  border-color: var(--pick-nonstriker-accent);
+  box-shadow: 0 0 0 1px var(--pick-nonstriker-accent);
+}
+.player-picker--role-nonStriker .player-picker-new { color: var(--pick-nonstriker-accent); }
+
+/* Bowler — soft lavender */
+.player-picker--role-bowler.player-picker--compact {
+  background: var(--pick-bowler-bg);
+  border-color: var(--pick-bowler-border);
+}
+.player-picker--role-bowler .player-picker-dot { background: var(--pick-bowler-accent); }
+.player-picker--role-bowler .player-picker-chip {
+  background: rgba(255, 255, 255, 0.72);
+  border-color: var(--pick-bowler-border);
+}
+.player-picker--role-bowler .player-picker-chip.is-selected {
+  background: var(--pick-bowler-selected);
+  border-color: var(--pick-bowler-accent);
+  box-shadow: 0 0 0 1px var(--pick-bowler-accent);
+}
+.player-picker--role-bowler .player-picker-new { color: var(--pick-bowler-accent); }
+
+/* Mid-match batter pick — soft mint (same as non-striker) */
+.player-picker--role-batter.player-picker--compact {
+  background: var(--pick-batter-bg);
+  border-color: var(--pick-batter-border);
+}
+.player-picker--role-batter .player-picker-dot { background: var(--pick-batter-accent); }
+.player-picker--role-batter .player-picker-chip {
+  background: rgba(255, 255, 255, 0.72);
+  border-color: var(--pick-batter-border);
+}
+.player-picker--role-batter .player-picker-chip.is-selected {
+  background: var(--pick-batter-selected);
+  border-color: var(--pick-batter-accent);
+  box-shadow: 0 0 0 1px var(--pick-batter-accent);
+}
+.player-picker--role-batter .player-picker-new { color: var(--pick-batter-accent); }
+
+@media (min-width: 380px) {
+  .player-picker-grid {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+}
 
 .player-chips-block { margin-bottom: 8px; }
 .player-chips-label { font-size: 11px; color: var(--ink-faint); margin-bottom: 6px; text-transform: uppercase; letter-spacing: 0.04em; }
