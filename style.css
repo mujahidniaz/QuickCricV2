@@ -1645,6 +1645,9 @@ input { background: var(--paper); }
 /* ===== Admin ===== */
 .admin-screen { background: var(--cream); }
 .admin-body { padding-bottom: 1.5rem; }
+.admin-card + .admin-card {
+  margin-top: 1rem;
+}
 .admin-card {
   background: var(--paper);
   border: 1px solid var(--line-soft);
@@ -2158,7 +2161,9 @@ input { background: var(--paper); }
 .stats .row.stats-actions {
   grid-column: 1 / -1;
   display: flex;
+  flex-wrap: wrap;
   justify-content: center;
+  gap: 6px;
   padding-top: 2px;
 }
 .strike-swap-btn {
@@ -2174,6 +2179,11 @@ input { background: var(--paper); }
 }
 .strike-swap-btn:active { background: rgba(255, 255, 255, 0.22); }
 .strike-swap-btn[disabled] { opacity: 0.35; }
+.strike-swap-btn--rh {
+  color: #fde68a;
+  border-color: rgba(253, 230, 138, 0.45);
+  background: rgba(253, 230, 138, 0.12);
+}
 
 /* Action panel */
 .actions {

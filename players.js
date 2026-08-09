@@ -891,6 +891,95 @@
     return save(players);
   }
 
+  /** Players who batted or bowled in a match (for admin reassign UI). */
+  function listMatchParticipants(match, players) {
+    const out = new Map();
+    const add = (line) => {
+      if (!line?.name) return;
+      const id = line.playerId || findByName(players, line.name)?.id || null;
+      const key = id || `n:${normalizeName(line.name)}`;
+      if (!out.has(key)) out.set(key, { id, name: line.name.trim() });
+    };
+    for (const inn of match.innings || []) {
+      for (const b of inn.batters || []) add(b);
+      for (const b of inn.bowlers || []) add(b);
+    }
+    return [...out.values()].sort((a, b) =>
+      a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }));
+  }
+
+  /**
+   * Move one player's batting/bowling in a single match to another profile.
+   * Both players stay on the roster; career stats are rebuilt from all completed matches.
+   */
+  function reassignPlayerInMatch(players, matchId, sourceId, sourceName, targetId, matches) {
+    if (!matchId) {
+      return { players, matches, changedMatchIds: [], error: 'Pick a match' };
+    }
+    if (!targetId) {
+      return { players, matches, changedMatchIds: [], error: 'Pick who actually played' };
+    }
+    if (sourceId && sourceId === targetId) {
+      return { players, matches, changedMatchIds: [], error: 'Choose two different players' };
+    }
+    const target = findById(players, targetId);
+    if (!target) {
+      return { players, matches, changedMatchIds: [], error: 'Correct player not found' };
+    }
+    let resolvedSourceId = sourceId || null;
+    let resolvedSourceName = (sourceName || '').trim();
+    if (resolvedSourceId) {
+      const source = findById(players, resolvedSourceId);
+      if (!source) {
+        return { players, matches, changedMatchIds: [], error: 'Wrong player not found' };
+      }
+      resolvedSourceName = source.name;
+    } else if (!resolvedSourceName) {
+      return { players, matches, changedMatchIds: [], error: 'Pick who was scored wrongly' };
+    }
+    if (normalizeName(resolvedSourceName) === normalizeName(target.name)) {
+      return { players, matches, changedMatchIds: [], error: 'Choose two different players' };
+    }
+
+    const match = (matches || []).find(m => m?.id === matchId);
+    if (!match) {
+      return { players, matches, changedMatchIds: [], error: 'Match not found' };
+    }
+
+    const copy = cloneMatch(match);
+    if (!rewritePlayerInMatch(
+      copy,
+      resolvedSourceId,
+      resolvedSourceName,
+      targetId,
+      target.name,
+    )) {
+      return {
+        players,
+        matches,
+        changedMatchIds: [],
+        error: `${resolvedSourceName} did not appear in that match`,
+      };
+    }
+
+    if (copy.status === 'completed') {
+      copy.awards = computeAwards(copy, players);
+    }
+
+    const updatedMatches = (matches || []).map(m => (m.id === matchId ? copy : m));
+    const nextPlayers = rebuildAllStatsFromMatches(players, updatedMatches);
+
+    return {
+      players: nextPlayers,
+      matches: updatedMatches,
+      changedMatchIds: [matchId],
+      error: null,
+      targetName: target.name,
+      sourceName: resolvedSourceName,
+      matchLabel: `${match.teams?.A || 'A'} vs ${match.teams?.B || 'B'}`,
+    };
+  }
+
   /**
    * Merge source into target: rewrite all matches, drop source, rebuild career stats from completed matches.
    */
@@ -966,6 +1055,8 @@
     computeAwards,
     applyMatchStats,
     mergePlayersInto,
+    reassignPlayerInMatch,
+    listMatchParticipants,
     rebuildAllStatsFromMatches,
     matchPerformanceScore,
   };

@@ -376,6 +376,8 @@ const state = {
   playersTab: 'roster',
   adminUnlocked: false,
   adminMerge: { sourceId: '', targetId: '' },
+  adminReassign: { matchId: '', sourceKey: '', targetId: '' },
+  adminMatches: null,
   matchAvailability: { ids: [] },
   tossCoin: { phase: 'idle', result: null },
 };
@@ -551,6 +553,7 @@ async function runPlayerMerge(sourceId, targetId) {
   const res = window.QCPlayers.mergePlayersInto(state.players, sourceId, targetId, matches);
   if (res.error) return res;
   state.players = res.players;
+  savePlayersList(res.players);
   applyMergedMatches(res.matches, res.changedMatchIds);
   if (state.playerDetail?.id === sourceId) {
     state.playerDetail = playerById(targetId);
@@ -559,6 +562,70 @@ async function runPlayerMerge(sourceId, targetId) {
     state.playerDetail = playerById(state.playerDetail.id);
   }
   state.adminMerge = { sourceId: '', targetId: '' };
+  return res;
+}
+
+function adminMatchList() {
+  const byId = new Map();
+  for (const m of state.adminMatches || []) byId.set(m.id, m);
+  for (const m of state.history) byId.set(m.id, m);
+  if (state.current) byId.set(state.current.id, state.current);
+  return [...byId.values()].sort((a, b) => (b.startedAt || 0) - (a.startedAt || 0));
+}
+
+function adminMatchLabel(m) {
+  const teams = `${m.teams?.A || 'A'} vs ${m.teams?.B || 'B'}`;
+  const when = fmtDate(m.startedAt || Date.now());
+  const tag = m.status === 'completed' ? '' : ' · in progress';
+  return `${teams} · ${when}${tag}`;
+}
+
+function adminReassignSourceOptions(match, selectedKey) {
+  if (!match || !window.QCPlayers?.listMatchParticipants) {
+    return '<option value="">— Select match first —</option>';
+  }
+  const parts = window.QCPlayers.listMatchParticipants(match, state.players);
+  const head = '<option value="">— Select —</option>';
+  const rows = parts.map((p) => {
+    const key = p.id || `n:${p.name.toLowerCase()}`;
+    return `<option value="${esc(key)}"${key === selectedKey ? ' selected' : ''}>${esc(p.name)}</option>`;
+  }).join('');
+  return head + rows;
+}
+
+function parseAdminReassignSource(sourceKey) {
+  if (!sourceKey) return { sourceId: null, sourceName: '' };
+  if (sourceKey.startsWith('n:')) {
+    return { sourceId: null, sourceName: sourceKey.slice(2) };
+  }
+  return { sourceId: sourceKey, sourceName: '' };
+}
+
+async function loadAdminMatches() {
+  state.adminMatches = await allMatchesForStats();
+}
+
+async function runMatchPlayerReassign(matchId, sourceKey, targetId) {
+  if (!window.QCPlayers?.reassignPlayerInMatch) return { error: 'Reassign not available' };
+  const matches = state.adminMatches || await allMatchesForStats();
+  const { sourceId, sourceName } = parseAdminReassignSource(sourceKey);
+  const res = window.QCPlayers.reassignPlayerInMatch(
+    state.players,
+    matchId,
+    sourceId,
+    sourceName,
+    targetId,
+    matches,
+  );
+  if (res.error) return res;
+  state.players = res.players;
+  savePlayersList(res.players);
+  applyMergedMatches(res.matches, res.changedMatchIds);
+  if (state.playerDetail) {
+    state.playerDetail = playerById(state.playerDetail.id);
+  }
+  state.adminReassign = { matchId: '', sourceKey: '', targetId: '' };
+  state.adminMatches = res.matches;
   return res;
 }
 
@@ -787,6 +854,7 @@ function innPlayerMatch(b, player) {
 }
 
 function batterOutInInnings(inn, player) {
+  if (batterNotOutOnField(inn, player)) return false;
   return inn.batters.some(b => b.out && innPlayerMatch(b, player));
 }
 
@@ -1134,10 +1202,6 @@ function openEditBallByIndex(logIndex) {
 function requestBallEdit(intent) {
   const m = state.current;
   const inn = m?.innings?.[m?.currentInnings];
-  if (inn?.needNewBatter) {
-    showToast('Pick the next batter first');
-    return;
-  }
   if (!inn?.ballLog?.length) {
     showToast('No balls to edit yet');
     return;
@@ -1190,6 +1254,42 @@ function findBowlerIdx(inn, name) {
   return inn.bowlers.findIndex(b => b.name.toLowerCase() === key);
 }
 
+/** Drop stale out flags after undo / edit-over replay (e.g. wicket removed but batter still marked out). */
+function reconcileDismissals(inn) {
+  if (!inn) return false;
+  let changed = false;
+
+  if (!inn.needNewBatter) {
+    for (const idx of [inn.striker, inn.nonStriker]) {
+      const b = inn.batters[idx];
+      if (b?.out && b.dismissal === 'out') {
+        b.out = false;
+        b.dismissal = null;
+        if (inn.score.wickets > 0) inn.score.wickets -= 1;
+        changed = true;
+      }
+    }
+  }
+
+  let dismissals = inn.batters.filter(b => b.out && b.dismissal === 'out').length;
+  while (dismissals > inn.score.wickets) {
+    let cleared = false;
+    for (let i = inn.batters.length - 1; i >= 0; i--) {
+      const b = inn.batters[i];
+      if (b.out && b.dismissal === 'out' && i !== inn.striker && i !== inn.nonStriker) {
+        b.out = false;
+        b.dismissal = null;
+        dismissals -= 1;
+        changed = true;
+        cleared = true;
+        break;
+      }
+    }
+    if (!cleared) break;
+  }
+  return changed;
+}
+
 function ensureBowlerByName(inn, match, name) {
   const idx = findBowlerIdx(inn, name);
   if (idx >= 0) {
@@ -1203,10 +1303,21 @@ function ensureBowlerByName(inn, match, name) {
   inn.needNewBowler = false;
 }
 
-function addReplayBatter(inn, match, template) {
+function addIncomingBatter(inn, match, name, playerId = null) {
+  const trimmed = (name || '').trim();
+  if (!trimmed) return;
+  const key = trimmed.toLowerCase();
+  const onCrease = (idx) => idx === inn.striker || idx === inn.nonStriker;
+  const liveIdx = inn.batters.findIndex(
+    (b, i) => !b.out && b.name.toLowerCase() === key && onCrease(i),
+  );
+  if (liveIdx >= 0) {
+    inn.needNewBatter = false;
+    return;
+  }
   const idx = inn.batters.length;
-  const pid = ensurePlayerOnSide(match, inn.batting, template.name, template.playerId);
-  inn.batters.push(newBatter(template.name, pid));
+  const pid = ensurePlayerOnSide(match, inn.batting, trimmed, playerId);
+  inn.batters.push(newBatter(trimmed, pid));
   if (inn.batters[inn.striker]?.out) inn.striker = idx;
   else if (inn.batters[inn.nonStriker]?.out) inn.nonStriker = idx;
   else inn.striker = idx;
@@ -1298,7 +1409,6 @@ function replayInningsBallLog(match, inningsIdx, entries, editIndex, editSel) {
   inn.batters.push(newBatter(oldInn.batters[1].name, oldInn.batters[1].playerId));
   inn.bowlers.push(newBowler(oldInn.bowlers[0].name, oldInn.bowlers[0].playerId));
 
-  let nextBatterFromOld = 2;
   const newLog = [];
 
   for (let i = 0; i < entries.length; i++) {
@@ -1306,8 +1416,8 @@ function replayInningsBallLog(match, inningsIdx, entries, editIndex, editSel) {
     const entry = entries[i];
     const sel = (i === editIndex && editSel) ? editSel : selFromLogEntry(entry);
 
-    if (inn.needNewBatter && nextBatterFromOld < oldInn.batters.length) {
-      addReplayBatter(inn, match, oldInn.batters[nextBatterFromOld++]);
+    if (inn.needNewBatter && entry.batter) {
+      addIncomingBatter(inn, match, entry.batter);
     }
     if (inn.needNewBowler || findBowlerIdx(inn, entry.bowler) !== inn.currentBowler) {
       ensureBowlerByName(inn, match, entry.bowler);
@@ -1317,6 +1427,7 @@ function replayInningsBallLog(match, inningsIdx, entries, editIndex, editSel) {
   }
 
   inn.ballLog = newLog;
+  reconcileDismissals(inn);
   match.innings[inningsIdx] = inn;
   if (inn.ended) {
     if (match.currentInnings === 1) {
@@ -1408,6 +1519,7 @@ function undoActionLabel(match) {
   const kind = lastUndoKind(match);
   if (kind === 'pick') return '↶ Undo player pick';
   if (kind === 'swap') return '↶ Undo swap strike';
+  if (kind === 'retire') return '↶ Undo retire hurt';
   if (kind === 'innings-start') return '↶ Undo start innings';
   if (kind === 'ball-edit') return '↶ Undo ball edit';
   return '↶ Undo last ball';
@@ -1431,7 +1543,7 @@ function undoWouldLeaveCurrentOver(match) {
 
 function repairScoringState(inn) {
   if (!inn || inn.ended) return false;
-  let changed = false;
+  let changed = reconcileDismissals(inn);
   const st = inn.striker;
   const ns = inn.nonStriker;
   const atStriker = inn.batters[st];
@@ -1439,13 +1551,6 @@ function repairScoringState(inn) {
 
   if (atStriker?.out || atNonStriker?.out) {
     if (!inn.needNewBatter) { inn.needNewBatter = true; changed = true; }
-    const offCrease = inn.batters.findIndex((b, i) => !b.out && i !== st && i !== ns);
-    if (offCrease >= 0) {
-      if (atStriker?.out) inn.striker = offCrease;
-      else if (atNonStriker?.out) inn.nonStriker = offCrease;
-      inn.needNewBatter = false;
-      changed = true;
-    }
   }
   return changed;
 }
@@ -1485,7 +1590,14 @@ function renderInlineScorePicker(inn) {
   if (!sp) return '';
   const isBatter = sp.type === 'batter';
   const title = isBatter ? 'Pick next batter' : 'Pick next bowler';
-  const subtitle = isBatter ? 'Wicket — tap a name below' : 'Over complete — tap the next bowler';
+  const creaseOut = inn.batters[inn.striker]?.out || inn.batters[inn.nonStriker]?.out;
+  const retiredHurt = creaseOut && (
+    inn.batters[inn.striker]?.dismissal === 'retired hurt' ||
+    inn.batters[inn.nonStriker]?.dismissal === 'retired hurt'
+  );
+  const subtitle = isBatter
+    ? (retiredHurt ? 'Retired hurt — tap a name below' : 'Wicket — tap a name below')
+    : 'Over complete — tap the next bowler';
   const canUndoPick = canUndoNow(state.current) && lastUndoKind(state.current) === 'pick';
   return `
     <div class="score-inline-pick score-inline-pick--panel">
@@ -1527,19 +1639,23 @@ function syncScoringModal() {
 function canUndoNow(match) {
   if (!match?.undo?.length) return false;
   const kind = lastUndoKind(match);
-  if (kind === 'pick' || kind === 'swap' || kind === 'innings-start' || kind === 'ball-edit') return true;
+  if (kind === 'pick' || kind === 'swap' || kind === 'retire' || kind === 'innings-start' || kind === 'ball-edit') return true;
   if (kind !== 'ball') return false;
 
   const inn = match.innings?.[match.currentInnings];
   if (!inn) return false;
 
-  // Over complete or wicket pending — never free-undo the last ball.
-  if (inn.needNewBowler || inn.needNewBatter) {
-    return state.overEditUnlocked && undoWouldLeaveCurrentOver(match);
+  const overOk = undoWouldLeaveCurrentOver(match);
+  if (inn.needNewBatter) {
+    if (state.overEditUnlocked) return overOk;
+    return state.freeUndosUsed < FREE_UNDO && overOk;
+  }
+  if (inn.needNewBowler) {
+    return state.overEditUnlocked ? overOk : false;
   }
 
-  if (state.overEditUnlocked) return undoWouldLeaveCurrentOver(match);
-  return state.freeUndosUsed < FREE_UNDO && undoWouldLeaveCurrentOver(match);
+  if (state.overEditUnlocked) return overOk;
+  return state.freeUndosUsed < FREE_UNDO && overOk;
 }
 
 function recordBall(match, sel) {
@@ -1587,12 +1703,29 @@ function afterUndoMatch() {
     render();
     return;
   }
+  if (reconcileDismissals(inn)) persistMatch(m);
   if (inn.ended) {
     afterInningsEnd();
     return;
   }
   syncScorePick();
   render();
+}
+
+function retireHurt(match, end) {
+  const inn = match?.innings?.[match.currentInnings];
+  if (!inn || inn.ended || inn.needNewBatter || inn.needNewBowler) return false;
+  const idx = end === 'non' ? inn.nonStriker : inn.striker;
+  const b = inn.batters[idx];
+  if (!b || b.out) return false;
+
+  pushUndo(match, 'retire');
+  state.freeUndosUsed = 0;
+  b.out = true;
+  b.dismissal = 'retired hurt';
+  inn.needNewBatter = true;
+  persistMatch(match);
+  return true;
 }
 
 function swapStrike(match) {
@@ -2348,6 +2481,7 @@ function renderAdmin() {
   const sorted = [...state.players].sort((a, b) =>
     a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }));
   const { sourceId, targetId } = state.adminMerge;
+  const { matchId, sourceKey, targetId: reassignTargetId } = state.adminReassign;
   const optionHtml = (selectedId) => {
     const head = '<option value="">— Select —</option>';
     const rows = sorted.map(p =>
@@ -2355,10 +2489,37 @@ function renderAdmin() {
     return head + rows;
   };
   const canMerge = sourceId && targetId && sourceId !== targetId;
+  const matches = adminMatchList();
+  const selectedMatch = matches.find(m => m.id === matchId) || null;
+  const matchOptions = matches.length
+    ? `<option value="">— Select —</option>${matches.map(m =>
+      `<option value="${esc(m.id)}"${m.id === matchId ? ' selected' : ''}>${esc(adminMatchLabel(m))}</option>`).join('')}`
+    : '<option value="">No saved matches yet</option>';
+  const canReassign = (() => {
+    if (!matchId || !sourceKey || !reassignTargetId) return false;
+    const { sourceId, sourceName } = parseAdminReassignSource(sourceKey);
+    if (sourceId && sourceId === reassignTargetId) return false;
+    const target = playerById(reassignTargetId);
+    if (!sourceId && target && sourceName.toLowerCase() === target.name.toLowerCase()) return false;
+    return true;
+  })();
   return `
     <div class="screen d-flex flex-column admin-screen">
       ${renderTopbar('Admin', { back: 'back-from-admin', ghost: true })}
       <div class="scroll flex-grow-1 overflow-auto admin-body px-3 py-3">
+        <div class="admin-card">
+          <h2 class="admin-card-title">Move match stats</h2>
+          <p class="admin-card-lede">Wrong player picked in one match? Move that match&apos;s runs, wickets, and awards to who actually played. Both profiles stay — only career totals are recalculated.</p>
+          <label class="form-label admin-label" for="admin-reassign-match">Match</label>
+          <select id="admin-reassign-match" class="form-select form-select-sm mb-2">${matchOptions}</select>
+          <label class="form-label admin-label" for="admin-reassign-source">Scored as (wrong)</label>
+          <select id="admin-reassign-source" class="form-select form-select-sm mb-2"${matchId ? '' : ' disabled'}>${adminReassignSourceOptions(selectedMatch, sourceKey)}</select>
+          <label class="form-label admin-label" for="admin-reassign-target">Actually played (correct)</label>
+          <select id="admin-reassign-target" class="form-select form-select-sm mb-3">${optionHtml(reassignTargetId)}</select>
+          <label class="form-label admin-label" for="admin-reassign-pin">Global PIN</label>
+          <input id="admin-reassign-pin" class="form-control form-control-sm pin-input text-center font-monospace fw-bold mb-3" type="text" inputmode="numeric" maxlength="4" placeholder="····" autocomplete="off" enterkeyhint="done" />
+          <button type="button" class="btn btn-primary w-100 fw-bold" data-action="admin-reassign-run" ${canReassign ? '' : 'disabled'}>Move stats &amp; recalculate</button>
+        </div>
         <div class="admin-card">
           <h2 class="admin-card-title">Merge players</h2>
           <p class="admin-card-lede">Scorecards point at the kept player. The duplicate is removed. Stats are rebuilt from all completed matches.</p>
@@ -2686,6 +2847,9 @@ function renderInningsSetup() {
 function creaseRow(inn, idx, needPick) {
   const b = inn.batters[idx];
   if (b?.out) {
+    if (b.dismissal === 'retired hurt') {
+      return { name: `${b.name} · retired hurt`, figs: `${b.runs} (${b.balls})`, pending: needPick };
+    }
     return { name: 'Pick next batter', figs: '—', pending: true };
   }
   if (needPick && !b) {
@@ -2724,6 +2888,9 @@ function renderScore() {
   const canNext = selCount > 0 && !inn.needNewBatter && !inn.needNewBowler && !inn.ended;
   const canUndo = canUndoNow(m);
   const canSwap = !inn.ended && !inn.needNewBatter && !inn.needNewBowler &&
+    inn.batters[inn.striker] && inn.batters[inn.nonStriker] &&
+    !inn.batters[inn.striker].out && !inn.batters[inn.nonStriker].out;
+  const canRetireHurt = !inn.ended && !inn.needNewBatter && !inn.needNewBowler &&
     inn.batters[inn.striker] && inn.batters[inn.nonStriker] &&
     !inn.batters[inn.striker].out && !inn.batters[inn.nonStriker].out;
   const overBallCount = overBalls.length;
@@ -2774,6 +2941,7 @@ function renderScore() {
         </div>
         <div class="row stats-actions">
           <button type="button" class="strike-swap-btn" data-action="swap-strike" ${canSwap ? '' : 'disabled'} title="Swap striker and non-striker">⇄ Swap strike</button>
+          <button type="button" class="strike-swap-btn strike-swap-btn--rh" data-action="retire-hurt" ${canRetireHurt ? '' : 'disabled'} title="Retire a batter hurt (not a wicket)">Retire hurt</button>
         </div>
       </div>
       ${!pickingPlayer ? `${overStripsHtml}
@@ -3790,6 +3958,21 @@ function renderModal() {
       `,
     );
   }
+  if (state.modal.type === 'retireHurt') {
+    const inn = state.current.innings[state.current.currentInnings];
+    const striker = inn.batters[inn.striker];
+    const nonStriker = inn.batters[inn.nonStriker];
+    return renderBsSheet(
+      'Retire hurt',
+      'Who is leaving the field injured?',
+      `<p class="small text-muted mb-0">Does not count as a wicket. Pick a replacement batter next.</p>`,
+      `
+        <button type="button" class="btn btn-outline-dark btn-lg w-100 mb-2" data-action="confirm-retire-hurt" data-end="striker">${esc(striker.name)} · striker</button>
+        <button type="button" class="btn btn-outline-dark btn-lg w-100 mb-2" data-action="confirm-retire-hurt" data-end="non">${esc(nonStriker.name)} · non-striker</button>
+        <button type="button" class="btn btn-outline-secondary w-100" data-action="cancel-retire-hurt">Cancel</button>
+      `,
+    );
+  }
   return '';
 }
 
@@ -3812,7 +3995,7 @@ function handle(action, dataset) {
     case 'admin-open':
       if (state.adminUnlocked) {
         state.view = 'admin';
-        render();
+        loadAdminMatches().then(() => render()).catch(() => render());
       } else {
         state.modal = { type: 'adminPin' };
         render();
@@ -4337,6 +4520,32 @@ function handle(action, dataset) {
       state.modal = null;
       render();
       break;
+    case 'retire-hurt': {
+      const inn = state.current?.innings?.[state.current?.currentInnings];
+      if (!inn || inn.ended || inn.needNewBatter || inn.needNewBowler) {
+        showToast("Can't retire hurt right now");
+        break;
+      }
+      state.modal = { type: 'retireHurt' };
+      render();
+      break;
+    }
+    case 'confirm-retire-hurt': {
+      const end = dataset.end === 'non' ? 'non' : 'striker';
+      if (retireHurt(state.current, end)) {
+        state.modal = null;
+        syncScorePick();
+        showToast('Retired hurt — pick replacement');
+        render();
+      } else {
+        showToast("Can't retire hurt right now");
+      }
+      break;
+    }
+    case 'cancel-retire-hurt':
+      state.modal = null;
+      render();
+      break;
     case 'swap-strike': {
       const m = state.current;
       const inn = m?.innings?.[m.currentInnings];
@@ -4604,7 +4813,30 @@ document.addEventListener('DOMContentLoaded', () => {
       state.adminUnlocked = true;
       state.modal = null;
       state.view = 'admin';
-      render();
+      loadAdminMatches().then(() => render()).catch(() => render());
+      return;
+    }
+    if (action === 'admin-reassign-run') {
+      (async () => {
+        const pin = ($('admin-reassign-pin')?.value || '').trim();
+        if (!pin) return showToast('Enter the global PIN');
+        if (pin !== EDIT_OVER_PIN) return showToast('Wrong PIN · try again');
+        const matchId = $('admin-reassign-match')?.value || state.adminReassign.matchId;
+        const sourceKey = $('admin-reassign-source')?.value || state.adminReassign.sourceKey;
+        const targetId = $('admin-reassign-target')?.value || state.adminReassign.targetId;
+        if (!matchId) return showToast('Pick a match');
+        if (!sourceKey) return showToast('Pick who was scored wrongly');
+        if (!targetId) return showToast('Pick who actually played');
+        showToast('Moving stats…');
+        const res = await runMatchPlayerReassign(matchId, sourceKey, targetId);
+        if (res.error) {
+          showToast(res.error);
+          render();
+          return;
+        }
+        render();
+        showToast(`${res.sourceName} → ${res.targetName} in ${res.matchLabel}`);
+      })();
       return;
     }
     if (action === 'admin-merge-run') {
@@ -4703,6 +4935,9 @@ document.addEventListener('DOMContentLoaded', () => {
     } else if (e.target.id === 'admin-merge-pin') {
       e.preventDefault();
       app.querySelector('[data-action="admin-merge-run"]')?.click();
+    } else if (e.target.id === 'admin-reassign-pin') {
+      e.preventDefault();
+      app.querySelector('[data-action="admin-reassign-run"]')?.click();
     } else if (e.target.id === 'new-player-input') {
       e.preventDefault();
       app.querySelector('[data-action="add-player"]')?.click();
@@ -4720,7 +4955,17 @@ document.addEventListener('DOMContentLoaded', () => {
       render();
       return;
     }
-    if (e.target.id === 'admin-merge-source') {
+    if (e.target.id === 'admin-reassign-match') {
+      state.adminReassign.matchId = e.target.value || '';
+      state.adminReassign.sourceKey = '';
+      render();
+    } else if (e.target.id === 'admin-reassign-source') {
+      state.adminReassign.sourceKey = e.target.value || '';
+      render();
+    } else if (e.target.id === 'admin-reassign-target') {
+      state.adminReassign.targetId = e.target.value || '';
+      render();
+    } else if (e.target.id === 'admin-merge-source') {
       state.adminMerge.sourceId = e.target.value || '';
       render();
     } else if (e.target.id === 'admin-merge-target') {
