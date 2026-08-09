@@ -575,9 +575,17 @@ function adminMatchList() {
 
 function adminMatchLabel(m) {
   const teams = `${m.teams?.A || 'A'} vs ${m.teams?.B || 'B'}`;
-  const when = fmtDate(m.startedAt || Date.now());
+  const d = new Date(m.startedAt || Date.now());
+  const when = d.toLocaleString(undefined, {
+    day: '2-digit',
+    month: 'short',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+  const id = m.id || '—';
   const tag = m.status === 'completed' ? '' : ' · in progress';
-  return `${teams} · ${when}${tag}`;
+  return `${teams} · ${when} · ${id}${tag}`;
 }
 
 function adminReassignSourceOptions(match, selectedKey) {
@@ -3137,6 +3145,7 @@ function renderDetail() {
         <div class="small text-uppercase opacity-75 fw-bold mb-1">${m.status === 'completed' ? 'Result' : 'Status'}</div>
         <div class="winner display-6 fw-bold mb-2">${esc(m.result || 'Match in progress')}</div>
         <div class="opacity-75">${esc(m.teams.A)} vs ${esc(m.teams.B)} · ${fmtDate(m.startedAt)} · ${m.overs} overs</div>
+        <div class="opacity-50 small font-monospace mt-1 user-select-all">${esc(m.id)}</div>
       </div>
       ${renderAwards(m)}
       ${renderTopPerformers(m)}
@@ -4835,7 +4844,8 @@ document.addEventListener('DOMContentLoaded', () => {
           return;
         }
         render();
-        showToast(`${res.sourceName} → ${res.targetName} in ${res.matchLabel}`);
+        const doneMatch = adminMatchList().find(x => x.id === matchId);
+        showToast(`${res.sourceName} → ${res.targetName} · ${adminMatchLabel(doneMatch || { id: matchId, startedAt: Date.now(), teams: {} })}`);
       })();
       return;
     }
