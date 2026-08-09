@@ -1262,21 +1262,15 @@ function findBowlerIdx(inn, name) {
   return inn.bowlers.findIndex(b => b.name.toLowerCase() === key);
 }
 
-/** Drop stale out flags after undo / edit-over replay (e.g. wicket removed but batter still marked out). */
+/** Drop stale out flags after undo / edit-over replay; keep wicket count aligned with ball log. */
 function reconcileDismissals(inn) {
   if (!inn) return false;
   let changed = false;
 
-  if (!inn.needNewBatter) {
-    for (const idx of [inn.striker, inn.nonStriker]) {
-      const b = inn.batters[idx];
-      if (b?.out && b.dismissal === 'out') {
-        b.out = false;
-        b.dismissal = null;
-        if (inn.score.wickets > 0) inn.score.wickets -= 1;
-        changed = true;
-      }
-    }
+  const logWickets = inn.ballLog.filter(e => e.wicket).length;
+  if (inn.score.wickets !== logWickets) {
+    inn.score.wickets = logWickets;
+    changed = true;
   }
 
   let dismissals = inn.batters.filter(b => b.out && b.dismissal === 'out').length;
@@ -1295,7 +1289,34 @@ function reconcileDismissals(inn) {
     }
     if (!cleared) break;
   }
+
+  if (!inn.ended) {
+    const atStriker = inn.batters[inn.striker];
+    const atNonStriker = inn.batters[inn.nonStriker];
+    if ((atStriker?.out || atNonStriker?.out) && !inn.needNewBatter) {
+      inn.needNewBatter = true;
+      changed = true;
+    }
+  }
   return changed;
+}
+
+function syncBowlingFromBallLog(inn) {
+  if (!inn?.ballLog?.length) return;
+  for (const b of inn.bowlers) {
+    b.balls = 0;
+    b.runs = 0;
+    b.wickets = 0;
+  }
+  for (const entry of inn.ballLog) {
+    const idx = findBowlerIdx(inn, entry.bowler);
+    if (idx < 0) continue;
+    const d = decomposeBall(selFromLogEntry(entry));
+    const bowler = inn.bowlers[idx];
+    bowler.runs += d.bowlerConcedes;
+    if (d.isLegalBall) bowler.balls += 1;
+    if (d.wicket) bowler.wickets += 1;
+  }
 }
 
 function ensureBowlerByName(inn, match, name) {
@@ -1397,7 +1418,9 @@ function applyBallCore(inn, sel, match) {
     inn.ended = false;
     inn.endReason = null;
     if (d.isLegalBall && inn.score.balls % 6 === 0) {
-      [inn.striker, inn.nonStriker] = [inn.nonStriker, inn.striker];
+      if (!d.wicket) {
+        [inn.striker, inn.nonStriker] = [inn.nonStriker, inn.striker];
+      }
       inn.needNewBowler = true;
     }
     if (d.wicket) inn.needNewBatter = true;
@@ -1435,6 +1458,7 @@ function replayInningsBallLog(match, inningsIdx, entries, editIndex, editSel) {
   }
 
   inn.ballLog = newLog;
+  syncBowlingFromBallLog(inn);
   reconcileDismissals(inn);
   match.innings[inningsIdx] = inn;
   if (inn.ended) {
@@ -1563,10 +1587,31 @@ function repairScoringState(inn) {
   return changed;
 }
 
+function inningsDriftedFromBallLog(inn) {
+  if (!inn?.ballLog?.length) return false;
+  const logWickets = inn.ballLog.filter(e => e.wicket).length;
+  const bowlerWkts = inn.bowlers.reduce((s, b) => s + (b.wickets || 0), 0);
+  return inn.score.wickets !== logWickets || bowlerWkts !== logWickets;
+}
+
+/** Rebuild innings from ball log when score/bowler wickets drift (e.g. after edit-over). */
+function healInningsIfDrifted(match) {
+  if (!match || state.view !== 'score') return false;
+  const inn = match.innings?.[match.currentInnings];
+  if (!inn || inn.ended || !inningsDriftedFromBallLog(inn)) return false;
+  const entries = clone(inn.ballLog);
+  if (!replayInningsBallLog(match, match.currentInnings, entries, -1, null)) return false;
+  persistMatch(match);
+  return true;
+}
+
 /** Inline batter/bowler picker on score screen (replaces over strip). */
 function syncScorePick() {
   const m = state.current;
   if (!m || state.view !== 'score') return;
+  if (healInningsIfDrifted(m)) {
+    // replay updated inn; continue below
+  }
   const inn = m.innings?.[m.currentInnings];
   if (!inn || inn.ended) {
     state.scorePick = null;
