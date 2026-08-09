@@ -489,18 +489,19 @@ function loadCurrent() {
 let localSaveTimer = null;
 
 function saveCurrent(m) {
+  if (localSaveTimer) {
+    clearTimeout(localSaveTimer);
+    localSaveTimer = null;
+  }
   if (m) {
     const stored = matchForStorage(m);
-    if (localSaveTimer) clearTimeout(localSaveTimer);
     localSaveTimer = setTimeout(() => {
       try { localStorage.setItem(STORE_CURRENT, JSON.stringify(stored)); } catch { }
       localSaveTimer = null;
     }, 200);
     if (dbOn()) window.QCDB.syncMatch(stored);
   } else {
-    if (!dbOn()) {
-      try { localStorage.removeItem(STORE_CURRENT); } catch { }
-    }
+    try { localStorage.removeItem(STORE_CURRENT); } catch { }
     stopActiveMatchPoll();
   }
 }
@@ -1212,6 +1213,15 @@ function addReplayBatter(inn, match, template) {
   inn.needNewBatter = false;
 }
 
+function maxWicketsForInnings(match, inn) {
+  // With squads, all out when n-1 wickets fall (last batter standing ends the innings).
+  if (match && inn && matchUsesSquads(match)) {
+    const n = match.squads?.[inn.batting]?.length || 0;
+    if (n >= 2) return n - 1;
+  }
+  return 10;
+}
+
 function applyBallCore(inn, sel, match) {
   const d = decomposeBall(sel);
   const striker = inn.batters[inn.striker];
@@ -1249,10 +1259,11 @@ function applyBallCore(inn, sel, match) {
 
   const maxBalls = match.overs * 6;
   const target = (match.currentInnings === 1) ? inn.target : null;
+  const maxWickets = maxWicketsForInnings(match, inn);
   let endNow = false;
   let reason = null;
   if (inn.score.balls >= maxBalls) { endNow = true; reason = 'overs'; }
-  else if (inn.score.wickets >= 10) { endNow = true; reason = 'allout'; }
+  else if (inn.score.wickets >= maxWickets) { endNow = true; reason = 'allout'; }
   else if (target != null && inn.score.runs >= target) { endNow = true; reason = 'chased'; }
 
   if (d.extra === 'nb') inn.freeHit = true;
@@ -1450,6 +1461,7 @@ function syncScorePick() {
     return;
   }
   if (repairScoringState(inn)) persistMatch(m);
+  if (maybeEndInningsNoBattersLeft(m, inn)) return;
   if (inn.needNewBatter) {
     state.scorePick = {
       type: 'batter',
@@ -1501,6 +1513,7 @@ function renderInlineScorePicker(inn) {
       <div class="score-inline-pick-actions">
         ${canUndoPick ? `<button type="button" class="score-inline-pick-undo" data-action="undo">${esc(undoActionLabel(state.current))}</button>` : ''}
         <button type="button" class="score-inline-pick-continue" data-action="${isBatter ? 'confirm-new-batter' : 'confirm-new-bowler'}">Continue</button>
+        <button type="button" class="score-inline-pick-end" data-action="end-innings">End innings</button>
       </div>
     </div>
   `;
@@ -1729,18 +1742,25 @@ function endInningsManually() {
 
 function completeMatch() {
   const m = state.current;
+  if (!m) return;
   m.status = 'completed';
   m.endedAt = Date.now();
   m.result = computeResult(m);
   m.undo = [];
 
-  if (window.QCPlayers) {
-    m.awards = window.QCPlayers.computeAwards(m, state.players);
-    state.players = window.QCPlayers.applyMatchStats(m, state.players);
+  try {
+    if (window.QCPlayers) {
+      m.awards = window.QCPlayers.computeAwards(m, state.players);
+      state.players = window.QCPlayers.applyMatchStats(m, state.players);
+    }
+  } catch (err) {
+    console.warn('match awards/stats failed', err);
   }
 
   if (dbOn()) {
-    window.QCDB.upsertMatch(m).catch(err => console.warn('final sync failed', err));
+    // Drop any coalesced in-progress write so it can't overwrite the final result.
+    window.QCDB.cancelSync?.(m.id);
+    window.QCDB.syncMatch(m);
   }
   state.history = [m, ...state.history.filter(x => x.id !== m.id)];
   saveHistory(state.history);
@@ -1748,8 +1768,9 @@ function completeMatch() {
   state.detail = m;
   state.current = null;
   saveCurrent(null);
+  state.scorePick = null;
   state.view = 'result';
-  audio.onMatchWin(m.result);
+  try { audio.onMatchWin(m.result); } catch { /* ignore */ }
 }
 
 function computeResult(m) {
@@ -1767,10 +1788,15 @@ function computeResult(m) {
 }
 
 function afterBall() {
-  const inn = state.current.innings[state.current.currentInnings];
+  const inn = state.current?.innings?.[state.current.currentInnings];
+  if (!inn) { render(); return; }
   if (inn.ended) {
     afterInningsEnd();
   } else {
+    if (maybeEndInningsNoBattersLeft(state.current, inn)) {
+      afterInningsEnd();
+      return;
+    }
     syncScorePick();
     render();
   }
@@ -1778,13 +1804,65 @@ function afterBall() {
 
 function afterInningsEnd() {
   const m = state.current;
+  if (!m) { render(); return; }
   if (m.currentInnings === 0) {
     state.view = 'innings-break';
+    state.scorePick = null;
+    persistMatch(m);
     render();
   } else {
     completeMatch();
     render();
   }
+}
+
+/** If squad batting is exhausted, end the innings instead of stalling on "pick batter". */
+function maybeEndInningsNoBattersLeft(match, inn) {
+  if (!match || !inn || inn.ended || !inn.needNewBatter) return false;
+  if (!matchUsesSquads(match)) return false;
+  const list = rosterForScoringPicker(inn, 'bat');
+  const eligible = list.some(p => !pickerDisabledReason(inn, p, 'bat', { blockOnField: true }));
+  if (eligible) return false;
+  inn.ended = true;
+  inn.endReason = 'allout';
+  inn.needNewBatter = false;
+  inn.needNewBowler = false;
+  persistMatch(match);
+  return true;
+}
+
+/** Open the right screen for an in-progress match; complete it if the last innings already ended. */
+function openMatchScoringView(m) {
+  if (!m) { state.view = 'home'; return; }
+  const pre = viewBeforeFirstInnings(m);
+  if (pre) {
+    state.view = pre;
+    return;
+  }
+  const inn = m.innings?.[m.currentInnings];
+  if (!inn) {
+    state.view = 'innings-setup';
+    return;
+  }
+  if (inn.ended) {
+    state.view = 'score';
+    // Let render/advanceIfInningsEnded finish the break or result transition.
+    return;
+  }
+  state.view = 'score';
+}
+
+/** Heal matches that ended but never transitioned (e.g. stale sync / resume). */
+function advanceIfInningsEnded() {
+  const m = state.current;
+  if (!m || m.status === 'completed') return false;
+  const inn = m.innings?.[m.currentInnings];
+  if (!inn) return false;
+  if (maybeEndInningsNoBattersLeft(m, inn) || inn.ended) {
+    afterInningsEnd();
+    return true;
+  }
+  return false;
 }
 
 // ---------- Selection helpers ----------
@@ -2041,7 +2119,16 @@ function renderNow() {
 
   let html = '';
   let view = state.shared ? 'view' : state.view;
-  if (view === 'score') syncScorePick();
+  if (view === 'score') {
+    // If an innings already ended (resume / stale sync), advance instead of scoring further.
+    if (advanceIfInningsEnded()) return;
+    syncScorePick();
+    if (state.current?.innings?.[state.current.currentInnings]?.ended) {
+      advanceIfInningsEnded();
+      return;
+    }
+    view = state.view;
+  }
   switch (view) {
     case 'home': html = renderHome(); break;
     case 'setup': html = renderSetup(); break;
@@ -3771,13 +3858,7 @@ function handle(action, dataset) {
         state.freeUndosUsed = 0;
         persistMatch(m);
         state.detail = null;
-        const pre = viewBeforeFirstInnings(m);
-        if (pre) state.view = pre;
-        else {
-          const inn = m.innings[m.currentInnings];
-          if (inn.ended && m.currentInnings === 0) state.view = 'innings-break';
-          else state.view = 'score';
-        }
+        openMatchScoringView(m);
         render();
       })();
       break;
@@ -3800,13 +3881,7 @@ function handle(action, dataset) {
         state.current = m;
         persistMatch(m);
       }
-      const pre = viewBeforeFirstInnings(state.current);
-      if (pre) state.view = pre;
-      else {
-        const inn = state.current.innings[state.current.currentInnings];
-        if (inn.ended && state.current.currentInnings === 0) state.view = 'innings-break';
-        else state.view = 'score';
-      }
+      openMatchScoringView(state.current);
       render();
       showToast('You are now scoring');
       break;
@@ -4168,13 +4243,7 @@ function handle(action, dataset) {
       if (!m) { state.view = 'home'; render(); break; }
       state.overEditUnlocked = false;
       state.freeUndosUsed = 0;
-      const pre = viewBeforeFirstInnings(m);
-      if (pre) state.view = pre;
-      else {
-        const inn = m.innings[m.currentInnings];
-        if (inn.ended && m.currentInnings === 0) state.view = 'innings-break';
-        else state.view = 'score';
-      }
+      openMatchScoringView(m);
       render(); break;
     }
     case 'bat-first':
