@@ -132,9 +132,21 @@
   let inFlight = false;
   let timer = null;
   function schedule(m) {
+    if (!m) return;
+    // Never let a stale in-progress write overwrite a completed match.
+    if (pending && pending.id === m.id && pending.status === 'completed' && m.status !== 'completed') {
+      return;
+    }
     pending = m;
     if (timer) return;
     timer = setTimeout(flush, 400);
+  }
+  function cancelSync(id) {
+    if (id && pending?.id === id) pending = null;
+    if (!pending && timer) {
+      clearTimeout(timer);
+      timer = null;
+    }
   }
   async function flush() {
     timer = null;
@@ -189,6 +201,7 @@
     loadMatch,
     deleteMatch,
     syncMatch: schedule,
+    cancelSync,
     upsertPlayers,
     loadPlayers,
     loadPlayersBundle,

@@ -2960,6 +2960,18 @@ input { background: var(--paper); }
   cursor: pointer;
   box-shadow: 0 2px 12px rgba(215, 255, 43, 0.28);
 }
+.score-inline-pick-end {
+  border: 0;
+  border-radius: 10px;
+  background: transparent;
+  color: rgba(247, 244, 236, 0.72);
+  font-size: 12px;
+  font-weight: 700;
+  padding: 8px 12px;
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
 .score-screen .player-picker--dark.player-picker--compact {
   background: transparent;
   border: 0;
