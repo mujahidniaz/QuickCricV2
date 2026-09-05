@@ -461,25 +461,9 @@
     return item.rating || 0;
   }
 
-  /** Snake order: A, B, B, A, A, B, … */
-  function snakePreferredSide(pickIndex) {
-    const round = Math.floor(pickIndex / 2);
-    const inRound = pickIndex % 2;
-    if (round % 2 === 0) return inRound === 0 ? 'A' : 'B';
-    return inRound === 0 ? 'B' : 'A';
-  }
-
-  function sideForCategoryPick(squads, pickIndex, scoreMap) {
-    let preferred = snakePreferredSide(pickIndex);
-    if (!canAddToSquadSide(preferred, squads)) {
-      const other = preferred === 'A' ? 'B' : 'A';
-      if (canAddToSquadSide(other, squads)) preferred = other;
-      else {
-        rebalanceSquadsBySize(squads, scoreMap);
-        preferred = squads.A.length <= squads.B.length ? 'A' : 'B';
-      }
-    }
-    return preferred;
+  function swapSquadPlayers(squads, idA, idB) {
+    squads.A = squads.A.map(id => (id === idA ? idB : id));
+    squads.B = squads.B.map(id => (id === idB ? idA : id));
   }
 
   /** Swap players across teams if it evens a skill total without breaking squad sizes. */
@@ -506,8 +490,84 @@
         }
       }
       if (!best) break;
-      squads.A = squads.A.map(id => (id === best.idA ? best.idB : id));
-      squads.B = squads.B.map(id => (id === best.idB ? best.idA : id));
+      swapSquadPlayers(squads, best.idA, best.idB);
+    }
+  }
+
+  function roleImbalanceScore(squads, scoreMap) {
+    let score = 0;
+    for (const role of ['batsman', 'bowler', 'allrounder']) {
+      const a = squads.A.filter(id => scoreMap.get(id)?.role === role).length;
+      const b = squads.B.filter(id => scoreMap.get(id)?.role === role).length;
+      score += Math.max(0, Math.abs(a - b) - 1);
+    }
+    return score;
+  }
+
+  /** Prefer swaps that even role counts without blowing up overall rating gap. */
+  function improveRoleBalance(squads, scoreMap) {
+    for (let pass = 0; pass < 10; pass++) {
+      const beforeRoles = roleImbalanceScore(squads, scoreMap);
+      if (beforeRoles === 0) break;
+      const rating = squadRatingTotals(squads, scoreMap);
+      const ratingGap = Math.abs(rating.A - rating.B);
+      let best = null;
+      let bestScore = Infinity;
+      for (const idA of squads.A) {
+        for (const idB of squads.B) {
+          const a = scoreMap.get(idA);
+          const b = scoreMap.get(idB);
+          if (!a || !b || a.role === b.role) continue;
+          const nextA = squads.A.map(id => (id === idA ? idB : id));
+          const nextB = squads.B.map(id => (id === idB ? idA : id));
+          const nextSquads = { A: nextA, B: nextB };
+          const roles = roleImbalanceScore(nextSquads, scoreMap);
+          if (roles >= beforeRoles) continue;
+          const nextRating = squadRatingTotals(nextSquads, scoreMap);
+          const nextGap = Math.abs(nextRating.A - nextRating.B);
+          if (nextGap > ratingGap + 18) continue;
+          const score = roles * 1000 + nextGap;
+          if (score < bestScore) {
+            bestScore = score;
+            best = { idA, idB };
+          }
+        }
+      }
+      if (!best) break;
+      swapSquadPlayers(squads, best.idA, best.idB);
+    }
+  }
+
+  function balanceCost(squads, scoreMap) {
+    const gap = (totals) => Math.abs(totals.A - totals.B);
+    return gap(squadSkillTotals(squads, scoreMap, 'batScore'))
+      + gap(squadSkillTotals(squads, scoreMap, 'bowlScore'))
+      + gap(squadRatingTotals(squads, scoreMap)) * 0.75
+      + roleImbalanceScore(squads, scoreMap) * 40;
+  }
+
+  /** Jointly tighten batting, bowling, rating, and role gaps via swaps. */
+  function improveCombinedBalance(squads, scoreMap) {
+    for (let pass = 0; pass < 12; pass++) {
+      const current = balanceCost(squads, scoreMap);
+      let best = null;
+      let bestCost = current;
+      for (const idA of squads.A) {
+        for (const idB of squads.B) {
+          if (!scoreMap.get(idA) || !scoreMap.get(idB)) continue;
+          const nextSquads = {
+            A: squads.A.map(id => (id === idA ? idB : id)),
+            B: squads.B.map(id => (id === idB ? idA : id)),
+          };
+          const nextCost = balanceCost(nextSquads, scoreMap);
+          if (nextCost < bestCost - 0.75) {
+            bestCost = nextCost;
+            best = { idA, idB };
+          }
+        }
+      }
+      if (!best) break;
+      swapSquadPlayers(squads, best.idA, best.idB);
     }
   }
 
@@ -582,25 +642,33 @@
     return Math.random() < 0.5 ? 'A' : 'B';
   }
 
-  function snakeDraftCategory(list, squads, scoreMap, skillKey = 'rating') {
-    const sorted = list.slice().sort((a, b) => {
-      const d = skillValue(b, skillKey) - skillValue(a, skillKey);
-      if (d !== 0) return d;
-      return (Math.random() - 0.5);
+  /**
+   * Draft strongest-first onto the currently weaker/smaller side.
+   * Jitter lets reshuffle produce different (still balanced) lineups.
+   */
+  function draftCategory(list, squads, scoreMap, skillKey = 'rating', jitterAmp = 0) {
+    const decorated = list.map(item => ({
+      item,
+      key: skillValue(item, skillKey) + (jitterAmp ? (Math.random() - 0.5) * 2 * jitterAmp : 0),
+    }));
+    decorated.sort((a, b) => {
+      const d = b.key - a.key;
+      if (Math.abs(d) > 1e-9) return d;
+      return Math.random() - 0.5;
     });
-    sorted.forEach((item, i) => {
-      const side = sideForCategoryPick(squads, i, scoreMap);
+    for (const { item } of decorated) {
+      const side = sideForNextPick(squads, scoreMap);
       squads[side].push(item.id);
-    });
+    }
   }
 
-  function draftBalanced(list, squads, scoreMap, skillKey = 'rating') {
-    snakeDraftCategory(list, squads, scoreMap, skillKey);
+  function draftBalanced(list, squads, scoreMap, skillKey = 'rating', jitterAmp = 0) {
+    draftCategory(list, squads, scoreMap, skillKey, jitterAmp);
   }
 
   /**
    * @param {object[]} players — pool to distribute (e.g. available today)
-   * @param {{ existingSquads?: { A: string[], B: string[] } }} options
+   * @param {{ existingSquads?: { A: string[], B: string[] }, reshuffle?: boolean }} options
    */
   function balanceTeams(players, options = {}) {
     const existing = options.existingSquads || { A: [], B: [] };
@@ -608,6 +676,8 @@
     const taken = new Set([...squads.A, ...squads.B]);
     const pool = (players || []).filter(p => p && !taken.has(p.id));
     const scoreMap = new Map(teamBalanceScores(players || []).map(s => [s.id, s]));
+    // Reshuffle needs real variety; first auto-pick only breaks exact ties.
+    const jitterAmp = options.reshuffle ? 28 : 0;
 
     dedupeSquads(squads);
     rebalanceSquadsBySize(squads, scoreMap);
@@ -617,12 +687,16 @@
       buckets[s.role]?.push(s);
     }
 
-    snakeDraftCategory(buckets.bowler, squads, scoreMap, 'bowlScore');
-    snakeDraftCategory(buckets.batsman, squads, scoreMap, 'batScore');
-    draftBalanced(buckets.allrounder, squads, scoreMap, 'rating');
-    draftBalanced(buckets.unknown, squads, scoreMap, 'rating');
+    // Draft specialists first so each side gets bowling/batting depth, then flex players.
+    draftCategory(buckets.bowler, squads, scoreMap, 'bowlScore', jitterAmp);
+    draftCategory(buckets.batsman, squads, scoreMap, 'batScore', jitterAmp);
+    draftBalanced(buckets.allrounder, squads, scoreMap, 'rating', jitterAmp);
+    draftBalanced(buckets.unknown, squads, scoreMap, 'rating', jitterAmp);
+    improveSkillBalance(squads, scoreMap, 'rating');
     improveSkillBalance(squads, scoreMap, 'batScore');
     improveSkillBalance(squads, scoreMap, 'bowlScore');
+    improveRoleBalance(squads, scoreMap);
+    improveCombinedBalance(squads, scoreMap);
     normalizeSquadSizes(players, squads);
 
     const countRole = (ids, role) =>

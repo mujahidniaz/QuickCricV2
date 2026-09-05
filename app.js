@@ -994,12 +994,31 @@ function applyBalancedSquads(squads) {
   persistMatch(state.current);
 }
 
-function runAutoBalance(existingSquads = null) {
+function squadsKey(squads) {
+  const a = [...(squads?.A || [])].sort().join(',');
+  const b = [...(squads?.B || [])].sort().join(',');
+  return `${a}|${b}`;
+}
+
+function runAutoBalance(existingSquads = null, balanceOpts = {}) {
   const pool = playersAvailableToday();
   if (pool.length < 2) return { error: 'Need at least 2 available players' };
   const fixed = existingSquads || { A: [], B: [] };
-  const res = window.QCPlayers.balanceTeams(pool, { existingSquads: fixed });
+  const res = window.QCPlayers.balanceTeams(pool, { existingSquads: fixed, ...balanceOpts });
   if (!res.error && res.squads) normalizeTeamPickSquads(res.squads);
+  return res;
+}
+
+/** Reshuffle until the lineup changes (or attempts run out). */
+function runReshuffleBalance(prevSquads = null) {
+  const prevKey = prevSquads ? squadsKey(prevSquads) : '';
+  let res = runAutoBalance({ A: [], B: [] }, { reshuffle: true });
+  if (res.error || !prevKey) return res;
+  for (let i = 0; i < 7; i++) {
+    if (squadsKey(res.squads) !== prevKey) return res;
+    res = runAutoBalance({ A: [], B: [] }, { reshuffle: true });
+    if (res.error) return res;
+  }
   return res;
 }
 
@@ -4251,7 +4270,7 @@ function handle(action, dataset) {
         break;
       }
       pushTeamPickUndo();
-      const res = runAutoBalance({ A: [], B: [] });
+      const res = runReshuffleBalance(state.teamPick.squads);
       if (res.error) {
         showToast(res.error);
         break;
