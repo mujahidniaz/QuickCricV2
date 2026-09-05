@@ -666,43 +666,10 @@
     draftCategory(list, squads, scoreMap, skillKey, jitterAmp);
   }
 
-  /**
-   * @param {object[]} players — pool to distribute (e.g. available today)
-   * @param {{ existingSquads?: { A: string[], B: string[] }, reshuffle?: boolean }} options
-   */
-  function balanceTeams(players, options = {}) {
-    const existing = options.existingSquads || { A: [], B: [] };
-    const squads = { A: [...existing.A], B: [...existing.B] };
-    const taken = new Set([...squads.A, ...squads.B]);
-    const pool = (players || []).filter(p => p && !taken.has(p.id));
-    const scoreMap = new Map(teamBalanceScores(players || []).map(s => [s.id, s]));
-    // Reshuffle needs real variety; first auto-pick only breaks exact ties.
-    const jitterAmp = options.reshuffle ? 28 : 0;
-
-    dedupeSquads(squads);
-    rebalanceSquadsBySize(squads, scoreMap);
-
-    const buckets = { bowler: [], batsman: [], allrounder: [], unknown: [] };
-    for (const s of teamBalanceScores(pool)) {
-      buckets[s.role]?.push(s);
-    }
-
-    // Draft specialists first so each side gets bowling/batting depth, then flex players.
-    draftCategory(buckets.bowler, squads, scoreMap, 'bowlScore', jitterAmp);
-    draftCategory(buckets.batsman, squads, scoreMap, 'batScore', jitterAmp);
-    draftBalanced(buckets.allrounder, squads, scoreMap, 'rating', jitterAmp);
-    draftBalanced(buckets.unknown, squads, scoreMap, 'rating', jitterAmp);
-    improveSkillBalance(squads, scoreMap, 'rating');
-    improveSkillBalance(squads, scoreMap, 'batScore');
-    improveSkillBalance(squads, scoreMap, 'bowlScore');
-    improveRoleBalance(squads, scoreMap);
-    improveCombinedBalance(squads, scoreMap);
-    normalizeSquadSizes(players, squads);
-
+  function finalizeSquadSummary(squads, scoreMap) {
     const countRole = (ids, role) =>
       ids.filter(id => scoreMap.get(id)?.role === role).length;
-
-    const summary = {
+    return {
       totalA: squads.A.length,
       totalB: squads.B.length,
       batA: countRole(squads.A, 'batsman'),
@@ -712,8 +679,87 @@
       arA: countRole(squads.A, 'allrounder'),
       arB: countRole(squads.B, 'allrounder'),
     };
+  }
 
-    return { squads, summary, error: null };
+  function assignMissingPlayers(pool, squads, scoreMap) {
+    const assigned = new Set([...squads.A, ...squads.B]);
+    for (const p of pool) {
+      if (!p?.id || assigned.has(p.id)) continue;
+      const side = sideForNextPick(squads, scoreMap);
+      squads[side].push(p.id);
+      assigned.add(p.id);
+    }
+  }
+
+  function draftUnlockedOntoSquads(pool, squads, scoreMap, jitterAmp) {
+    const buckets = { bowler: [], batsman: [], allrounder: [], unknown: [] };
+    for (const s of teamBalanceScores(pool)) {
+      buckets[s.role]?.push(s);
+    }
+    draftCategory(buckets.bowler, squads, scoreMap, 'bowlScore', jitterAmp);
+    draftCategory(buckets.batsman, squads, scoreMap, 'batScore', jitterAmp);
+    draftBalanced(buckets.allrounder, squads, scoreMap, 'rating', jitterAmp);
+    draftBalanced(buckets.unknown, squads, scoreMap, 'rating', jitterAmp);
+    improveSkillBalance(squads, scoreMap, 'rating');
+    improveSkillBalance(squads, scoreMap, 'batScore');
+    improveSkillBalance(squads, scoreMap, 'bowlScore');
+    improveRoleBalance(squads, scoreMap);
+    improveCombinedBalance(squads, scoreMap);
+    assignMissingPlayers(pool, squads, scoreMap);
+  }
+
+  function squadPartitionKey(squads) {
+    const a = [...(squads?.A || [])].slice().sort().join(',');
+    const b = [...(squads?.B || [])].slice().sort().join(',');
+    return `${a}|${b}`;
+  }
+
+  /**
+   * @param {object[]} players — pool to distribute (e.g. available today)
+   * @param {{ existingSquads?: { A: string[], B: string[] }, reshuffle?: boolean, avoidKey?: string }} options
+   */
+  function balanceTeams(players, options = {}) {
+    const existing = options.existingSquads || { A: [], B: [] };
+    const allPlayers = players || [];
+    const scoreMap = new Map(teamBalanceScores(allPlayers).map(s => [s.id, s]));
+    const avoidKey = options.avoidKey || '';
+    const attempts = options.reshuffle ? 8 : 1;
+    const jitterAmp = options.reshuffle ? 28 : 0;
+
+    const candidates = [];
+    for (let i = 0; i < attempts; i++) {
+      const squads = { A: [...existing.A], B: [...existing.B] };
+      dedupeSquads(squads);
+      rebalanceSquadsBySize(squads, scoreMap);
+      const taken = new Set([...squads.A, ...squads.B]);
+      const pool = allPlayers.filter(p => p && !taken.has(p.id));
+
+      draftUnlockedOntoSquads(pool, squads, scoreMap, jitterAmp);
+      normalizeSquadSizes(allPlayers, squads);
+      assignMissingPlayers(pool, squads, scoreMap);
+      rebalanceSquadsBySize(squads, scoreMap);
+
+      if (options.reshuffle && Math.random() < 0.5) {
+        const tmp = squads.A;
+        squads.A = squads.B;
+        squads.B = tmp;
+      }
+
+      candidates.push({
+        squads,
+        cost: balanceCost(squads, scoreMap),
+        key: squadPartitionKey(squads),
+      });
+    }
+
+    const minCost = Math.min(...candidates.map(c => c.cost));
+    let good = candidates.filter(c => c.cost <= minCost + 30);
+    if (avoidKey) {
+      const fresh = good.filter(c => c.key !== avoidKey);
+      if (fresh.length) good = fresh;
+    }
+    const pick = good[Math.floor(Math.random() * good.length)] || candidates[0];
+    return { squads: pick.squads, summary: finalizeSquadSummary(pick.squads, scoreMap), error: null };
   }
 
   function formatBalanceSummary(summary, teamAName, teamBName) {

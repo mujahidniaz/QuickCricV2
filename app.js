@@ -1012,14 +1012,7 @@ function runAutoBalance(existingSquads = null, balanceOpts = {}) {
 /** Reshuffle until the lineup changes (or attempts run out). */
 function runReshuffleBalance(prevSquads = null) {
   const prevKey = prevSquads ? squadsKey(prevSquads) : '';
-  let res = runAutoBalance({ A: [], B: [] }, { reshuffle: true });
-  if (res.error || !prevKey) return res;
-  for (let i = 0; i < 7; i++) {
-    if (squadsKey(res.squads) !== prevKey) return res;
-    res = runAutoBalance({ A: [], B: [] }, { reshuffle: true });
-    if (res.error) return res;
-  }
-  return res;
+  return runAutoBalance({ A: [], B: [] }, { reshuffle: true, avoidKey: prevKey });
 }
 
 async function refreshHistory() {
