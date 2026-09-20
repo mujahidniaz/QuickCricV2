@@ -1795,21 +1795,25 @@ input { background: var(--paper); }
   flex: 0 1 auto;
 }
 .score-actions--pick {
-  flex: 1 1 auto;
+  flex: 0 1 auto;
   display: flex;
   flex-direction: column;
   min-height: 0;
-  padding: 10px 12px calc(8px + env(safe-area-inset-bottom, 0px));
+  max-height: 52vh;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+  padding: 8px 12px calc(8px + env(safe-area-inset-bottom, 0px));
   background: var(--cream);
   border-top: 1px solid var(--line);
 }
 .score-actions--pick .score-inline-pick--panel {
-  flex: 1;
+  flex: 0 1 auto;
   display: flex;
   flex-direction: column;
   min-height: 0;
   margin: 0;
-  padding: 12px 12px 10px;
+  padding: 8px 10px;
   border-radius: 14px;
   background: var(--paper);
   border: 1px solid var(--line-soft);
@@ -1817,15 +1821,37 @@ input { background: var(--paper); }
 }
 .score-actions--pick .score-inline-pick-head {
   flex: 0 0 auto;
+  margin-bottom: 6px;
 }
 .score-actions--pick .score-inline-pick-scroll {
-  flex: 1 1 auto;
+  flex: 0 1 auto;
   min-height: 0;
-  overflow-y: auto;
-  overscroll-behavior: contain;
-  -webkit-overflow-scrolling: touch;
+  overflow: visible;
   margin: 0 -2px;
   padding: 0 2px;
+}
+.score-actions--pick .score-inline-pick-title {
+  font-size: 13px;
+  line-height: 1.2;
+}
+.score-actions--pick .score-inline-pick-sub {
+  font-size: 11px;
+  line-height: 1.25;
+}
+.score-actions--pick .player-picker-chip {
+  padding: 5px 8px;
+  min-height: 0;
+}
+.score-actions--pick .player-picker-chip-name {
+  font-size: 11px;
+  line-height: 1.15;
+}
+.score-actions--pick .player-picker-chip-note {
+  font-size: 8px;
+  line-height: 1.1;
+}
+.score-actions--pick .player-picker-grid--fluid {
+  gap: 4px;
 }
 .score-actions--pick .score-inline-pick-actions {
   flex: 0 0 auto;
@@ -2791,61 +2817,17 @@ input { background: var(--paper); }
   flex-wrap: wrap;
   gap: 5px;
 }
-.player-picker-grid--grouped {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
 .player-picker-filter {
   width: 100%;
   margin-bottom: 6px;
   border-radius: 10px;
-  font-size: 14px;
+  font-size: 13px;
+  padding: 6px 10px;
 }
 .player-picker-filter--setup {
   position: sticky;
   top: 0;
   z-index: 2;
-  background: var(--cream);
-}
-.player-picker-group {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-.player-picker-letter {
-  font-family: var(--font-display);
-  font-size: 11px;
-  font-weight: 800;
-  letter-spacing: 0.12em;
-  color: var(--ink-faint);
-  padding: 2px 2px 0;
-  position: sticky;
-  top: 0;
-  z-index: 1;
-  background: inherit;
-}
-.player-picker-group-chips {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 5px;
-}
-.player-picker-grid--grouped .player-picker-chip {
-  flex: 0 1 auto;
-  width: auto;
-  min-width: 3.5rem;
-  max-width: 100%;
-  min-height: 0;
-  padding: 6px 9px;
-}
-.player-picker-grid--grouped .player-picker-chip-name {
-  white-space: normal;
-  overflow: visible;
-  text-overflow: unset;
-  word-break: break-word;
-  font-size: clamp(10px, 2.6vw, 12px);
-}
-.score-inline-pick-scroll .player-picker-letter {
   background: var(--cream);
 }
 .player-picker-grid--fluid .player-picker-chip {

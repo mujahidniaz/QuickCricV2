@@ -901,22 +901,6 @@ function sortPlayersForPicker(list) {
     a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }));
 }
 
-function groupPlayersByInitial(list) {
-  const sorted = sortPlayersForPicker(list);
-  const groups = [];
-  let letter = '';
-  for (const p of sorted) {
-    const init = (p.name.trim()[0] || '#').toUpperCase();
-    const key = /[A-Z]/i.test(init) ? init.toUpperCase() : '#';
-    if (key !== letter) {
-      letter = key;
-      groups.push({ letter, players: [] });
-    }
-    groups[groups.length - 1].players.push(p);
-  }
-  return groups;
-}
-
 function renderPlayerPickerChip(p, opts) {
   const {
     action, inn, mode, excludeName, blockOnField, blockConsecutive, selected,
@@ -956,7 +940,6 @@ function renderPlayerPicker(opts) {
     dark = false,
     filterText = null,
     showFilter = false,
-    groupByLetter = true,
   } = opts;
   const list = players || [];
   const filter = (filterText != null ? filterText : state.playerPickerFilter || '').trim().toLowerCase();
@@ -965,26 +948,18 @@ function renderPlayerPicker(opts) {
     : list;
   const showManual = manualKey ? state.inningsManual[manualKey] : modalManual;
   const chipOpts = { action, inn, mode, excludeName, blockOnField, blockConsecutive, selected };
-  const useGroups = groupByLetter && !filter && filtered.length >= 8;
-  const groups = useGroups ? groupPlayersByInitial(filtered) : [{ letter: '', players: sortPlayersForPicker(filtered) }];
-  const gridContent = groups.map((g) => {
-    const chips = g.players.map(p => renderPlayerPickerChip(p, chipOpts)).join('');
-    if (!useGroups) return chips;
-    return `
-      <div class="player-picker-group">
-        <div class="player-picker-letter" aria-hidden="true">${esc(g.letter)}</div>
-        <div class="player-picker-group-chips">${chips}</div>
-      </div>`;
-  }).join('');
+  const gridContent = sortPlayersForPicker(filtered)
+    .map(p => renderPlayerPickerChip(p, chipOpts))
+    .join('');
   const toggleAction = manualKey
     ? `toggle-innings-manual`
     : 'toggle-modal-manual';
   const toggleField = manualKey ? ` data-field="${manualKey}"` : '';
   const roleClass = role ? ` player-picker--role-${role}` : '';
   const compactClass = compact ? ' player-picker--compact' : '';
-  const fluidClass = fluid ? ' player-picker-grid--grouped' : '';
+  const fluidClass = fluid ? ' player-picker-grid--fluid' : '';
   const darkClass = dark ? ' player-picker--dark' : '';
-  const wantFilter = showFilter || list.length >= 10;
+  const wantFilter = showFilter && list.length >= 12;
   return `
     <div class="player-picker${roleClass}${compactClass}${darkClass}">
       ${label ? `
@@ -1778,7 +1753,7 @@ function renderInlineScorePicker(inn) {
           compact: true,
           fluid: true,
           dark: false,
-          showFilter: true,
+          showFilter: false,
         })}
       </div>
       <div class="score-inline-pick-actions">
