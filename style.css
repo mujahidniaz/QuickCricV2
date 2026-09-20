@@ -2206,25 +2206,48 @@ input { background: var(--paper); }
   min-width: 0;
 }
 
-.wkt-btn {
-  width: 60px;
-  min-width: 60px;
+.wkt-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
   height: 100%;
   min-height: 72px;
+}
+.wkt-btn,
+.ro-btn {
+  width: 60px;
+  min-width: 60px;
+  flex: 1 1 0;
+  min-height: 34px;
   border-radius: var(--radius);
+  font-size: 13px;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  transition: all 0.15s var(--ease-out);
+}
+.wkt-btn {
   background: var(--danger-soft);
   color: var(--danger);
   border: 2px solid rgba(255, 61, 46, 0.35);
-  font-size: 15px;
-  font-weight: 800;
-  letter-spacing: 0.08em;
-  transition: all 0.15s var(--ease-out);
+}
+.ro-btn {
+  background: rgba(255, 152, 0, 0.12);
+  color: #c2410c;
+  border: 2px solid rgba(255, 152, 0, 0.35);
+  font-size: 12px;
 }
 .wkt-btn.selected {
   background: linear-gradient(135deg, var(--hot) 0%, var(--hot-deep) 100%);
   color: white;
   border-color: transparent;
   box-shadow: var(--shadow-glow-hot);
+  transform: scale(1.02);
+}
+.ro-btn.selected {
+  background: linear-gradient(135deg, #fb923c 0%, #ea580c 100%);
+  color: white;
+  border-color: transparent;
+  box-shadow: 0 4px 14px rgba(234, 88, 12, 0.35);
   transform: scale(1.02);
 }
 
@@ -2767,6 +2790,63 @@ input { background: var(--paper); }
   display: flex;
   flex-wrap: wrap;
   gap: 5px;
+}
+.player-picker-grid--grouped {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.player-picker-filter {
+  width: 100%;
+  margin-bottom: 6px;
+  border-radius: 10px;
+  font-size: 14px;
+}
+.player-picker-filter--setup {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: var(--cream);
+}
+.player-picker-group {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.player-picker-letter {
+  font-family: var(--font-display);
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.12em;
+  color: var(--ink-faint);
+  padding: 2px 2px 0;
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: inherit;
+}
+.player-picker-group-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+.player-picker-grid--grouped .player-picker-chip {
+  flex: 0 1 auto;
+  width: auto;
+  min-width: 3.5rem;
+  max-width: 100%;
+  min-height: 0;
+  padding: 6px 9px;
+}
+.player-picker-grid--grouped .player-picker-chip-name {
+  white-space: normal;
+  overflow: visible;
+  text-overflow: unset;
+  word-break: break-word;
+  font-size: clamp(10px, 2.6vw, 12px);
+}
+.score-inline-pick-scroll .player-picker-letter {
+  background: var(--cream);
 }
 .player-picker-grid--fluid .player-picker-chip {
   flex: 0 1 auto;

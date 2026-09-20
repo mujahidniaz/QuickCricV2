@@ -378,11 +378,14 @@ const state = {
   adminMerge: { sourceId: '', targetId: '' },
   adminReassign: { matchId: '', sourceKey: '', targetId: '' },
   adminMatches: null,
+  playerPickerFilter: '',
   matchAvailability: { ids: [] },
   tossCoin: { phase: 'idle', result: null },
 };
 
-function emptyBall() { return { runs: null, extra: null, wicket: false }; }
+function emptyBall() {
+  return { runs: null, extra: null, wicket: false, runOut: false, runOutEnd: null };
+}
 
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => (
@@ -418,6 +421,7 @@ async function hardReloadApp() {
 function buildEventBanner(d) {
   if (d.wicket) {
     const onExtra = d.extra ? `on a ${d.extra === 'wd' ? 'wide' : d.extra === 'nb' ? 'no ball' : d.extra}` : '';
+    if (d.runOut) return { kind: 'wicket', big: 'RUN OUT!', sub: onExtra || 'Out' };
     return { kind: 'wicket', big: 'WICKET!', sub: onExtra || 'Out' };
   }
   if (d.runs === 6) return { kind: 'six', big: 'SIX!', sub: 'Maximum' };
@@ -757,6 +761,7 @@ function resetInningsPickers() {
   state.inningsManual = { striker: false, nonStriker: false, bowler: false };
   state.inningsPick = { striker: null, nonStriker: null, bowler: null };
   state.inningsPickUndo = [];
+  state.playerPickerFilter = '';
 }
 
 function pushInningsPickUndo() {
@@ -891,6 +896,46 @@ function pickerDisabledReason(inn, player, mode, opts = {}) {
   return null;
 }
 
+function sortPlayersForPicker(list) {
+  return [...(list || [])].sort((a, b) =>
+    a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }));
+}
+
+function groupPlayersByInitial(list) {
+  const sorted = sortPlayersForPicker(list);
+  const groups = [];
+  let letter = '';
+  for (const p of sorted) {
+    const init = (p.name.trim()[0] || '#').toUpperCase();
+    const key = /[A-Z]/i.test(init) ? init.toUpperCase() : '#';
+    if (key !== letter) {
+      letter = key;
+      groups.push({ letter, players: [] });
+    }
+    groups[groups.length - 1].players.push(p);
+  }
+  return groups;
+}
+
+function renderPlayerPickerChip(p, opts) {
+  const {
+    action, inn, mode, excludeName, blockOnField, blockConsecutive, selected,
+  } = opts;
+  const reason = pickerDisabledReason(inn, p, mode, { excludeName, blockOnField, blockConsecutive });
+  const isSelected = selected && (selected.id === p.id ||
+    selected.name?.toLowerCase() === p.name.toLowerCase());
+  return `
+    <button type="button"
+      class="player-picker-chip${isSelected ? ' is-selected' : ''}${reason ? ' is-disabled' : ''}"
+      data-action="${reason ? '' : esc(action)}"
+      data-player-id="${esc(p.id)}"
+      data-player-name="${esc(p.name)}"
+      ${reason ? `disabled title="${esc(reason)}"` : ''}>
+      <span class="player-picker-chip-name">${esc(p.name)}</span>
+      ${reason ? `<span class="player-picker-chip-note">${esc(reason)}</span>` : ''}
+    </button>`;
+}
+
 function renderPlayerPicker(opts) {
   const {
     label,
@@ -909,23 +954,27 @@ function renderPlayerPicker(opts) {
     compact = true,
     fluid = true,
     dark = false,
+    filterText = null,
+    showFilter = false,
+    groupByLetter = true,
   } = opts;
   const list = players || [];
+  const filter = (filterText != null ? filterText : state.playerPickerFilter || '').trim().toLowerCase();
+  const filtered = filter
+    ? list.filter(p => p.name.toLowerCase().includes(filter))
+    : list;
   const showManual = manualKey ? state.inningsManual[manualKey] : modalManual;
-  const items = list.map(p => {
-    const reason = pickerDisabledReason(inn, p, mode, { excludeName, blockOnField, blockConsecutive });
-    const isSelected = selected && (selected.id === p.id ||
-      selected.name?.toLowerCase() === p.name.toLowerCase());
+  const chipOpts = { action, inn, mode, excludeName, blockOnField, blockConsecutive, selected };
+  const useGroups = groupByLetter && !filter && filtered.length >= 8;
+  const groups = useGroups ? groupPlayersByInitial(filtered) : [{ letter: '', players: sortPlayersForPicker(filtered) }];
+  const gridContent = groups.map((g) => {
+    const chips = g.players.map(p => renderPlayerPickerChip(p, chipOpts)).join('');
+    if (!useGroups) return chips;
     return `
-      <button type="button"
-        class="player-picker-chip${isSelected ? ' is-selected' : ''}${reason ? ' is-disabled' : ''}"
-        data-action="${reason ? '' : esc(action)}"
-        data-player-id="${esc(p.id)}"
-        data-player-name="${esc(p.name)}"
-        ${reason ? `disabled title="${esc(reason)}"` : ''}>
-        <span class="player-picker-chip-name">${esc(p.name)}</span>
-        ${reason ? `<span class="player-picker-chip-note">${esc(reason)}</span>` : ''}
-      </button>`;
+      <div class="player-picker-group">
+        <div class="player-picker-letter" aria-hidden="true">${esc(g.letter)}</div>
+        <div class="player-picker-group-chips">${chips}</div>
+      </div>`;
   }).join('');
   const toggleAction = manualKey
     ? `toggle-innings-manual`
@@ -933,8 +982,9 @@ function renderPlayerPicker(opts) {
   const toggleField = manualKey ? ` data-field="${manualKey}"` : '';
   const roleClass = role ? ` player-picker--role-${role}` : '';
   const compactClass = compact ? ' player-picker--compact' : '';
-  const fluidClass = fluid ? ' player-picker-grid--fluid' : '';
+  const fluidClass = fluid ? ' player-picker-grid--grouped' : '';
   const darkClass = dark ? ' player-picker--dark' : '';
+  const wantFilter = showFilter || list.length >= 10;
   return `
     <div class="player-picker${roleClass}${compactClass}${darkClass}">
       ${label ? `
@@ -944,9 +994,12 @@ function renderPlayerPicker(opts) {
           ${selected?.name ? `<span class="player-picker-picked">${esc(selected.name)}</span>` : ''}
         </div>
       ` : ''}
-      ${list.length ? `
-        <div class="player-picker-grid${fluidClass}">${items}</div>
-      ` : `<p class="player-picker-empty">No saved players — add a name below</p>`}
+      ${wantFilter ? `
+        <input type="search" class="form-control form-control-sm player-picker-filter" placeholder="Find player…" value="${esc(filterText != null ? filterText : state.playerPickerFilter || '')}" autocomplete="off" autocapitalize="off" enterkeyhint="search" />
+      ` : ''}
+      ${filtered.length ? `
+        <div class="player-picker-grid${fluidClass}">${gridContent}</div>
+      ` : list.length ? `<p class="player-picker-empty">No names match “${esc(filter)}”</p>` : `<p class="player-picker-empty">No saved players — add a name below</p>`}
       ${!showManual ? `
         <button type="button" class="player-picker-new" data-action="${toggleAction}"${toggleField}>
           + New name
@@ -1135,7 +1188,9 @@ function claimScoring(m) {
 // ---------- Scoring core ----------
 function decomposeBall(sel) {
   const runs = sel.runs ?? 0;
-  const { extra, wicket } = sel;
+  const { extra } = sel;
+  const runOut = !!sel.runOut;
+  const wicket = !!(sel.wicket || runOut);
   let totalRuns, batsmanRuns, bowlerConcedes, isLegalBall, extrasAdd;
   if (extra === 'wd') {
     totalRuns = 1 + runs; batsmanRuns = 0; bowlerConcedes = 1 + runs; isLegalBall = false; extrasAdd = 1 + runs;
@@ -1146,19 +1201,33 @@ function decomposeBall(sel) {
   } else {
     totalRuns = runs; batsmanRuns = runs; bowlerConcedes = runs; isLegalBall = true; extrasAdd = 0;
   }
-  return { runs, extra, wicket, totalRuns, batsmanRuns, bowlerConcedes, isLegalBall, extrasAdd };
+  return {
+    runs, extra, wicket, runOut, runOutEnd: sel.runOutEnd || null,
+    totalRuns, batsmanRuns, bowlerConcedes, isLegalBall, extrasAdd,
+  };
 }
 
 function ballLabel(d) {
   const parts = [];
   if (d.runs) parts.push(d.runs);
   if (d.extra) parts.push(d.extra);
-  if (d.wicket) parts.push('W');
+  if (d.runOut) parts.push('RO');
+  else if (d.wicket) parts.push('W');
   return parts.join('+') || '0';
 }
 
 function selFromLogEntry(entry) {
-  return { runs: entry.runs ?? 0, extra: entry.extra || null, wicket: !!entry.wicket };
+  return {
+    runs: entry.runs ?? 0,
+    extra: entry.extra || null,
+    wicket: !!entry.wicket && !entry.runOut,
+    runOut: !!entry.runOut,
+    runOutEnd: entry.runOutEnd || null,
+  };
+}
+
+function ballSelectionCount(sel) {
+  return (sel.runs != null ? 1 : 0) + (sel.extra ? 1 : 0) + (sel.wicket ? 1 : 0) + (sel.runOut ? 1 : 0);
 }
 
 function liveOverNo(inn) {
@@ -1315,7 +1384,7 @@ function syncBowlingFromBallLog(inn) {
     const bowler = inn.bowlers[idx];
     bowler.runs += d.bowlerConcedes;
     if (d.isLegalBall) bowler.balls += 1;
-    if (d.wicket) bowler.wickets += 1;
+    if (d.wicket && !entry.runOut) bowler.wickets += 1;
   }
 }
 
@@ -1365,7 +1434,10 @@ function maxWicketsForInnings(match, inn) {
 function applyBallCore(inn, sel, match) {
   const d = decomposeBall(sel);
   const striker = inn.batters[inn.striker];
+  const nonStriker = inn.batters[inn.nonStriker];
   const bowler = inn.bowlers[inn.currentBowler];
+  const facedName = striker.name;
+  const otherName = nonStriker?.name || '';
 
   striker.runs += d.batsmanRuns;
   if (d.batsmanRuns === 4) striker.fours += 1;
@@ -1379,11 +1451,16 @@ function applyBallCore(inn, sel, match) {
   inn.score.extras += d.extrasAdd;
   if (d.isLegalBall) inn.score.balls += 1;
 
+  let dismissedName = null;
   if (d.wicket) {
-    striker.out = true;
-    striker.dismissal = 'out';
+    const outEnd = d.runOut ? (d.runOutEnd || 'striker') : 'striker';
+    const outIdx = outEnd === 'non' ? inn.nonStriker : inn.striker;
+    const outBatter = inn.batters[outIdx];
+    outBatter.out = true;
+    outBatter.dismissal = d.runOut ? 'run out' : 'out';
+    dismissedName = outBatter.name;
     inn.score.wickets += 1;
-    bowler.wickets += 1;
+    if (!d.runOut) bowler.wickets += 1;
   }
 
   if (d.runs % 2 === 1) {
@@ -1392,9 +1469,12 @@ function applyBallCore(inn, sel, match) {
 
   const overNo = Math.floor((inn.score.balls - (d.isLegalBall ? 1 : 0)) / 6);
   const logEntry = {
-    runs: d.runs, extra: d.extra, wicket: d.wicket, total: d.totalRuns,
-    label: ballLabel(d), legal: d.isLegalBall, overNo,
-    batter: striker.name, bowler: bowler.name,
+    runs: d.runs, extra: d.extra, wicket: d.wicket, runOut: d.runOut,
+    runOutEnd: d.runOut ? (d.runOutEnd || 'striker') : null,
+    total: d.totalRuns, label: ballLabel(d), legal: d.isLegalBall, overNo,
+    batter: facedName, bowler: bowler.name,
+    strikerName: facedName, nonStrikerName: otherName,
+    dismissed: dismissedName,
   };
 
   const maxBalls = match.overs * 6;
@@ -1479,7 +1559,7 @@ function editBallAt(match, logIndex, newSel) {
   const inn = match.innings[match.currentInnings];
   if (!inn || !isLogIndexEditable(inn, logIndex)) return false;
   const b = newSel;
-  if (b.runs == null && !b.extra && !b.wicket) return false;
+  if (b.runs == null && !b.extra && !b.wicket && !b.runOut) return false;
 
   pushUndo(match, 'ball-edit');
   state.freeUndosUsed = 0;
@@ -1488,6 +1568,8 @@ function editBallAt(match, logIndex, newSel) {
     runs: b.runs ?? 0,
     extra: b.extra || null,
     wicket: !!b.wicket,
+    runOut: !!b.runOut,
+    runOutEnd: b.runOutEnd || null,
   })) return false;
 
   persistMatch(match);
@@ -1500,16 +1582,21 @@ function editPickBall(field, value) {
   if (field === 'runs' && b.runs === value) { b.runs = null; scheduleRender(); return; }
   if (field === 'extra' && b.extra === value) { b.extra = null; scheduleRender(); return; }
   if (field === 'wicket' && b.wicket) { b.wicket = false; scheduleRender(); return; }
+  if (field === 'runOut' && b.runOut) { b.runOut = false; b.runOutEnd = null; scheduleRender(); return; }
 
-  const presentCount = (b.runs != null ? 1 : 0) + (b.extra ? 1 : 0) + (b.wicket ? 1 : 0);
-  const targetPresent = field === 'runs' ? (b.runs != null) : field === 'extra' ? !!b.extra : !!b.wicket;
+  const presentCount = ballSelectionCount(b);
+  const targetPresent = field === 'runs' ? (b.runs != null)
+    : field === 'extra' ? !!b.extra
+      : field === 'wicket' ? !!b.wicket
+        : !!b.runOut;
   if (!targetPresent && presentCount >= 2) {
     showToast('Max 2 selections');
     return;
   }
   if (field === 'runs') b.runs = value;
   else if (field === 'extra') b.extra = value;
-  else if (field === 'wicket') b.wicket = true;
+  else if (field === 'wicket') { b.wicket = true; b.runOut = false; b.runOutEnd = null; }
+  else if (field === 'runOut') { b.runOut = true; b.wicket = false; b.runOutEnd = null; }
   scheduleRender();
 }
 
@@ -1648,8 +1735,14 @@ function renderInlineScorePicker(inn) {
     inn.batters[inn.striker]?.dismissal === 'retired hurt' ||
     inn.batters[inn.nonStriker]?.dismissal === 'retired hurt'
   );
+  const runOutDismissal = creaseOut && (
+    inn.batters[inn.striker]?.dismissal === 'run out' ||
+    inn.batters[inn.nonStriker]?.dismissal === 'run out'
+  );
   const subtitle = isBatter
-    ? (retiredHurt ? 'Retired hurt — tap a name below' : 'Wicket — tap a name below')
+    ? (retiredHurt ? 'Retired hurt — tap a name below'
+      : runOutDismissal ? 'Run out — tap a name below'
+        : 'Wicket — tap a name below')
     : 'Over complete — tap the next bowler';
   const canUndoPick = canUndoNow(state.current) && lastUndoKind(state.current) === 'pick';
   return `
@@ -1673,6 +1766,7 @@ function renderInlineScorePicker(inn) {
           compact: true,
           fluid: true,
           dark: false,
+          showFilter: true,
         })}
       </div>
       <div class="score-inline-pick-actions">
@@ -2070,8 +2164,10 @@ function updateScoreInputUI() {
   });
   const wkt = root.querySelector('[data-action="select-wkt"]');
   if (wkt) wkt.classList.toggle('selected', !!b.wicket);
+  const ro = root.querySelector('[data-action="select-ro"]');
+  if (ro) ro.classList.toggle('selected', !!b.runOut);
   const inn = state.current?.innings?.[state.current?.currentInnings];
-  const selCount = (b.runs != null ? 1 : 0) + (b.extra ? 1 : 0) + (b.wicket ? 1 : 0);
+  const selCount = ballSelectionCount(b);
   const canNext = selCount > 0 && !inn?.needNewBatter && !inn?.needNewBowler && !inn?.ended;
   const nextBtn = root.querySelector('[data-action="next-ball"]');
   if (nextBtn) nextBtn.disabled = !canNext;
@@ -2084,17 +2180,29 @@ function pickBall(field, value) {
   if (field === 'runs' && b.runs === value) { b.runs = null; updateScoreInputUI() || scheduleRender(); return; }
   if (field === 'extra' && b.extra === value) { b.extra = null; updateScoreInputUI() || scheduleRender(); return; }
   if (field === 'wicket' && b.wicket) { b.wicket = false; updateScoreInputUI() || scheduleRender(); return; }
+  if (field === 'runOut' && b.runOut) { b.runOut = false; b.runOutEnd = null; updateScoreInputUI() || scheduleRender(); return; }
 
-  const presentCount = (b.runs != null ? 1 : 0) + (b.extra ? 1 : 0) + (b.wicket ? 1 : 0);
-  const targetPresent = field === 'runs' ? (b.runs != null) : field === 'extra' ? !!b.extra : !!b.wicket;
+  const presentCount = ballSelectionCount(b);
+  const targetPresent = field === 'runs' ? (b.runs != null)
+    : field === 'extra' ? !!b.extra
+      : field === 'wicket' ? !!b.wicket
+        : !!b.runOut;
   if (!targetPresent && presentCount >= 2) {
     showToast('Max 2 selections');
     return;
   }
   if (field === 'runs') b.runs = value;
   else if (field === 'extra') b.extra = value;
-  else if (field === 'wicket') b.wicket = true;
+  else if (field === 'wicket') { b.wicket = true; b.runOut = false; b.runOutEnd = null; }
+  else if (field === 'runOut') { b.runOut = true; b.wicket = false; b.runOutEnd = null; }
   updateScoreInputUI() || scheduleRender();
+}
+
+function finalizeBallCommit(sel) {
+  recordBall(state.current, sel);
+  state.ball = emptyBall();
+  state.showLastOver = false;
+  afterBall();
 }
 
 function commitBall() {
@@ -2116,11 +2224,27 @@ function commitBall() {
     return;
   }
   const b = state.ball;
-  if (b.runs == null && !b.extra && !b.wicket) return;
-  recordBall(state.current, { runs: b.runs ?? 0, extra: b.extra, wicket: b.wicket });
-  state.ball = emptyBall();
-  state.showLastOver = false;
-  afterBall();
+  if (b.runs == null && !b.extra && !b.wicket && !b.runOut) return;
+  const sel = {
+    runs: b.runs ?? 0,
+    extra: b.extra,
+    wicket: b.wicket,
+    runOut: b.runOut,
+    runOutEnd: b.runOutEnd,
+  };
+  if (sel.runOut && !sel.runOutEnd) {
+    const inn = state.current.innings[state.current.currentInnings];
+    state.modal = {
+      type: 'runOutPick',
+      sel,
+      strikerName: inn.batters[inn.striker]?.name || 'Striker',
+      nonStrikerName: inn.batters[inn.nonStriker]?.name || 'Non-striker',
+      source: 'score',
+    };
+    render();
+    return;
+  }
+  finalizeBallCommit(sel);
 }
 
 // ---------- Share + viewer ----------
@@ -2856,6 +2980,9 @@ function renderInningsSetup() {
         ${state.players.length ? `<p class="innings-pickers-hint">${matchUsesAutoSquads(m)
           ? `${esc(m.teams[batting])} bat · ${esc(m.teams[bowling])} bowl`
           : 'Tap a name for each role'}</p>` : ''}
+        ${rosterForInningsSetup('bat').length >= 10 ? `
+          <input type="search" class="form-control form-control-sm player-picker-filter player-picker-filter--setup mb-2" placeholder="Find player…" value="${esc(state.playerPickerFilter || '')}" autocomplete="off" autocapitalize="off" enterkeyhint="search" />
+        ` : ''}
         ${renderPlayerPicker({
           label: 'Striker',
           role: 'striker',
@@ -2866,6 +2993,8 @@ function renderInningsSetup() {
           inputId: 'striker-input',
           excludeName: state.inningsPick.nonStriker?.name || '',
           selected: state.inningsPick.striker,
+          showFilter: false,
+          filterText: state.playerPickerFilter,
         })}
         ${renderPlayerPicker({
           label: 'Non-striker',
@@ -2877,6 +3006,8 @@ function renderInningsSetup() {
           inputId: 'non-striker-input',
           excludeName: state.inningsPick.striker?.name || '',
           selected: state.inningsPick.nonStriker,
+          showFilter: false,
+          filterText: state.playerPickerFilter,
         })}
         ${renderPlayerPicker({
           label: 'Bowler',
@@ -2887,6 +3018,8 @@ function renderInningsSetup() {
           manualKey: 'bowler',
           inputId: 'bowler-input',
           selected: state.inningsPick.bowler,
+          showFilter: false,
+          filterText: state.playerPickerFilter,
         })}
       </div>
       <div class="undo-row px-3 pb-2">
@@ -2937,7 +3070,7 @@ function renderScore() {
   }
 
   const b = state.ball;
-  const selCount = (b.runs != null ? 1 : 0) + (b.extra ? 1 : 0) + (b.wicket ? 1 : 0);
+  const selCount = ballSelectionCount(b);
   const canNext = selCount > 0 && !inn.needNewBatter && !inn.needNewBowler && !inn.ended;
   const canUndo = canUndoNow(m);
   const canSwap = !inn.ended && !inn.needNewBatter && !inn.needNewBowler &&
@@ -3019,7 +3152,10 @@ function renderScore() {
       <div class="actions score-actions${pickingPlayer ? ' score-actions--pick' : ''}">
       ${pickingPlayer ? renderInlineScorePicker(inn) : `
         <div class="input-cluster">
-          <button class="wkt-btn ${b.wicket ? 'selected' : ''}" data-action="select-wkt">WKT</button>
+          <div class="wkt-stack">
+            <button type="button" class="wkt-btn ${b.wicket ? 'selected' : ''}" data-action="select-wkt">WKT</button>
+            <button type="button" class="ro-btn ${b.runOut ? 'selected' : ''}" data-action="select-ro">RO</button>
+          </div>
           <div class="extras-panel">
             <div class="heading">Extras</div>
             <div class="extras-btns">
@@ -3086,6 +3222,7 @@ function renderBallPill(b, opts = {}) {
   if (!b) return `<div class="ball-pill empty">·</div>`;
   let cls = 'ball-pill';
   if (b.extra) cls += ' extra';
+  else if (b.runOut) cls += ' wkt ro';
   else if (b.wicket) cls += ' wkt';
   else if (b.runs === 4) cls += ' run4';
   else if (b.runs === 6) cls += ' run6';
@@ -3220,7 +3357,7 @@ function renderInningsCard(m, inn, title, strikerIdx) {
           <tbody>
             ${inn.batters.map((b, bi) => `
               <tr${!b.out && bi === strikerIdx ? ' class="table-warning"' : ''}>
-                <td><div class="fw-semibold">${esc(b.name)}</div><div class="text-muted" style="font-size:11px">${b.out ? 'out' : 'not out'}</div></td>
+                <td><div class="fw-semibold">${esc(b.name)}</div><div class="text-muted" style="font-size:11px">${b.out ? (b.dismissal === 'run out' ? 'run out' : b.dismissal === 'retired hurt' ? 'retired hurt' : 'out') : 'not out'}</div></td>
                 <td class="text-end">${b.runs}</td><td class="text-end">${b.balls}</td><td class="text-end">${b.fours}</td><td class="text-end">${b.sixes}</td>
               </tr>
             `).join('')}
@@ -3918,11 +4055,26 @@ function renderModal() {
       <button type="button" class="btn btn-link w-100" data-action="cancel-edit-over-pin">Cancel</button>
     `);
   }
+  if (state.modal.type === 'runOutPick') {
+    const m = state.modal;
+    const st = m.strikerName || 'Striker';
+    const ns = m.nonStrikerName || 'Non-striker';
+    return renderBsSheet(
+      'Run out',
+      'Who was run out on this ball?',
+      `<p class="small text-muted mb-0">Does not count as a bowler wicket.</p>`,
+      `
+        <button type="button" class="btn btn-outline-dark btn-lg w-100 mb-2" data-action="confirm-run-out-end" data-end="striker">${esc(st)} · striker end</button>
+        <button type="button" class="btn btn-outline-dark btn-lg w-100 mb-2" data-action="confirm-run-out-end" data-end="non">${esc(ns)} · non-striker end</button>
+        <button type="button" class="btn btn-outline-secondary w-100" data-action="cancel-run-out-pick">Cancel</button>
+      `,
+    );
+  }
   if (state.modal.type === 'editBall') {
     const inn = state.current.innings[state.current.currentInnings];
     const entry = inn.ballLog[state.modal.logIndex];
     const sel = state.modal.sel;
-    const selCount = (sel.runs != null ? 1 : 0) + (sel.extra ? 1 : 0) + (sel.wicket ? 1 : 0);
+    const selCount = ballSelectionCount(sel);
     const canSave = selCount > 0;
     return renderBsSheet(
       `Edit ball · over ${entry.overNo + 1}`,
@@ -3930,7 +4082,10 @@ function renderModal() {
       `
         <div class="edit-ball-picker">
           <div class="input-cluster edit-ball-cluster">
-            <button type="button" class="wkt-btn ${sel.wicket ? 'selected' : ''}" data-action="edit-ball-wkt">WKT</button>
+            <div class="wkt-stack">
+              <button type="button" class="wkt-btn ${sel.wicket ? 'selected' : ''}" data-action="edit-ball-wkt">WKT</button>
+              <button type="button" class="ro-btn ${sel.runOut ? 'selected' : ''}" data-action="edit-ball-ro">RO</button>
+            </div>
             <div class="extras-panel">
               <div class="heading">Extras</div>
               <div class="extras-btns">
@@ -4518,6 +4673,7 @@ function handle(action, dataset) {
     case 'select-run': pickBall('runs', parseInt(dataset.runs, 10)); break;
     case 'select-extra': pickBall('extra', dataset.extra); break;
     case 'select-wkt': pickBall('wicket', true); break;
+    case 'select-ro': pickBall('runOut', true); break;
     case 'next-ball': commitBall(); break;
     case 'toggle-last-over':
       state.showLastOver = !state.showLastOver;
@@ -4564,6 +4720,33 @@ function handle(action, dataset) {
       break;
     case 'edit-ball-wkt':
       editPickBall('wicket', true);
+      break;
+    case 'edit-ball-ro':
+      editPickBall('runOut', true);
+      break;
+    case 'confirm-run-out-end': {
+      const modal = state.modal;
+      if (modal?.type !== 'runOutPick') break;
+      const end = dataset.end === 'non' ? 'non' : 'striker';
+      modal.sel.runOutEnd = end;
+      if (modal.source === 'editBall') {
+        if (!editBallAt(state.current, modal.logIndex, modal.sel)) {
+          showToast('Could not save ball');
+          break;
+        }
+        state.modal = null;
+        showToast('Ball updated');
+        finishEditBall();
+      } else {
+        state.modal = null;
+        finalizeBallCommit(modal.sel);
+        render();
+      }
+      break;
+    }
+    case 'cancel-run-out-pick':
+      state.modal = null;
+      render();
       break;
     case 'cancel-edit-ball':
       state.modal = null;
@@ -4824,7 +5007,22 @@ document.addEventListener('DOMContentLoaded', () => {
     if (action === 'confirm-edit-ball') {
       if (state.modal?.type !== 'editBall') return;
       const sel = state.modal.sel;
-      if (sel.runs == null && !sel.extra && !sel.wicket) return showToast('Pick runs, an extra, or a wicket');
+      const entry = state.current.innings[state.current.currentInnings].ballLog[state.modal.logIndex];
+      if (sel.runs == null && !sel.extra && !sel.wicket && !sel.runOut) {
+        return showToast('Pick runs, an extra, or a wicket');
+      }
+      if (sel.runOut && !sel.runOutEnd) {
+        state.modal = {
+          type: 'runOutPick',
+          sel,
+          source: 'editBall',
+          logIndex: state.modal.logIndex,
+          strikerName: entry.strikerName || entry.batter,
+          nonStrikerName: entry.nonStrikerName || 'Non-striker',
+        };
+        render();
+        return;
+      }
       if (!editBallAt(state.current, state.modal.logIndex, sel)) return showToast('Could not save ball');
       showToast('Ball updated');
       finishEditBall();
@@ -5043,6 +5241,10 @@ document.addEventListener('DOMContentLoaded', () => {
         state.historyDate = '';
         state.historyFilter = 'all';
       }
+      render();
+    }
+    if (e.target.classList?.contains('player-picker-filter')) {
+      state.playerPickerFilter = e.target.value;
       render();
     }
   });
