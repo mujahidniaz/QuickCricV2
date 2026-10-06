@@ -4134,6 +4134,15 @@ function renderStatList(items) {
     </div>`;
 }
 
+function renderStatGroup(title, items) {
+  if (!items?.length) return '';
+  return `
+    <div class="stat-group">
+      <div class="stat-group-title">${esc(title)}</div>
+      ${renderStatList(items)}
+    </div>`;
+}
+
 function renderKpis(items) {
   return `
     <div class="stat-kpis">
@@ -4251,6 +4260,8 @@ function renderPlayerDetail() {
   const share = bat.teamRuns ? Math.min(1, bat.runs / bat.teamRuns) : 0;
   const stood = bowl.innings ? (bowl.stoodUp || 0) / bowl.innings : 0;
   const bestBowl = bowl.bestWickets ? `${bowl.bestWickets}/${bowl.bestRuns ?? 0}` : '—';
+  const bestPos = QP.bestBattingPosition(bat);
+  const bestOver = QP.bestBowlingOver(bowl);
   const batFacts = [
     ['Innings', bat.innings],
     ['Not out', bat.notOuts],
@@ -4258,9 +4269,14 @@ function renderPlayerDetail() {
     ['Fifties', bat.fifties],
     ['Hundreds', bat.hundreds],
     ['Ducks', bat.ducks],
-    ['Best position', QP.bestBattingPosition(bat)],
     ['Carried', QP.winRate(bat.carriedWins || 0, bat.carried || 0)],
   ];
+  const batBestFacts = bestPos ? [
+    ['Position', bestPos.pos],
+    ['Runs', bestPos.runs],
+    ['Average', bestPos.avg],
+    ['Innings', bestPos.inns],
+  ] : [];
   const bowlFacts = [
     ['Overs', QP.fmtOvers(bowl.balls)],
     ['Balls bowled', bowl.deliveries || bowl.balls],
@@ -4268,9 +4284,14 @@ function renderPlayerDetail() {
     ['Dot balls', bowl.dots || 0],
     ['Strike rate', QP.bowlSR(bowl)],
     ['Best figures', bestBowl],
-    ['Best over', QP.bestBowlingOver(bowl)],
     ['3w / 5w', `${bowl.threeWickets} / ${bowl.fiveWickets}`],
   ];
+  const bowlBestFacts = bestOver ? [
+    ['Over', bestOver.over],
+    ['Wickets', bestOver.wickets],
+    ['Runs', bestOver.runs],
+    ['Economy', bestOver.econ],
+  ] : [];
   const statTab = state.playerStatTab === 'bowl' ? 'bowl' : 'bat';
   const sub = statTab === 'bowl'
     ? `${QP.fmtOvers(bowl.balls)} overs bowled`
@@ -4310,6 +4331,7 @@ function renderPlayerDetail() {
               ${renderRing(share, `${Math.round(share * 100)}%`, 'Share of team runs', '#f2a900')}
             </div>
             ${renderStatList(batFacts)}
+            ${renderStatGroup('Best batting position', batBestFacts)}
             <p class="bcc-note">Average is runs each time they were out. A carry is an innings where they outscored the rest of the team.</p>
           ` : `<p class="bcc-note">No batting innings yet.</p>`) : (bowl.innings ? `
             ${renderStackedBar('Balls bowled', bowlMix)}
@@ -4319,6 +4341,7 @@ function renderPlayerDetail() {
               ${renderRing(stood, `${Math.round(stood * 100)}%`, `${bowl.stoodUp || 0} spells led the attack`, '#d8432b')}
             </div>
             ${renderStatList(bowlFacts)}
+            ${renderStatGroup('Best over', bowlBestFacts)}
             <p class="bcc-note">Extras are wides and no-balls. Balls bowled include those. Leading the attack means at least as many wickets as everyone else.</p>
           ` : `<p class="bcc-note">No bowling innings yet.</p>`)}
           <div class="bcc-player-actions">

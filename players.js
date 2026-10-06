@@ -404,9 +404,9 @@
         best = { pos: key, avg, runs: v.runs, inns: v.inns, outs: v.outs };
       }
     }
-    if (!best) return '—';
+    if (!best) return null;
     const avgTxt = best.outs ? (best.runs / best.outs).toFixed(1) : `${best.runs}*`;
-    return `No. ${best.pos} · ${best.runs} runs · ${avgTxt} avg · ${best.inns} inns`;
+    return { pos: String(best.pos), runs: best.runs, avg: avgTxt, inns: best.inns };
   }
 
   function bestBowlingOver(s) {
@@ -418,8 +418,13 @@
       const score = (v.wickets || 0) * 1000 - econ;
       if (!best || score > best.score) best = { pos: key, econ, score, ...v };
     }
-    if (!best) return '—';
-    return `Over ${best.pos} · ${best.wickets || 0}/${best.runs || 0} · econ ${best.econ.toFixed(2)}`;
+    if (!best) return null;
+    return {
+      over: String(best.pos),
+      wickets: best.wickets || 0,
+      runs: best.runs || 0,
+      econ: best.econ.toFixed(2),
+    };
   }
 
   function winningSide(match) {
