@@ -378,6 +378,7 @@ const state = {
   playerStatTab: 'bat',
   summaryInn: 0,
   summaryBalls: false,
+  detailReturn: null,
   adminUnlocked: false,
   adminMerge: { sourceId: '', targetId: '' },
   adminReassign: { matchId: '', sourceKey: '', targetId: '', scope: 'both' },
@@ -3700,7 +3701,7 @@ function renderDetail() {
   return `
     <div class="screen bcc-sum">
       <div class="bcc-top">
-        <button type="button" class="bcc-ib" data-action="back-home" aria-label="Back">←</button>
+        <button type="button" class="bcc-ib" data-action="back-to-matches" aria-label="Back">←</button>
         <span class="bcc-an">Match summary</span>
         <button type="button" class="bcc-ib" data-action="share" aria-label="Share">↗</button>
       </div>
@@ -4775,6 +4776,20 @@ function handle(action, dataset) {
       render();
       if (dbOn()) refreshHistory();
       break;
+    case 'back-to-matches': {
+      const dest = state.view === 'result'
+        ? 'history'
+        : (state.detailReturn === 'in-progress' ? 'in-progress' : 'history');
+      state.detail = null;
+      state.modal = null;
+      state.summaryInn = 0;
+      state.summaryBalls = false;
+      state.detailReturn = null;
+      state.view = dest;
+      render();
+      if (dbOn()) refreshHistory();
+      break;
+    }
     case 'in-progress':
       state.view = 'in-progress';
       render();
@@ -5506,6 +5521,7 @@ function handle(action, dataset) {
         state.detail = m;
         state.summaryInn = 0;
         state.summaryBalls = false;
+        state.detailReturn = state.view === 'in-progress' ? 'in-progress' : 'history';
         state.view = 'detail';
         render();
       }
@@ -5522,7 +5538,8 @@ function handle(action, dataset) {
       state.history = state.history.filter(x => x.id !== id);
       saveHistory(state.history);
       state.detail = null;
-      state.view = 'home'; render();
+      state.detailReturn = null;
+      state.view = 'history'; render();
       showToast('Match deleted');
       break;
     }
