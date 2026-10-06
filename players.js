@@ -987,32 +987,103 @@
     }), { bowled: false, balls: 0, runs: 0, wickets: 0 });
   }
 
-  function matchPerformanceScore(innings, playerId, name) {
-    const bat = matchBattingLine(innings, playerId, name);
-    const bowl = matchBowlingLine(innings, playerId, name);
-    let score = 0;
-    const parts = [];
+  function cardIsPlayer(card, playerId, name) {
+    if (!card) return false;
+    if (playerId && card.playerId) return card.playerId === playerId;
+    return nameHit(card.name, name);
+  }
 
-    if (bat.faced) {
-      let batPts = bat.runs + bat.fours + bat.sixes * 2;
-      if (bat.runs >= 100) batPts += 50;
-      else if (bat.runs >= 50) batPts += 25;
-      if (bat.out && bat.runs === 0) batPts -= 5;
-      score += batPts;
-      parts.push(`${bat.runs} runs`);
+  /**
+   * Player of the match is impact on this match, not the biggest raw total.
+   *
+   * Batting: the percent of that innings' runs they scored. At least six balls
+   * faced, scoring clearly faster or slower than the innings nudges it.
+   * Bowling: 18 points for each wicket. Another 12 if they took at least half
+   * of the wickets that fell. At least one over: a few points for being tighter
+   * or looser than that innings. A bowling score cannot go below zero.
+   * The two add. The winning side then gets +8, and only if the performance
+   * was already worth 20, so a quiet winner cannot jump a dominant one.
+   */
+  function matchPerformanceScore(match, playerId, name) {
+    const innings = match?.innings || [];
+    const bat = { faced: false, runs: 0, balls: 0, teamRuns: 0, teamBalls: 0 };
+    const bowl = { bowled: false, runs: 0, balls: 0, wickets: 0, fell: 0, teamRuns: 0, teamBalls: 0 };
+
+    for (const inn of innings) {
+      const batter = (inn.batters || []).find(b => cardIsPlayer(b, playerId, name));
+      if (batter) {
+        bat.faced = true;
+        bat.runs += Number(batter.runs) || 0;
+        bat.balls += Number(batter.balls) || 0;
+        bat.teamRuns += Number(inn.score?.runs) || 0;
+        bat.teamBalls += Number(inn.score?.balls) || 0;
+      }
+      const bowler = (inn.bowlers || []).find(b => cardIsPlayer(b, playerId, name));
+      if (bowler) {
+        bowl.bowled = true;
+        bowl.runs += Number(bowler.runs) || 0;
+        bowl.balls += Number(bowler.balls) || 0;
+        bowl.wickets += Number(bowler.wickets) || 0;
+        bowl.fell += Number(inn.score?.wickets) || 0;
+        bowl.teamRuns += Number(inn.score?.runs) || 0;
+        bowl.teamBalls += Number(inn.score?.balls) || 0;
+      }
     }
 
+    let batImpact = 0;
+    if (bat.faced && bat.teamRuns > 0) {
+      batImpact = (bat.runs / bat.teamRuns) * 100;
+      if (bat.balls >= 6 && bat.teamBalls >= 6) {
+        const playerSr = (bat.runs / bat.balls) * 100;
+        const innsSr = (bat.teamRuns / bat.teamBalls) * 100;
+        batImpact += Math.max(-15, Math.min(15, (playerSr - innsSr) / 20));
+      }
+    }
+
+    let bowlImpact = 0;
     if (bowl.bowled) {
-      let bowlPts = bowl.wickets * 25 - bowl.runs * 0.4;
-      if (bowl.wickets >= 5) bowlPts += 20;
-      else if (bowl.wickets >= 3) bowlPts += 10;
-      const econ = bowl.balls ? (bowl.runs / bowl.balls) * 6 : 99;
-      if (bowl.balls >= 6 && econ <= 6) bowlPts += 8;
-      score += Math.max(0, bowlPts);
-      parts.push(`${bowl.wickets} wkts`);
+      bowlImpact += bowl.wickets * 18;
+      if (bowl.fell > 0 && bowl.wickets / bowl.fell >= 0.5) bowlImpact += 12;
+      if (bowl.balls >= 6 && bowl.teamBalls >= 6) {
+        const theirs = (bowl.runs / bowl.balls) * 6;
+        const inns = (bowl.teamRuns / bowl.teamBalls) * 6;
+        const overs = bowl.balls / 6;
+        bowlImpact += Math.max(-12, Math.min(12, (inns - theirs) * overs));
+      }
+      bowlImpact = Math.max(0, bowlImpact);
     }
 
-    return { score, parts, bat, bowl };
+    let score = batImpact + bowlImpact;
+    const side = playerTeamInMatch(match, playerId, name);
+    const won = !!side && winningSide(match) === side;
+    if (won && score >= 20) score += 8;
+
+    return { score, summary: impactSummary(bat, bowl, batImpact, bowlImpact), bat, bowl };
+  }
+
+  function impactSummary(bat, bowl, batImpact, bowlImpact) {
+    const runBit = bat.faced && bat.teamRuns > 0 ? `${bat.runs} of ${bat.teamRuns} runs` : '';
+    const wktBit = bowl.bowled && bowl.wickets > 0 && bowl.fell > 0
+      ? `${bowl.wickets} of ${bowl.fell} wickets`
+      : '';
+    const econ = bowl.balls >= 6 ? ((bowl.runs / bowl.balls) * 6).toFixed(1) : '';
+    const both = batImpact >= 15 && bowlImpact >= 15 && Math.min(batImpact, bowlImpact) >= Math.max(batImpact, bowlImpact) * 0.5;
+    let label = 'In the game';
+    if (both) label = 'Runs and wickets';
+    else if (batImpact >= bowlImpact && bat.teamRuns > 0 && bat.runs / bat.teamRuns >= 0.35) label = 'Carried the innings';
+    else if (bowlImpact > batImpact && bowl.fell > 0 && bowl.wickets / bowl.fell >= 0.5) label = 'Broke the batting';
+    else if (bowlImpact > batImpact && bowl.wickets === 0 && econ) label = 'Held an end';
+    const bits = [];
+    if (both || batImpact >= bowlImpact) {
+      if (runBit) bits.push(runBit);
+      if (wktBit) bits.push(wktBit);
+    } else {
+      if (wktBit) bits.push(wktBit);
+      if (runBit && batImpact >= 15) bits.push(runBit);
+    }
+    if (!bits.length && econ) bits.push(`${econ} an over`);
+    if (!bits.length) return label;
+    return `${label} · ${bits.slice(0, 2).join(' · ')}`;
   }
 
   function playerTeamInMatch(match, playerId, name) {
@@ -1048,23 +1119,25 @@
 
     const ranked = [];
     for (const [id, name] of seen) {
-      const perf = matchPerformanceScore(match.innings, id, name);
+      const perf = matchPerformanceScore(match, id, name);
       if (perf.score <= 0 && !perf.bat.faced && !perf.bowl.bowled) continue;
       ranked.push({
         playerId: id,
         name,
         team: playerTeamInMatch(match, id, name),
         score: perf.score,
-        summary: perf.parts.join(' · ') || 'Played',
+        summary: perf.summary || 'Played',
         bat: perf.bat,
         bowl: perf.bowl,
       });
     }
-    ranked.sort((a, b) => b.score - a.score);
+    ranked.sort((a, b) =>
+      b.score - a.score || (b.bowl.wickets - a.bowl.wickets) || (b.bat.runs - a.bat.runs));
 
     const potm = ranked[0] || null;
-    const mvpA = ranked.find(r => r.team === 'A') || null;
-    const mvpB = ranked.find(r => r.team === 'B') || null;
+    const mvpFor = (side) => ranked.find(r => r.team === side && r !== potm) || null;
+    const mvpA = mvpFor('A');
+    const mvpB = mvpFor('B');
 
     return { potm, mvpA, mvpB };
   }
@@ -1191,17 +1264,82 @@
     return !line.playerId || line.playerId === sourceId;
   }
 
-  function rewritePlayerInMatch(match, sourceId, sourceName, targetId, targetName) {
-    if (!match) return false;
-    let changed = false;
-    const applyLine = (line) => {
-      if (!lineIsSource(line, sourceId, sourceName)) return;
-      line.playerId = targetId;
-      line.name = targetName;
-      changed = true;
-    };
+  function snapLine(line) {
+    return line ? { playerId: line.playerId || null, name: line.name || '' } : null;
+  }
 
-    if (match.squads) {
+  function mappedIdentity(line, sourceId, sourceName, targetId, targetName, moved) {
+    if (!line) return null;
+    if (moved && lineIsSource(line, sourceId, sourceName)) return { playerId: targetId, name: targetName };
+    return { playerId: line.playerId || null, name: line.name || '' };
+  }
+
+  function findLineIndex(list, ident) {
+    if (!ident || !list?.length) return 0;
+    if (ident.playerId) {
+      const byId = list.findIndex(l => l.playerId === ident.playerId);
+      if (byId >= 0) return byId;
+    }
+    const byName = list.findIndex(l => normalizeName(l.name) === normalizeName(ident.name));
+    return byName >= 0 ? byName : 0;
+  }
+
+  /** Rename a role's cards, or fold them into the target's existing card in that innings. */
+  function moveRoleList(list, sourceId, sourceName, targetId, targetName, sumKeys) {
+    if (!Array.isArray(list)) return false;
+    const sourceIdx = [];
+    list.forEach((line, i) => {
+      if (lineIsSource(line, sourceId, sourceName)) sourceIdx.push(i);
+    });
+    if (!sourceIdx.length) return false;
+    const targetIdx = list.findIndex((line, i) =>
+      !sourceIdx.includes(i) && ((targetId && line.playerId === targetId) ||
+        normalizeName(line.name) === normalizeName(targetName)));
+    if (targetIdx < 0) {
+      for (const i of sourceIdx) {
+        list[i].playerId = targetId;
+        list[i].name = targetName;
+      }
+      return true;
+    }
+    const dest = list[targetIdx];
+    for (const i of sourceIdx) {
+      const src = list[i];
+      for (const k of sumKeys) dest[k] = (Number(dest[k]) || 0) + (Number(src[k]) || 0);
+      if (src.out) {
+        dest.out = true;
+        if (!dest.dismissal) dest.dismissal = src.dismissal || 'out';
+      }
+    }
+    for (let n = sourceIdx.length - 1; n >= 0; n--) list.splice(sourceIdx[n], 1);
+    return true;
+  }
+
+  function rewriteLogNames(inn, sourceName, targetName, scope) {
+    let changed = false;
+    for (const ball of inn.ballLog || []) {
+      const hit = (field) => {
+        if (normalizeName(ball[field]) !== normalizeName(sourceName)) return;
+        ball[field] = targetName;
+        changed = true;
+      };
+      if (scope !== 'bowl') {
+        hit('batter');
+        hit('strikerName');
+        hit('nonStrikerName');
+        hit('dismissed');
+      }
+      if (scope !== 'bat') hit('bowler');
+    }
+    return changed;
+  }
+
+  function rewritePlayerInMatch(match, sourceId, sourceName, targetId, targetName, scope) {
+    if (!match) return false;
+    const move = scope === 'bat' || scope === 'bowl' ? scope : 'both';
+    let changed = false;
+
+    if (move === 'both' && match.squads && sourceId) {
       for (const side of ['A', 'B']) {
         const arr = match.squads[side];
         if (!Array.isArray(arr)) continue;
@@ -1217,11 +1355,36 @@
     }
 
     for (const inn of match.innings || []) {
-      for (const b of inn.batters || []) applyLine(b);
-      for (const b of inn.bowlers || []) applyLine(b);
+      const before = {
+        striker: snapLine(inn.batters?.[inn.striker]),
+        non: snapLine(inn.batters?.[inn.nonStriker]),
+        bowler: snapLine(inn.bowlers?.[inn.currentBowler]),
+      };
+      if (move !== 'bowl' && moveRoleList(
+        inn.batters, sourceId, sourceName, targetId, targetName,
+        ['runs', 'balls', 'fours', 'sixes'],
+      )) {
+        changed = true;
+        const striker = mappedIdentity(before.striker, sourceId, sourceName, targetId, targetName, true);
+        const non = mappedIdentity(before.non, sourceId, sourceName, targetId, targetName, true);
+        inn.striker = findLineIndex(inn.batters, striker);
+        inn.nonStriker = findLineIndex(inn.batters, non);
+        if ((inn.batters?.length || 0) > 1 && inn.striker === inn.nonStriker) {
+          inn.nonStriker = inn.striker === 0 ? 1 : 0;
+        }
+      }
+      if (move !== 'bat' && moveRoleList(
+        inn.bowlers, sourceId, sourceName, targetId, targetName,
+        ['balls', 'runs', 'wickets'],
+      )) {
+        changed = true;
+        const bowler = mappedIdentity(before.bowler, sourceId, sourceName, targetId, targetName, true);
+        inn.currentBowler = findLineIndex(inn.bowlers, bowler);
+      }
+      if (rewriteLogNames(inn, sourceName, targetName, move)) changed = true;
     }
 
-    if (match.awards) {
+    if (move === 'both' && match.awards) {
       for (const key of ['potm', 'mvpA', 'mvpB']) {
         const a = match.awards[key];
         if (!a) continue;
@@ -1249,8 +1412,9 @@
     return save(players);
   }
 
-  /** Players who batted or bowled in a match (for admin reassign UI). */
-  function listMatchParticipants(match, players) {
+  /** Players who batted and/or bowled in a match (for admin reassign UI). */
+  function listMatchParticipants(match, players, scope) {
+    const move = scope === 'bat' || scope === 'bowl' ? scope : 'both';
     const out = new Map();
     const add = (line) => {
       if (!line?.name) return;
@@ -1259,8 +1423,8 @@
       if (!out.has(key)) out.set(key, { id, name: line.name.trim() });
     };
     for (const inn of match.innings || []) {
-      for (const b of inn.batters || []) add(b);
-      for (const b of inn.bowlers || []) add(b);
+      if (move !== 'bowl') for (const b of inn.batters || []) add(b);
+      if (move !== 'bat') for (const b of inn.bowlers || []) add(b);
     }
     return [...out.values()].sort((a, b) =>
       a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }));
@@ -1270,7 +1434,8 @@
    * Move one player's batting/bowling in a single match to another profile.
    * Both players stay on the roster; career stats are rebuilt from all completed matches.
    */
-  function reassignPlayerInMatch(players, matchId, sourceId, sourceName, targetId, matches) {
+  function reassignPlayerInMatch(players, matchId, sourceId, sourceName, targetId, matches, scope) {
+    const move = scope === 'bat' || scope === 'bowl' ? scope : 'both';
     if (!matchId) {
       return { players, matches, changedMatchIds: [], error: 'Pick a match' };
     }
@@ -1311,12 +1476,18 @@
       resolvedSourceName,
       targetId,
       target.name,
+      move,
     )) {
+      const missing = move === 'bat'
+        ? `${resolvedSourceName} did not bat in that match`
+        : move === 'bowl'
+          ? `${resolvedSourceName} did not bowl in that match`
+          : `${resolvedSourceName} did not appear in that match`;
       return {
         players,
         matches,
         changedMatchIds: [],
-        error: `${resolvedSourceName} did not appear in that match`,
+        error: missing,
       };
     }
 
@@ -1334,6 +1505,7 @@
       error: null,
       targetName: target.name,
       sourceName: resolvedSourceName,
+      scope: move,
       matchLabel: `${match.teams?.A || 'A'} vs ${match.teams?.B || 'B'}`,
     };
   }
