@@ -3734,6 +3734,15 @@ input { background: var(--paper); }
   margin-bottom: 12px;
 }
 .bcc-player .stat-mini-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 12px; }
+.bcc-player .stat-group { margin-top: 14px; }
+.bcc-player .stat-group-title {
+  font-size: 12px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: #6b766e;
+  font-weight: 800;
+}
+.bcc-player .stat-group .stat-mini-grid { margin-top: 8px; }
 .bcc-player .stat-mini {
   background: #fffdf7;
   border: 1px solid #e2dac6;
