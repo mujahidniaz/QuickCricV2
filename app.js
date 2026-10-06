@@ -379,6 +379,7 @@ const state = {
   summaryInn: 0,
   summaryBalls: false,
   detailReturn: null,
+  historyScroll: 0,
   adminUnlocked: false,
   adminMerge: { sourceId: '', targetId: '' },
   adminReassign: { matchId: '', sourceKey: '', targetId: '', scope: 'both' },
@@ -2413,6 +2414,29 @@ function restoreScrollPositions(container, tops) {
   });
 }
 
+function rememberHistoryScroll() {
+  const el = document.querySelector('#app .bcc-past .bcc-scroll');
+  if (el) state.historyScroll = el.scrollTop;
+}
+
+/** Put the past-matches list back where the user left it. */
+function bindHistoryScrollRestore(root) {
+  const el = root.querySelector('.bcc-past .bcc-scroll');
+  if (!el) return;
+  const top = state.historyScroll || 0;
+  let ignore = true;
+  const apply = () => { el.scrollTop = top; };
+  apply();
+  requestAnimationFrame(() => {
+    apply();
+    requestAnimationFrame(() => { ignore = false; });
+  });
+  el.addEventListener('scroll', () => {
+    if (ignore) return;
+    state.historyScroll = el.scrollTop;
+  }, { passive: true });
+}
+
 let renderScheduled = false;
 
 function scheduleRender() {
@@ -2493,6 +2517,7 @@ function renderNow() {
 
   restoreScrollPositions(root, scrollTops);
   requestAnimationFrame(() => restoreScrollPositions(root, scrollTops));
+  if (view === 'history') bindHistoryScrollRestore(root);
 
   Object.entries(savedInputs).forEach(([id, value]) => {
     if (!value) return;
@@ -4773,6 +4798,7 @@ function handle(action, dataset) {
       state.view = 'history';
       state.historyFilter = 'all';
       state.historyDate = '';
+      state.historyScroll = 0;
       render();
       if (dbOn()) refreshHistory();
       break;
@@ -4843,6 +4869,7 @@ function handle(action, dataset) {
     case 'history-filter':
       state.historyFilter = dataset.filter;
       if (dataset.filter !== 'custom') state.historyDate = '';
+      state.historyScroll = 0;
       render();
       break;
     case 'toggle-shared-scorecard': {
@@ -5518,6 +5545,7 @@ function handle(action, dataset) {
     case 'view-detail': {
       const m = state.history.find(x => x.id === dataset.matchId);
       if (m) {
+        if (state.view === 'history') rememberHistoryScroll();
         state.detail = m;
         state.summaryInn = 0;
         state.summaryBalls = false;
@@ -5862,6 +5890,7 @@ document.addEventListener('DOMContentLoaded', () => {
         state.historyDate = '';
         state.historyFilter = 'all';
       }
+      state.historyScroll = 0;
       render();
     }
     if (e.target.classList?.contains('player-picker-filter')) {
