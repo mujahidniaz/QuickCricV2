@@ -1326,6 +1326,12 @@ input { background: var(--paper); }
 }
 .player-section-title .dot.batting { background: var(--striker); }
 .player-section-title .dot.bowling { background: var(--four); }
+.player-section-note {
+  margin: -0.35rem 0 0.65rem;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--ink-soft);
+}
 .player-stat-card {
   background: var(--paper);
   border-radius: var(--radius);
@@ -1371,13 +1377,15 @@ input { background: var(--paper); }
   border-bottom: 1px solid var(--line-soft);
 }
 .player-stat-row:last-child { border-bottom: none; }
-.player-stat-label { font-size: 0.9rem; color: var(--ink-soft); font-weight: 500; }
+.player-stat-label { font-size: 0.9rem; color: var(--ink-soft); font-weight: 500; flex: 1 1 auto; }
 .player-stat-value {
   font-size: 0.95rem;
   font-weight: 700;
   font-variant-numeric: tabular-nums;
   color: var(--ink);
   text-align: right;
+  flex: 0 1 58%;
+  word-break: break-word;
 }
 .player-delete-btn {
   border-radius: var(--radius);

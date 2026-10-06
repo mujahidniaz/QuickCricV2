@@ -70,6 +70,8 @@
     return {
       matches: 0, innings: 0, notOuts: 0, runs: 0, balls: 0,
       highest: 0, fifties: 0, hundreds: 0, ducks: 0, fours: 0, sixes: 0,
+      dots: 0, wins: 0, carried: 0, carriedWins: 0, teamRuns: 0,
+      positions: {},
     };
   }
 
@@ -77,7 +79,26 @@
     return {
       matches: 0, innings: 0, balls: 0, runs: 0, wickets: 0,
       bestWickets: 0, bestRuns: null, threeWickets: 0, fiveWickets: 0,
+      deliveries: 0, extras: 0, wides: 0, noBalls: 0, dots: 0,
+      wins: 0, stoodUp: 0, stoodUpWins: 0,
+      overSlots: {},
     };
+  }
+
+  function battingView(s) {
+    const base = emptyBatting();
+    const src = s || {};
+    return Object.assign(base, src, {
+      positions: src.positions && typeof src.positions === 'object' ? src.positions : {},
+    });
+  }
+
+  function bowlingView(s) {
+    const base = emptyBowling();
+    const src = s || {};
+    return Object.assign(base, src, {
+      overSlots: src.overSlots && typeof src.overSlots === 'object' ? src.overSlots : {},
+    });
   }
 
   function newPlayer(name) {
@@ -97,36 +118,68 @@
     return (name || '').trim().replace(/\s+/g, ' ').toLowerCase();
   }
 
+  function mergeCountMap(a, b, fields) {
+    const out = {};
+    const keys = new Set([...Object.keys(a || {}), ...Object.keys(b || {})]);
+    for (const key of keys) {
+      const x = (a && a[key]) || {};
+      const y = (b && b[key]) || {};
+      const row = {};
+      for (const f of fields) row[f] = (x[f] || 0) + (y[f] || 0);
+      out[key] = row;
+    }
+    return out;
+  }
+
   function mergeBatting(a, b) {
+    const A = battingView(a);
+    const B = battingView(b);
     return {
-      matches: a.matches + b.matches,
-      innings: a.innings + b.innings,
-      notOuts: a.notOuts + b.notOuts,
-      runs: a.runs + b.runs,
-      balls: a.balls + b.balls,
-      highest: Math.max(a.highest, b.highest),
-      fifties: a.fifties + b.fifties,
-      hundreds: a.hundreds + b.hundreds,
-      ducks: a.ducks + b.ducks,
-      fours: a.fours + b.fours,
-      sixes: a.sixes + b.sixes,
+      matches: A.matches + B.matches,
+      innings: A.innings + B.innings,
+      notOuts: A.notOuts + B.notOuts,
+      runs: A.runs + B.runs,
+      balls: A.balls + B.balls,
+      highest: Math.max(A.highest, B.highest),
+      fifties: A.fifties + B.fifties,
+      hundreds: A.hundreds + B.hundreds,
+      ducks: A.ducks + B.ducks,
+      fours: A.fours + B.fours,
+      sixes: A.sixes + B.sixes,
+      dots: A.dots + B.dots,
+      wins: A.wins + B.wins,
+      carried: A.carried + B.carried,
+      carriedWins: A.carriedWins + B.carriedWins,
+      teamRuns: A.teamRuns + B.teamRuns,
+      positions: mergeCountMap(A.positions, B.positions, ['inns', 'runs', 'outs', 'balls', 'dots']),
     };
   }
 
   function mergeBowling(a, b) {
-    const best = (!b.bestWickets || b.bestWickets < a.bestWickets ||
-      (b.bestWickets === a.bestWickets && (b.bestRuns ?? 999) > (a.bestRuns ?? 999)))
-      ? a : b;
+    const A = bowlingView(a);
+    const B = bowlingView(b);
+    const best = (!B.bestWickets || B.bestWickets < A.bestWickets ||
+      (B.bestWickets === A.bestWickets && (B.bestRuns ?? 999) > (A.bestRuns ?? 999)))
+      ? A : B;
     return {
-      matches: a.matches + b.matches,
-      innings: a.innings + b.innings,
-      balls: a.balls + b.balls,
-      runs: a.runs + b.runs,
-      wickets: a.wickets + b.wickets,
+      matches: A.matches + B.matches,
+      innings: A.innings + B.innings,
+      balls: A.balls + B.balls,
+      runs: A.runs + B.runs,
+      wickets: A.wickets + B.wickets,
       bestWickets: best.bestWickets,
       bestRuns: best.bestRuns,
-      threeWickets: a.threeWickets + b.threeWickets,
-      fiveWickets: a.fiveWickets + b.fiveWickets,
+      threeWickets: A.threeWickets + B.threeWickets,
+      fiveWickets: A.fiveWickets + B.fiveWickets,
+      deliveries: A.deliveries + B.deliveries,
+      extras: A.extras + B.extras,
+      wides: A.wides + B.wides,
+      noBalls: A.noBalls + B.noBalls,
+      dots: A.dots + B.dots,
+      wins: A.wins + B.wins,
+      stoodUp: A.stoodUp + B.stoodUp,
+      stoodUpWins: A.stoodUpWins + B.stoodUpWins,
+      overSlots: mergeCountMap(A.overSlots, B.overSlots, ['balls', 'runs', 'wickets']),
     };
   }
 
@@ -295,6 +348,22 @@
     return { players: saved, player: findById(saved, id), error: null };
   }
 
+  function sharePct(part, total) {
+    if (!total) return '—';
+    return `${Math.round((part / total) * 100)}%`;
+  }
+
+  function winRate(wins, n) {
+    if (!n) return '—';
+    return `${wins}/${n} · ${Math.round((wins / n) * 100)}%`;
+  }
+
+  function dotPct(dots, balls) {
+    if (!balls) return '—';
+    return `${Math.round((dots / balls) * 100)}%`;
+  }
+
+  /** Runs per dismissal. Only innings they actually batted count; not-outs are not in the divisor. */
   function batAvg(s) {
     const dismissals = s.innings - s.notOuts;
     if (!dismissals) return s.runs > 0 ? s.runs.toFixed(2) : '—';
@@ -323,6 +392,116 @@
 
   function fmtOvers(balls) {
     return `${Math.floor(balls / 6)}.${balls % 6}`;
+  }
+
+  function bestBattingPosition(s) {
+    const pos = battingView(s).positions || {};
+    let best = null;
+    for (const [key, v] of Object.entries(pos)) {
+      if (!v?.inns) continue;
+      const avg = v.outs ? v.runs / v.outs : v.runs;
+      if (!best || avg > best.avg || (avg === best.avg && v.runs > best.runs)) {
+        best = { pos: key, avg, runs: v.runs, inns: v.inns, outs: v.outs };
+      }
+    }
+    if (!best) return '—';
+    const avgTxt = best.outs ? (best.runs / best.outs).toFixed(1) : `${best.runs}*`;
+    return `No. ${best.pos} · ${best.runs} runs · ${avgTxt} avg · ${best.inns} inns`;
+  }
+
+  function bestBowlingOver(s) {
+    const slots = bowlingView(s).overSlots || {};
+    let best = null;
+    for (const [key, v] of Object.entries(slots)) {
+      if ((v?.balls || 0) < 6) continue;
+      const econ = (v.runs / v.balls) * 6;
+      const score = (v.wickets || 0) * 1000 - econ;
+      if (!best || score > best.score) best = { pos: key, econ, score, ...v };
+    }
+    if (!best) return '—';
+    return `Over ${best.pos} · ${best.wickets || 0}/${best.runs || 0} · econ ${best.econ.toFixed(2)}`;
+  }
+
+  function winningSide(match) {
+    const res = match?.result || '';
+    if (!res || res === 'Match tied' || res === 'Match ended early') return null;
+    const sides = ['A', 'B']
+      .map(side => ({ side, name: match.teams?.[side] || '' }))
+      .filter(x => x.name)
+      .sort((a, b) => b.name.length - a.name.length);
+    for (const { side, name } of sides) {
+      if (res.startsWith(`${name} won`)) return side;
+    }
+    return null;
+  }
+
+  function nameHit(lineName, name) {
+    return (lineName || '').trim().toLowerCase() === (name || '').trim().toLowerCase();
+  }
+
+  function battingDotsFromLog(inn, name) {
+    if (!inn?.ballLog?.length) return 0;
+    let dots = 0;
+    for (const ball of inn.ballLog) {
+      if (!nameHit(ball.batter, name) || !ball.legal) continue;
+      const batRuns = (ball.extra === 'lb' || ball.extra === 'b') ? 0 : (Number(ball.runs) || 0);
+      if (batRuns === 0 && !ball.wicket && !ball.runOut) dots += 1;
+    }
+    return dots;
+  }
+
+  function bowlingFromLog(inn, name) {
+    const empty = {
+      bowled: false, runs: 0, balls: 0, wickets: 0,
+      deliveries: 0, extras: 0, wides: 0, noBalls: 0, dots: 0, slots: {},
+    };
+    if (!inn?.ballLog?.length) return empty;
+    const out = empty;
+    for (const ball of inn.ballLog) {
+      if (!nameHit(ball.bowler, name)) continue;
+      out.bowled = true;
+      out.deliveries += 1;
+      const slotNo = String((ball.overNo || 0) + 1);
+      if (!out.slots[slotNo]) out.slots[slotNo] = { balls: 0, runs: 0, wickets: 0 };
+      const dRuns = Number(ball.runs) || 0;
+      let conceded = dRuns;
+      if (ball.extra === 'wd') {
+        out.wides += 1;
+        conceded = 1 + dRuns;
+        out.extras += conceded;
+      } else if (ball.extra === 'nb') {
+        out.noBalls += 1;
+        conceded = 1 + dRuns;
+        out.extras += 1;
+      } else if (ball.extra === 'lb' || ball.extra === 'b') {
+        conceded = 0;
+      }
+      out.runs += conceded;
+      out.slots[slotNo].runs += conceded;
+      if (ball.legal) {
+        out.balls += 1;
+        out.slots[slotNo].balls += 1;
+        if (dRuns === 0 && !ball.wicket && !ball.runOut && ball.extra !== 'lb' && ball.extra !== 'b') {
+          out.dots += 1;
+        }
+      }
+      if (ball.wicket && !ball.runOut) {
+        out.wickets += 1;
+        out.slots[slotNo].wickets += 1;
+      }
+    }
+    return out;
+  }
+
+  function addOverSlots(target, slots) {
+    if (!target.overSlots) target.overSlots = {};
+    for (const [key, v] of Object.entries(slots || {})) {
+      if (!target.overSlots[key]) target.overSlots[key] = { balls: 0, runs: 0, wickets: 0 };
+      const slot = target.overSlots[key];
+      slot.balls += v.balls || 0;
+      slot.runs += v.runs || 0;
+      slot.wickets += v.wickets || 0;
+    }
   }
 
   function battingRankings(players) {
@@ -779,7 +958,7 @@
         balls += b.balls;
         fours += b.fours;
         sixes += b.sixes;
-        if (b.out) out = true;
+        if (b.out && b.dismissal !== 'retired hurt') out = true;
       }
     }
     return { faced, runs, balls, fours, sixes, out };
@@ -892,6 +1071,7 @@
 
   function applyMatchStatsToRoster(match, players) {
     if (match.status !== 'completed') return false;
+    const winner = winningSide(match);
     let any = false;
     for (const p of players) {
       const bat = matchBattingLine(match.innings, p.id, p.name);
@@ -899,11 +1079,14 @@
       if (!bat.faced && !bowl.bowled) continue;
 
       any = true;
+      p.batting = battingView(p.batting);
+      p.bowling = bowlingView(p.bowling);
       touch(p);
-      if (bat.faced) p.batting.matches += 1;
-      if (bowl.bowled) p.bowling.matches += 1;
+      const side = playerTeamInMatch(match, p.id, p.name);
+      const won = !!(side && winner && side === winner);
 
       if (bat.faced) {
+        p.batting.matches += 1;
         p.batting.innings += 1;
         p.batting.runs += bat.runs;
         p.batting.balls += bat.balls;
@@ -914,9 +1097,11 @@
         else if (bat.runs >= 50) p.batting.fifties += 1;
         if (bat.out && bat.runs === 0) p.batting.ducks += 1;
         if (!bat.out) p.batting.notOuts += 1;
+        if (won) p.batting.wins += 1;
       }
 
       if (bowl.bowled) {
+        p.bowling.matches += 1;
         p.bowling.innings += 1;
         p.bowling.balls += bowl.balls;
         p.bowling.runs += bowl.runs;
@@ -928,7 +1113,60 @@
         }
         if (bowl.wickets >= 5) p.bowling.fiveWickets += 1;
         else if (bowl.wickets >= 3) p.bowling.threeWickets += 1;
+        if (won) p.bowling.wins += 1;
       }
+
+      let carriedThisMatch = false;
+      let stoodThisMatch = false;
+      for (const inn of match.innings || []) {
+        const batter = (inn.batters || []).find(b =>
+          (p.id && b.playerId === p.id) || nameHit(b.name, p.name));
+        if (batter) {
+          const pos = String((inn.batters.indexOf(batter) || 0) + 1);
+          if (!p.batting.positions[pos]) {
+            p.batting.positions[pos] = { inns: 0, runs: 0, outs: 0, balls: 0, dots: 0 };
+          }
+          const dots = battingDotsFromLog(inn, batter.name);
+          const slot = p.batting.positions[pos];
+          slot.inns += 1;
+          slot.runs += batter.runs || 0;
+          slot.balls += batter.balls || 0;
+          slot.dots += dots;
+          const dismissed = !!(batter.out && batter.dismissal !== 'retired hurt');
+          if (dismissed) slot.outs += 1;
+          p.batting.dots += dots;
+          p.batting.teamRuns += inn.score?.runs || 0;
+          const rest = (inn.score?.runs || 0) - (batter.runs || 0);
+          if ((batter.runs || 0) > 0 && (batter.runs || 0) > rest) {
+            p.batting.carried += 1;
+            carriedThisMatch = true;
+          }
+        }
+
+        const card = (inn.bowlers || []).find(b =>
+          (p.id && b.playerId === p.id) || nameHit(b.name, p.name));
+        const spell = bowlingFromLog(inn, card?.name || p.name);
+        if (spell.bowled) {
+          p.bowling.deliveries += spell.deliveries;
+          p.bowling.extras += spell.extras;
+          p.bowling.wides += spell.wides;
+          p.bowling.noBalls += spell.noBalls;
+          p.bowling.dots += spell.dots;
+          addOverSlots(p.bowling, spell.slots);
+          const others = (inn.bowlers || [])
+            .filter(b => b !== card)
+            .reduce((sum, b) => sum + (b.wickets || 0), 0);
+          const wkts = card ? (card.wickets || 0) : spell.wickets;
+          if (wkts >= 1 && wkts >= others) {
+            p.bowling.stoodUp += 1;
+            stoodThisMatch = true;
+          }
+        } else if (card && (card.balls || card.runs || card.wickets)) {
+          p.bowling.deliveries += card.balls || 0;
+        }
+      }
+      if (carriedThisMatch && won) p.batting.carriedWins += 1;
+      if (stoodThisMatch && won) p.bowling.stoodUpWins += 1;
     }
     return any;
   }
@@ -1166,6 +1404,13 @@
     bowlEcon,
     bowlSR,
     fmtOvers,
+    sharePct,
+    winRate,
+    dotPct,
+    bestBattingPosition,
+    bestBowlingOver,
+    battingView,
+    bowlingView,
     battingRankings,
     bowlingRankings,
     teamBalanceScores,

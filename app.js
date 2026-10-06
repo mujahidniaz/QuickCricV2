@@ -641,6 +641,27 @@ async function runMatchPlayerReassign(matchId, sourceKey, targetId) {
   return res;
 }
 
+async function refreshCareerStatsIfNeeded() {
+  const REV = '3';
+  try {
+    if (localStorage.getItem('quickcric:statsRev') === REV) return;
+  } catch { /* ignore */ }
+  if (!window.QCPlayers?.rebuildAllStatsFromMatches) return;
+  let matches = [];
+  try {
+    matches = await allMatchesForStats();
+  } catch (err) {
+    console.warn('career stats rebuild skipped', err);
+    return;
+  }
+  const hasCareer = state.players.some(p => (p.batting?.runs || 0) > 0 || (p.bowling?.wickets || 0) > 0 || (p.bowling?.balls || 0) > 0);
+  if (!matches.length && hasCareer) return;
+  state.players = window.QCPlayers.rebuildAllStatsFromMatches(state.players, matches);
+  try { localStorage.setItem('quickcric:statsRev', REV); } catch { /* ignore */ }
+  if (state.playerDetail) state.playerDetail = playerById(state.playerDetail.id);
+  if (state.view === 'players' || state.view === 'player-detail') render();
+}
+
 function persistMatch(m) {
   if (!m) return;
   saveCurrent(m);
@@ -3732,43 +3753,60 @@ function renderStatList(items) {
 }
 
 function renderPlayerDetail() {
-  const p = state.playerDetail;
-  if (!p) return renderPlayers();
-  const bat = p.batting;
-  const bowl = p.bowling;
+  const raw = state.playerDetail;
+  if (!raw) return renderPlayers();
   const QP = window.QCPlayers;
+  const bat = QP.battingView ? QP.battingView(raw.batting) : raw.batting;
+  const bowl = QP.bowlingView ? QP.bowlingView(raw.bowling) : raw.bowling;
+  const p = raw;
   const bestBowl = bowl.bestWickets
     ? `${bowl.bestWickets}/${bowl.bestRuns ?? 0}`
     : '—';
   const batPrimary = [
     ['Runs', bat.runs],
-    ['Average', QP.batAvg(bat)],
+    ['Avg / out', QP.batAvg(bat)],
     ['Strike rate', QP.batSR(bat)],
-    ['Highest', bat.highest],
+    ['Dot balls', bat.dots || 0],
   ];
   const batSecondary = [
-    ['Matches', bat.matches],
-    ['Innings', bat.innings],
+    ['Innings batted', bat.innings],
+    ['Not outs', bat.notOuts],
     ['Balls faced', bat.balls],
+    ['Dot %', QP.dotPct(bat.dots || 0, bat.balls)],
+    ['Highest', bat.highest],
     ['Fifties', bat.fifties],
     ['Hundreds', bat.hundreds],
     ['Fours', bat.fours],
     ['Sixes', bat.sixes],
     ['Ducks', bat.ducks],
+    ['Best position', QP.bestBattingPosition(bat)],
+    ['Share of team runs', QP.sharePct(bat.runs, bat.teamRuns || 0)],
+    ['Carried the innings', bat.carried || 0],
+    ['Wins when they carried', QP.winRate(bat.carriedWins || 0, bat.carried || 0)],
+    ['Wins when batting', QP.winRate(bat.wins || 0, bat.innings)],
   ];
   const bowlPrimary = [
     ['Wickets', bowl.wickets],
-    ['Average', QP.bowlAvg(bowl)],
+    ['Avg / wkt', QP.bowlAvg(bowl)],
     ['Economy', QP.bowlEcon(bowl)],
-    ['Best figures', bestBowl],
+    ['Extras', bowl.extras || 0],
   ];
   const bowlSecondary = [
-    ['Matches', bowl.matches],
-    ['Overs', QP.fmtOvers(bowl.balls)],
-    ['Runs conceded', bowl.runs],
+    ['Innings bowled', bowl.innings],
+    ['Overs (legal)', QP.fmtOvers(bowl.balls)],
+    ['Balls bowled', bowl.deliveries || bowl.balls],
+    ['Runs hit off', bowl.runs],
+    ['Wides', bowl.wides || 0],
+    ['No-balls', bowl.noBalls || 0],
+    ['Dot balls', bowl.dots || 0],
     ['Strike rate', QP.bowlSR(bowl)],
+    ['Best figures', bestBowl],
+    ['Best over', QP.bestBowlingOver(bowl)],
     ['3-wicket hauls', bowl.threeWickets],
     ['5-wicket hauls', bowl.fiveWickets],
+    ['Stood up with the ball', bowl.stoodUp || 0],
+    ['Wins when they stood up', QP.winRate(bowl.stoodUpWins || 0, bowl.stoodUp || 0)],
+    ['Wins when bowling', QP.winRate(bowl.wins || 0, bowl.innings)],
   ];
   return `
     <div class="screen d-flex flex-column player-profile-screen">
@@ -3784,6 +3822,7 @@ function renderPlayerDetail() {
         <div class="player-sections">
           <section class="player-section">
             <h2 class="player-section-title"><span class="dot batting"></span>Batting</h2>
+            <p class="player-section-note">Average is runs per dismissal, from innings they actually batted. Not-outs are left out of the divisor. Dot balls are legal deliveries with no run. Carried means they outscored the rest of their team in that innings.</p>
             <div class="player-stat-card">
               <div class="player-stat-highlights">
                 ${batPrimary.map(([lbl, val]) => `
@@ -3798,6 +3837,7 @@ function renderPlayerDetail() {
           </section>
           <section class="player-section">
             <h2 class="player-section-title"><span class="dot bowling"></span>Bowling</h2>
+            <p class="player-section-note">Average is runs hit off them per wicket, only from innings they bowled. Extras are wides and no-balls. Overs use legal balls. Balls bowled include wides and no-balls. Stood up means they took at least as many wickets as the rest of the attack.</p>
             <div class="player-stat-card">
               <div class="player-stat-highlights">
                 ${bowlPrimary.map(([lbl, val]) => `
@@ -4297,7 +4337,9 @@ function handle(action, dataset) {
     case 'players':
       state.view = 'players';
       state.playerDetail = null;
-      render(); break;
+      render();
+      refreshCareerStatsIfNeeded();
+      break;
     case 'players-tab':
       state.playersTab = dataset.tab || 'roster';
       render();
