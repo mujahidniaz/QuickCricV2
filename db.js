@@ -131,18 +131,23 @@
   let pending = null;
   let inFlight = false;
   let timer = null;
+  const dropped = new Set();
   function schedule(m) {
     if (!m) return;
     // Never let a stale in-progress write overwrite a completed match.
     if (pending && pending.id === m.id && pending.status === 'completed' && m.status !== 'completed') {
       return;
     }
+    dropped.delete(m.id);
     pending = m;
     if (timer) return;
     timer = setTimeout(flush, 400);
   }
   function cancelSync(id) {
-    if (id && pending?.id === id) pending = null;
+    if (id) {
+      dropped.add(id);
+      if (pending?.id === id) pending = null;
+    }
     if (!pending && timer) {
       clearTimeout(timer);
       timer = null;
@@ -156,9 +161,11 @@
     }
     const m = pending;
     pending = null;
+    if (dropped.has(m.id)) return;
     inFlight = true;
     try {
       await upsertMatch(m);
+      if (dropped.has(m.id)) await deleteMatch(m.id);
     } catch (err) {
       console.warn('[QuickCric] sync failed:', err.message);
     } finally {

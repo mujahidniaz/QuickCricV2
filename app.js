@@ -12,7 +12,8 @@ const POLL_INTERVAL_MS = 3000;
 const IN_PROGRESS_TTL_MS = 6 * 60 * 60 * 1000;
 const DEFAULT_TEAM_A = 'Green';
 const DEFAULT_TEAM_B = 'Blue';
-const DEFAULT_VENUE = 'Tempelhofer Feld';
+const VENUES = ['Tempelhofer Feld', 'Schillerpark'];
+const DEFAULT_VENUE = VENUES[0];
 const DEFAULT_OVERS = 8;
 
 const DEVICE_ID = (() => {
@@ -378,6 +379,9 @@ const state = {
   playerStatTab: 'bat',
   summaryInn: 0,
   summaryBalls: false,
+  summaryShowId: false,
+  openerSlot: 'striker',
+  availQuery: '',
   detailReturn: null,
   historyScroll: 0,
   adminUnlocked: false,
@@ -790,6 +794,7 @@ function resetInningsPickers() {
   state.inningsPick = { striker: null, nonStriker: null, bowler: null };
   state.inningsPickUndo = [];
   state.playerPickerFilter = '';
+  state.openerSlot = 'striker';
 }
 
 function pushInningsPickUndo() {
@@ -2452,6 +2457,159 @@ function render() {
   scheduleRender();
 }
 
+// Browser back follows the on-screen back control. Home is the root entry.
+const SCREEN_BACK = {
+  setup: 'back-home',
+  'match-availability': 'back-from-availability',
+  'team-pick': 'back-from-team-pick',
+  'match-toss': 'back-from-toss',
+  'innings-setup': 'back-from-innings-setup',
+  score: 'home',
+  'innings-break': 'home',
+  result: 'back-to-matches',
+  detail: 'back-to-matches',
+  players: 'back-home',
+  'player-detail': 'players',
+  history: 'back-home',
+  'in-progress': 'back-home',
+  admin: 'back-from-admin',
+  terms: 'back-home',
+  view: 'back-home',
+};
+
+const MODAL_BACK = {
+  adminPin: 'cancel-admin-pin',
+  deletePlayerPin: 'cancel-delete-player-pin',
+  editPlayerName: 'cancel-edit-player-name',
+  runOutPick: 'cancel-run-out-pick',
+  editBall: 'cancel-edit-ball',
+  editOverPin: 'cancel-edit-over-pin',
+  retireHurt: 'cancel-retire-hurt',
+  confirmSwapStrike: 'cancel-swap-strike',
+  abort: 'dont-abort',
+  install: 'close-install',
+};
+
+let qcStack = [];
+let qcEpoch = 1;
+let qcSilent = 0;
+let qcNavReady = false;
+let qcAfterSilent = null;
+let qcRewind = false;
+
+function currentNavToken() {
+  const screen = state.shared ? 'view' : (state.view || 'home');
+  return state.modal?.type ? `${screen}#${state.modal.type}` : screen;
+}
+
+function backActionFor(token) {
+  if (!token) return null;
+  const cut = token.indexOf('#');
+  if (cut !== -1) return MODAL_BACK[token.slice(cut + 1)] || null;
+  return SCREEN_BACK[token] || null;
+}
+
+function writeNavState(token, index, mode) {
+  const payload = { qc: token, i: index, epoch: qcEpoch };
+  if (mode === 'replace') history.replaceState(payload, '');
+  else history.pushState(payload, '');
+}
+
+function bootNavHistory() {
+  const token = currentNavToken();
+  qcEpoch += 1;
+  if (token === 'home') {
+    qcStack = ['home'];
+    writeNavState('home', 0, 'replace');
+  } else {
+    qcStack = ['home', token];
+    writeNavState('home', 0, 'replace');
+    writeNavState(token, 1, 'push');
+  }
+  qcNavReady = true;
+}
+
+function reuseNavIndex(token, rewind) {
+  const idx = qcStack.lastIndexOf(token);
+  if (idx < 0 || idx >= qcStack.length - 1) return -1;
+  if (rewind || token === 'home') return idx;
+  const tip = qcStack[qcStack.length - 1];
+  if (tip.includes('#')) return idx;
+  if (idx === qcStack.length - 2) return idx;
+  return -1;
+}
+
+function syncNavHistory() {
+  if (!qcNavReady || qcSilent) return;
+  const token = currentNavToken();
+  const rewind = qcRewind;
+  qcRewind = false;
+  if (!qcStack.length) {
+    qcStack = [token];
+    writeNavState(token, 0, 'replace');
+    return;
+  }
+  if (qcStack[qcStack.length - 1] === token) {
+    const st = history.state;
+    if (!st || st.qc !== token || st.epoch !== qcEpoch) writeNavState(token, qcStack.length - 1, 'replace');
+    return;
+  }
+  const idx = reuseNavIndex(token, rewind);
+  if (idx >= 0) {
+    const steps = qcStack.length - 1 - idx;
+    qcStack = qcStack.slice(0, idx + 1);
+    if (steps > 0) {
+      qcSilent = 1;
+      history.go(-steps);
+    }
+    return;
+  }
+  qcStack.push(token);
+  writeNavState(token, qcStack.length - 1, 'push');
+}
+
+function applyBrowserBack() {
+  if (qcStack.length <= 1) return;
+  const leaving = qcStack.pop();
+  const action = backActionFor(leaving);
+  if (!action) return;
+  qcRewind = true;
+  handle(action, {});
+}
+
+function onNavPopState() {
+  if (qcSilent > 0) {
+    qcSilent -= 1;
+    if (qcSilent === 0 && qcAfterSilent) {
+      const fn = qcAfterSilent;
+      qcAfterSilent = null;
+      fn();
+    }
+    return;
+  }
+  const st = history.state;
+  if (st?.epoch === qcEpoch && typeof st.i === 'number') {
+    if (st.i === qcStack.length - 1) return;
+    if (st.i >= qcStack.length) {
+      qcSilent = 1;
+      history.back();
+      return;
+    }
+    const steps = qcStack.length - 1 - st.i;
+    if (steps > 1) {
+      qcSilent = 1;
+      qcAfterSilent = applyBrowserBack;
+      history.go(steps - 1);
+      return;
+    }
+  }
+  applyBrowserBack();
+}
+
+function browserBackMatches(action) {
+  return !!action && action === backActionFor(currentNavToken()) && qcStack.length > 1;
+}
+
 function renderNow() {
   const root = $('app');
 
@@ -2569,20 +2727,35 @@ function renderNow() {
     }
   }
   syncActiveMatchPoll();
+  syncNavHistory();
 }
 
 function renderTopbar(title, opts = {}) {
-  const { back = 'back-home', right = '', ghost = false } = opts;
+  const { back = 'back-home', right = '' } = opts;
   return `
-    <nav class="navbar qc-navbar sticky-top px-3">
-      <div class="d-flex align-items-center gap-2 flex-grow-1 min-w-0">
-        <button type="button" class="btn btn-sm ${ghost ? 'btn-link text-white qc-back-link' : 'btn-outline-light'} qc-back-btn rounded-circle" data-action="${back}" aria-label="Back">
-          <i class="bi bi-arrow-left"></i>
-        </button>
-        <span class="qc-nav-title text-truncate">${esc(title)}</span>
-      </div>
-      ${right ? `<div class="d-flex align-items-center gap-2 flex-shrink-0">${right}</div>` : ''}
-    </nav>`;
+    <div class="bcc-top">
+      <button type="button" class="bcc-ib" data-action="${back}" aria-label="Back">←</button>
+      <span class="bcc-an">${esc(title)}</span>
+      ${right ? `<div class="bcc-top-side">${right}</div>` : ''}
+    </div>
+    <div class="bcc-art"></div>`;
+}
+
+function renderEyeIcon() {
+  return `<svg viewBox="0 0 24 24" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" d="M2 12s3.8-7 10-7 10 7 10 7-3.8 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3" fill="none" stroke="currentColor" stroke-width="2"/></svg>`;
+}
+
+function setupSteps(step) {
+  return `<div class="bcc-steps">${[1, 2, 3, 4].map(n => `<i class="${n <= step ? 'on' : ''}"></i>`).join('')}</div><div class="bcc-art"></div>`;
+}
+
+function setupTop(title, sub, back, extra = '') {
+  return `
+    <div class="bcc-top bcc-top--tall">
+      <button type="button" class="bcc-ib" data-action="${back}" aria-label="Back">←</button>
+      <div class="bcc-setup-t"><span class="bcc-an">${title}</span>${sub ? `<small>${sub}</small>` : ''}</div>
+      ${extra}
+    </div>`;
 }
 
 function iconBtn(action, icon, extraClass = '', title = '') {
@@ -2670,12 +2843,21 @@ function renderLastMatchCard() {
     </button>`;
 }
 
+function homeLiveMatch() {
+  if (state.current && state.current.status !== 'completed') return state.current;
+  return state.history
+    .filter(m => m.status !== 'completed')
+    .sort((a, b) => (b.startedAt || 0) - (a.startedAt || 0))[0] || null;
+}
+
 function renderHome() {
   const cur = state.current;
-  const inProgressCount = state.history.filter(m => m.status !== 'completed').length;
+  const live = homeLiveMatch();
+  const inProgress = state.history.filter(m => m.status !== 'completed');
   const pastCount = state.history.filter(m => m.status === 'completed').length;
   const playerCount = state.players.length;
-  const otherLive = Math.max(0, inProgressCount - (cur ? 1 : 0));
+  const otherLive = inProgress.filter(m => m.id !== live?.id).length;
+  const playHere = !!(cur && live && cur.id === live.id);
   return `
     <div class="screen bcc-home">
       <div class="bcc-scroll">
@@ -2701,18 +2883,18 @@ function renderHome() {
         <div class="bcc-art"></div>
         <div class="bcc-tick" aria-hidden="true"><div>${esc(homeTickerLine())}</div></div>
         <div class="bcc-wrap">
-          ${cur ? `
-            <button type="button" class="bcc-live" data-action="resume">
+          ${live ? `
+            <button type="button" class="bcc-live" data-action="${playHere ? 'resume' : 'resume-match'}" data-match-id="${esc(live.id)}">
               <span class="bcc-live-dot" aria-hidden="true"></span>
               <span class="bcc-live-text">
                 <b>Live now</b>
-                <small>${esc(cur.teams.A)} vs ${esc(cur.teams.B)}</small>
+                <small>${esc(live.teams.A)} vs ${esc(live.teams.B)}</small>
               </span>
               <span class="bcc-an">Play</span>
             </button>
           ` : ''}
           <button type="button" class="bcc-cta" data-action="new-match">
-            <span><b class="bcc-an">${cur ? 'New match' : 'Start a match'}</b><small>Teams, overs, every ball</small></span>
+            <span><b class="bcc-an">${live ? 'New match' : 'Start a match'}</b><small>Teams, overs, every ball</small></span>
             <span class="bcc-go" aria-hidden="true">→</span>
           </button>
           <div class="bcc-grid">
@@ -2727,11 +2909,9 @@ function renderHome() {
               <small>Batting and bowling ranks</small>
             </button>
           </div>
-          ${cur && otherLive ? `
+          ${otherLive ? `
             <button type="button" class="bcc-more" data-action="in-progress">${otherLive} more in progress</button>
-          ` : (!cur && inProgressCount ? `
-            <button type="button" class="bcc-more" data-action="in-progress">${inProgressCount} in progress</button>
-          ` : '')}
+          ` : ''}
           ${renderLastMatchCard()}
           ${!dbOn() ? `<p class="bcc-sync">Cloud sync off. Add keys in config.js for share links.</p>` : ''}
           ${install.shouldShow() ? `
@@ -2781,7 +2961,7 @@ function renderAdmin() {
     return true;
   })();
   return `
-    <div class="screen d-flex flex-column admin-screen">
+    <div class="screen bcc-page admin-screen">
       ${renderTopbar('Admin', { back: 'back-from-admin', ghost: true })}
       <div class="scroll flex-grow-1 overflow-auto admin-body px-3 py-3">
         <div class="admin-card">
@@ -2822,8 +3002,8 @@ function renderAdmin() {
 
 function renderTerms() {
   return `
-    <div class="screen d-flex flex-column">
-      ${renderTopbar('Terms & Conditions', { ghost: true })}
+    <div class="screen bcc-page">
+      ${renderTopbar('Terms & Conditions')}
       <div class="terms-body flex-grow-1 overflow-auto px-3 px-md-4 pb-4">
         <p class="terms-updated">Last updated: 18 May 2026</p>
 
@@ -2961,42 +3141,39 @@ function pastMatchCard(m) {
 
 function renderSetup() {
   const s = state.setup;
+  const venue = VENUES.includes(s.venue) ? s.venue : DEFAULT_VENUE;
   const presets = [5, 6, 8, 10, 15, 20];
+  const n = state.players.length;
   return `
-    <div class="screen d-flex flex-column">
-      ${renderTopbar('New match', { ghost: true })}
-      <div class="setup-body flex-grow-1 overflow-auto px-3 py-4">
-        <div class="mb-4">
-          <label class="form-label small text-uppercase fw-bold text-muted">Teams</label>
-          <div class="input-group mb-2">
-            <input id="team-a-input" class="form-control form-control-lg" type="text" placeholder="${esc(DEFAULT_TEAM_A)}" value="${esc(s.teamA)}" />
-          </div>
-          <div class="input-group">
-            <input id="team-b-input" class="form-control form-control-lg" type="text" placeholder="${esc(DEFAULT_TEAM_B)}" value="${esc(s.teamB)}" />
-          </div>
-        </div>
-        <div class="mb-4">
-          <label class="form-label small text-uppercase fw-bold text-muted" for="venue-input">Location</label>
-          <input id="venue-input" class="form-control form-control-lg" type="text" placeholder="${esc(DEFAULT_VENUE)}" value="${esc(s.venue || DEFAULT_VENUE)}" />
-        </div>
-        <div class="mb-4">
-          <label class="form-label small text-uppercase fw-bold text-muted">Overs per innings</label>
-          <div class="d-flex align-items-center justify-content-center gap-4 mb-3">
-            <button type="button" class="btn btn-dark btn-lg rounded-circle qc-counter-btn" data-action="overs-step" data-delta="-1" aria-label="Decrease overs" ${s.overs <= 1 ? 'disabled' : ''}>−</button>
-            <span class="counter-value">${s.overs}</span>
-            <button type="button" class="btn btn-dark btn-lg rounded-circle qc-counter-btn" data-action="overs-step" data-delta="1" aria-label="Increase overs" ${s.overs >= 99 ? 'disabled' : ''}>+</button>
-          </div>
-          <div class="d-flex flex-wrap gap-2 justify-content-center">
-            ${presets.map(o => `<button type="button" class="btn btn-sm ${s.overs === o ? 'btn-dark' : 'btn-outline-secondary'} rounded-pill px-3" data-action="overs-pick" data-overs="${o}">${o}</button>`).join('')}
+    <div class="screen bcc-setup">
+      ${setupTop('New match', 'Step 1 of 4 · The basics', 'back-home')}
+      ${setupSteps(1)}
+      <div class="bcc-scroll bcc-setup-body">
+        <div class="bcc-lab">Teams</div>
+        <label class="bcc-fld"><i class="is-a"></i><input id="team-a-input" type="text" value="${esc(s.teamA)}" placeholder="${esc(DEFAULT_TEAM_A)}" autocomplete="off" autocapitalize="words" /></label>
+        <div class="bcc-vsr"><span>VS</span><button type="button" data-action="swap-teams">⇅ Swap</button></div>
+        <label class="bcc-fld"><i class="is-b"></i><input id="team-b-input" type="text" value="${esc(s.teamB)}" placeholder="${esc(DEFAULT_TEAM_B)}" autocomplete="off" autocapitalize="words" /></label>
+        <div class="bcc-sec">
+          <div class="bcc-lab">Location</div>
+          <div class="bcc-fld bcc-fld--loc"><span aria-hidden="true">📍</span><b>${esc(venue)}</b></div>
+          <div class="bcc-loc-chips">
+            ${VENUES.map(name => `<button type="button" class="bcc-chip${name === venue ? ' is-on' : ''}" data-action="pick-venue" data-venue="${esc(name)}">${esc(name)}</button>`).join('')}
           </div>
         </div>
-        ${state.players.length > 0 ? `
-          <div class="alert alert-light border small mb-0">
-            <i class="bi bi-people me-1"></i>${state.players.length} saved players · pick squads next (or skip)
+        <div class="bcc-sec">
+          <div class="bcc-lab">Overs per innings</div>
+          <div class="bcc-ov">
+            <button type="button" data-action="overs-step" data-delta="-1" aria-label="Decrease overs" ${s.overs <= 1 ? 'disabled' : ''}>−</button>
+            <div><div class="bcc-an">${s.overs}</div><small>Overs</small></div>
+            <button type="button" data-action="overs-step" data-delta="1" aria-label="Increase overs" ${s.overs >= 99 ? 'disabled' : ''}>+</button>
           </div>
-        ` : ''}
+          <div class="bcc-loc-chips is-center">
+            ${presets.map(o => `<button type="button" class="bcc-chip${s.overs === o ? ' is-on' : ''}" data-action="overs-pick" data-overs="${o}">${o}</button>`).join('')}
+          </div>
+        </div>
+        ${n ? `<div class="bcc-info"><span aria-hidden="true">👥</span><span><b>${n} saved player${n === 1 ? '' : 's'}</b>Pick squads next, or skip and type names later</span></div>` : ''}
       </div>
-      ${renderBottomBar('Start match', 'start-match')}
+      <div class="bcc-setup-bar"><button type="button" class="bcc-cta bcc-an" data-action="start-match">Start match →</button></div>
     </div>
   `;
 }
@@ -3131,6 +3308,11 @@ function renderMatchToss() {
   `;
 }
 
+function openerNextSlot() {
+  const order = ['striker', 'nonStriker', 'bowler'];
+  return order.find(key => !state.inningsPick[key]) || state.openerSlot || 'bowler';
+}
+
 function renderInningsSetup() {
   const m = state.current;
   const isFirst = m.innings.length === 0;
@@ -3138,63 +3320,60 @@ function renderInningsSetup() {
   const bowling = batting === 'A' ? 'B' : 'A';
   const team = m.teams[batting];
   const target = !isFirst ? m.innings[0].score.runs + 1 : null;
+  const slot = ['striker', 'nonStriker', 'bowler'].includes(state.openerSlot) ? state.openerSlot : 'striker';
+  const QP = window.QCPlayers;
+  const picks = state.inningsPick;
+  const ready = !!(picks.striker?.name && picks.nonStriker?.name && picks.bowler?.name);
+  const query = (state.playerPickerFilter || '').trim().toLowerCase();
+  const mode = slot === 'bowler' ? 'bowl' : 'bat';
+  const action = slot === 'bowler' ? 'pick-bowler' : slot === 'nonStriker' ? 'pick-non-striker' : 'pick-striker';
+  const taken = new Set(
+    (slot === 'bowler' ? [] : [picks.striker, picks.nonStriker])
+      .filter(p => p && p !== picks[slot])
+      .map(p => (p.id || p.name || '').toLowerCase()),
+  );
+  const roster = rosterForInningsSetup(mode).filter(p => !query || p.name.toLowerCase().includes(query));
+  const exact = roster.some(p => p.name.toLowerCase() === query);
+  const hints = {
+    striker: 'Who faces the first ball?',
+    nonStriker: 'Who is at the other end?',
+    bowler: 'Who bowls the first over?',
+  };
+  const slots = [
+    ['striker', 'Striker', '🏏', picks.striker],
+    ['nonStriker', 'Non-striker', '🏃', picks.nonStriker],
+    ['bowler', 'Bowler', '🔴', picks.bowler],
+  ];
+  const flip = isFirst ? `<button type="button" class="bcc-ib" data-action="flip-batting" aria-label="Other team bats first">⇄</button>` : '';
+  const sub = target ? `Innings 2 · chasing ${target}` : `Innings 1 · ${m.overs} overs to bat`;
   return `
-    <div class="screen d-flex flex-column">
-      ${renderTopbar(isFirst ? 'Innings 1' : 'Innings 2', { back: 'back-from-innings-setup' })}
-      <div class="setup-head text-white px-4 py-3">
-        <h2 class="h4 fw-bold mb-1">${esc(team)} batting</h2>
-        ${target ? `<p class="mb-0 opacity-75 small">Chasing ${target} in ${m.overs} overs</p>` : `<p class="mb-0 opacity-75 small">${m.overs} overs to bat</p>`}
+    <div class="screen bcc-setup">
+      ${setupTop(esc(team) + ' batting', esc(sub), 'back-from-innings-setup', flip)}
+      ${setupSteps(4)}
+      <div class="bcc-scroll bcc-setup-body">
+        <div class="bcc-slots">
+          ${slots.map(([key, label, icon, pick]) => `
+            <button type="button" class="bcc-slot is-${key}${slot === key ? ' is-act' : ''}${pick?.name ? ' is-full' : ''}" data-action="opener-slot" data-slot="${key}">
+              <small>${label}</small>
+              <span>${icon}</span>
+              <b>${pick?.name ? esc(pick.name) : 'Tap to pick'}</b>
+            </button>`).join('')}
+        </div>
+        <div class="bcc-lab">${hints[slot]}</div>
+        <input id="opener-query" class="bcc-srch player-picker-filter" type="search" placeholder="Find player…" value="${esc(state.playerPickerFilter || '')}" autocomplete="off" autocapitalize="off" enterkeyhint="search" />
+        <div class="bcc-pg">
+          ${roster.map(p => {
+            const blocked = taken.has(p.id.toLowerCase()) || taken.has(p.name.toLowerCase());
+            const meta = mode === 'bowl'
+              ? `${p.bowling?.wickets || 0} wkts`
+              : `SR ${QP ? QP.batSR(p.batting) : '—'}`;
+            return `<button type="button" class="bcc-pc" data-action="${action}" data-player-id="${esc(p.id)}" data-player-name="${esc(p.name)}" ${blocked ? 'disabled' : ''}><b>${esc(p.name)}</b><small>${meta}</small></button>`;
+          }).join('')}
+          ${query && !exact ? `<button type="button" class="bcc-pc is-add" data-action="opener-add"><b>+ Add “${esc(state.playerPickerFilter.trim())}”</b><small>New name</small></button>` : ''}
+        </div>
+        <div class="bcc-undo"><button type="button" data-action="undo-innings-pick" ${state.inningsPickUndo.length ? '' : 'disabled'}>↶ Undo last pick</button></div>
       </div>
-      <div class="setup-body flex-grow-1 overflow-auto px-3 py-3 innings-pickers">
-        ${state.players.length ? `<p class="innings-pickers-hint">${matchUsesAutoSquads(m)
-          ? `${esc(m.teams[batting])} bat · ${esc(m.teams[bowling])} bowl`
-          : 'Tap a name for each role'}</p>` : ''}
-        ${rosterForInningsSetup('bat').length >= 10 ? `
-          <input type="search" class="form-control form-control-sm player-picker-filter player-picker-filter--setup mb-2" placeholder="Find player…" value="${esc(state.playerPickerFilter || '')}" autocomplete="off" autocapitalize="off" enterkeyhint="search" />
-        ` : ''}
-        ${renderPlayerPicker({
-          label: 'Striker',
-          role: 'striker',
-          action: 'pick-striker',
-          players: rosterForInningsSetup('bat'),
-          mode: 'bat',
-          manualKey: 'striker',
-          inputId: 'striker-input',
-          excludeName: state.inningsPick.nonStriker?.name || '',
-          selected: state.inningsPick.striker,
-          showFilter: false,
-          filterText: state.playerPickerFilter,
-        })}
-        ${renderPlayerPicker({
-          label: 'Non-striker',
-          role: 'nonStriker',
-          action: 'pick-non-striker',
-          players: rosterForInningsSetup('bat'),
-          mode: 'bat',
-          manualKey: 'nonStriker',
-          inputId: 'non-striker-input',
-          excludeName: state.inningsPick.striker?.name || '',
-          selected: state.inningsPick.nonStriker,
-          showFilter: false,
-          filterText: state.playerPickerFilter,
-        })}
-        ${renderPlayerPicker({
-          label: 'Bowler',
-          role: 'bowler',
-          action: 'pick-bowler',
-          players: rosterForInningsSetup('bowl'),
-          mode: 'bowl',
-          manualKey: 'bowler',
-          inputId: 'bowler-input',
-          selected: state.inningsPick.bowler,
-          showFilter: false,
-          filterText: state.playerPickerFilter,
-        })}
-      </div>
-      <div class="undo-row px-3 pb-2">
-        <button type="button" class="btn btn-sm btn-outline-secondary w-100" data-action="undo-innings-pick" ${state.inningsPickUndo.length ? '' : 'disabled'}>↶ Undo last pick</button>
-      </div>
-      ${renderBottomBar('Start innings', 'start-innings')}
+      <div class="bcc-setup-bar"><button type="button" class="bcc-cta bcc-an" data-action="start-innings" ${ready ? '' : 'disabled'}>Start innings</button></div>
     </div>
   `;
 }
@@ -3470,17 +3649,27 @@ function renderInningsBreak() {
   const i1 = m.innings[0];
   const battingNext = m.battingFirst === 'A' ? 'B' : 'A';
   return `
-    <div class="screen break-screen d-flex flex-column overflow-auto">
-      ${renderTopbar('Innings break', { back: 'home', right: iconBtn('share', 'box-arrow-up', '', 'Share') })}
-      <div class="break-hero text-white text-center px-4 py-4">
-        <div class="small text-uppercase opacity-75 fw-bold mb-1">End of innings 1</div>
-        <div class="h5 fw-bold mb-2">${esc(m.teams[i1.batting])}</div>
-        <div class="score-big">${i1.score.runs}/${i1.score.wickets}</div>
-        <div class="opacity-75 mb-3">${fmtOvers(i1.score.balls)} overs · RR ${fmtRate(i1.score.runs, i1.score.balls)}</div>
-        <span class="badge rounded-pill text-bg-warning fs-6 px-3 py-2">${esc(m.teams[battingNext])} need ${i1.score.runs + 1}</span>
+    <div class="screen bcc-sum">
+      <div class="bcc-top">
+        <button type="button" class="bcc-ib" data-action="home" aria-label="Back">←</button>
+        <span class="bcc-an">Innings break</span>
+        <button type="button" class="bcc-ib" data-action="share" aria-label="Share">↗</button>
       </div>
-      <div class="scorecard px-3 pb-3 flex-grow-1">${renderInningsCard(m, i1, 'Innings 1')}</div>
-      ${renderBottomBar('Start 2nd innings', 'start-next-innings')}
+      <div class="bcc-scroll">
+        <div class="bcc-sum-hero">
+          <div class="bcc-sum-lab">End of innings 1</div>
+          <h1 class="bcc-an">${i1.score.runs}/${i1.score.wickets}</h1>
+          <p>${esc(m.teams[i1.batting])} · ${fmtOvers(i1.score.balls)} overs · RR ${fmtRate(i1.score.runs, i1.score.balls)}</p>
+          <p class="bcc-break-need">${esc(m.teams[battingNext])} need ${i1.score.runs + 1}</p>
+        </div>
+        <div class="bcc-art"></div>
+        <div class="bcc-sum-wrap">
+          <h2>Innings 1</h2>
+          ${renderSummaryBatting(i1)}
+          ${renderSummaryBowling(i1)}
+        </div>
+      </div>
+      <div class="bcc-setup-bar"><button type="button" class="bcc-cta bcc-an" data-action="start-next-innings">Start 2nd innings</button></div>
     </div>
   `;
 }
@@ -3728,14 +3917,15 @@ function renderDetail() {
       <div class="bcc-top">
         <button type="button" class="bcc-ib" data-action="back-to-matches" aria-label="Back">←</button>
         <span class="bcc-an">Match summary</span>
+        <button type="button" class="bcc-ib bcc-eye${state.summaryShowId ? ' is-on' : ''}" data-action="toggle-match-id" aria-label="${state.summaryShowId ? 'Hide match code' : 'Show match code'}" aria-pressed="${state.summaryShowId ? 'true' : 'false'}">${renderEyeIcon()}</button>
         <button type="button" class="bcc-ib" data-action="share" aria-label="Share">↗</button>
       </div>
+      ${state.summaryShowId ? `<button type="button" class="bcc-id-reveal" data-action="copy-match-id" data-match-id="${esc(m.id)}">${esc(m.id)}</button>` : ''}
       <div class="bcc-scroll">
         <div class="bcc-sum-hero">
           <div class="bcc-sum-lab">${done ? 'Result' : 'Status'}</div>
           <h1 class="bcc-an">${esc(m.result || (done ? 'Match tied' : 'In progress'))}</h1>
           <p>${esc(m.teams.A)} vs ${esc(m.teams.B)} · ${esc(summaryWhen(m.startedAt))} · ${m.overs} overs<br>${esc(matchVenue(m))}</p>
-          <button type="button" class="bcc-code" data-action="copy-match-id" data-match-id="${esc(m.id)}">${esc(m.id)}</button>
           ${renderSummaryFace(m)}
         </div>
         <div class="bcc-art"></div>
@@ -3883,42 +4073,36 @@ function renderMatchAvailability() {
   const checked = new Set(state.matchAvailability?.ids || []);
   const n = checked.size;
   const canSquads = n >= 2;
-  const draftCount = (state.teamPick?.squads?.A?.length || 0) + (state.teamPick?.squads?.B?.length || 0);
   const QP = window.QCPlayers;
+  const q = (state.availQuery || '').trim().toLowerCase();
+  const rows = sorted.filter(p => !q || p.name.toLowerCase().includes(q));
   return `
-    <div class="screen d-flex flex-column match-avail-screen">
-      ${renderTopbar('Available today', { back: 'back-from-availability', ghost: true })}
-      <div class="setup-head text-white px-4 py-3">
-        <h2 class="h5 fw-bold mb-1">${esc(m?.teams?.A || '')} vs ${esc(m?.teams?.B || '')}</h2>
-        <p class="mb-0 small opacity-75">${n} of ${sorted.length} players available</p>
-      </div>
-      <div class="avail-toolbar px-3 py-2 d-flex gap-2 border-bottom bg-white">
-        <button type="button" class="btn btn-sm btn-outline-secondary" data-action="availability-select-all">Select all</button>
-        <button type="button" class="btn btn-sm btn-outline-secondary" data-action="availability-clear">Clear</button>
-      </div>
-      <div class="scroll flex-grow-1 overflow-auto players-list-scroll">
-        <div class="players-table">
-          <div class="players-table-body">
-            ${sorted.map(p => {
-              const on = checked.has(p.id);
-              return `
-              <label class="avail-row${on ? ' is-checked' : ''}">
+    <div class="screen bcc-setup">
+      ${setupTop(`${esc(m?.teams?.A || '')} vs ${esc(m?.teams?.B || '')}`, `${n} of ${sorted.length} available today`, 'back-from-availability')}
+      ${setupSteps(2)}
+      <div class="bcc-scroll bcc-setup-body">
+        <div class="bcc-tools">
+          <input id="avail-query" class="bcc-srch" type="search" placeholder="Find player…" value="${esc(state.availQuery || '')}" autocomplete="off" autocapitalize="off" enterkeyhint="search" />
+          <button type="button" class="bcc-sm" data-action="availability-select-all">All</button>
+          <button type="button" class="bcc-sm" data-action="availability-clear">Clear</button>
+        </div>
+        <div class="bcc-plist">
+          ${rows.map(p => {
+            const on = checked.has(p.id);
+            return `
+              <label class="bcc-prow${on ? ' is-on' : ''}">
                 <input type="checkbox" class="avail-check" data-player-id="${esc(p.id)}" ${on ? 'checked' : ''} />
-                <span class="players-row-avatar">${esc(p.name.charAt(0).toUpperCase())}</span>
-                <span class="players-row-text">
-                  <span class="players-row-name">${esc(p.name)}</span>
-                  <span class="players-row-meta">${p.batting.runs} runs · ${p.bowling.wickets} wkts · SR ${QP.batSR(p.batting)}</span>
-                </span>
+                <span class="bcc-cb" aria-hidden="true">✓</span>
+                <span class="bcc-av bcc-an">${esc(p.name.charAt(0).toUpperCase())}</span>
+                <span class="bcc-nm"><b>${esc(p.name)}</b><small>${p.batting.runs} runs · ${p.bowling.wickets} wkts · SR ${QP.batSR(p.batting)}</small></span>
               </label>`;
-            }).join('')}
-          </div>
+          }).join('') || '<p class="bcc-empty">No players match that search.</p>'}
         </div>
       </div>
-      <div class="qc-bottom-bar border-top bg-body px-3 py-3 mt-auto d-grid gap-2">
-        <button type="button" class="btn btn-primary btn-lg fw-bold" data-action="availability-auto" ${canSquads ? '' : 'disabled'}>Auto-pick balanced teams</button>
-        ${draftCount > 0 ? `<button type="button" class="btn btn-outline-primary" data-action="availability-review">Review teams (${draftCount})</button>` : ''}
-        <button type="button" class="btn btn-outline-dark" data-action="availability-manual" ${canSquads ? '' : 'disabled'}>Pick teams manually</button>
-        <button type="button" class="btn btn-link text-muted" data-action="availability-skip">Skip squads · type names later</button>
+      <div class="bcc-setup-bar">
+        <button type="button" class="bcc-cta bcc-an" data-action="availability-auto" ${canSquads ? '' : 'disabled'}>Auto-pick balanced teams</button>
+        <button type="button" class="bcc-outline" data-action="availability-manual" ${canSquads ? '' : 'disabled'}>Pick teams manually</button>
+        <button type="button" class="bcc-lnk" data-action="availability-skip">Skip squads · type names later</button>
       </div>
     </div>
   `;
@@ -3937,104 +4121,76 @@ function renderSquadReviewRow(id, side, m, squads) {
     </div>`;
 }
 
+function squadStrengthPct(players, squads) {
+  const scores = window.QCPlayers?.teamBalanceScores?.(players) || [];
+  const map = new Map(scores.map(s => [s.id, s.rating || 0]));
+  const sum = (ids) => ids.reduce((t, id) => t + (map.get(id) || 0), 0);
+  const a = sum(squads.A);
+  const b = sum(squads.B);
+  const tot = a + b;
+  return { a, b, pct: tot ? Math.round((a / tot) * 100) : null };
+}
+
 function renderTeamPick() {
   const tp = state.teamPick;
   const m = state.current;
-  const isReview = tp.mode === 'review';
-  const picking = isReview ? tp.picking : teamPickSideForNext(tp.squads);
-  const avail = availableForPick();
-  const teamName = m.teams[picking];
   const countA = tp.squads.A.length;
   const countB = tp.squads.B.length;
   const sizeDiff = squadSizeDiff(tp.squads);
-
-  if (isReview) {
-    return `
-    <div class="screen d-flex flex-column squad-review-screen">
-      ${renderTopbar('Review squads', { back: 'back-from-team-pick', ghost: true })}
-      <div class="setup-head text-white px-4 py-3">
-        <h2 class="h5 fw-bold mb-1">${esc(m.teams.A)} vs ${esc(m.teams.B)}</h2>
-        <p class="mb-0 small opacity-75">Move players between teams · sizes stay equal (or one extra if odd total)</p>
-        ${sizeDiff > 1 ? `<p class="mb-0 small text-warning mt-1">Teams are ${sizeDiff} apart — tap Reshuffle or move players to even up</p>` : ''}
-      </div>
-      <div class="px-3 py-3 flex-grow-1 overflow-auto">
-        <div class="row g-2 squad-review-cols">
-          <div class="col-6">
-            <div class="card h-100">
-              <div class="card-header py-2 d-flex justify-content-between">
-                <span class="small fw-bold">${esc(m.teams.A)}</span>
-                <span class="badge text-bg-secondary">${countA}</span>
-              </div>
-              <div class="card-body py-2 squad-review-list">
-                ${tp.squads.A.length
-                  ? tp.squads.A.map(id => renderSquadReviewRow(id, 'A', m, tp.squads)).join('')
-                  : '<span class="text-muted small">Empty</span>'}
-              </div>
-            </div>
+  const pool = playersAvailableToday();
+  const sideOf = new Map();
+  tp.squads.A.forEach(id => sideOf.set(id, 'A'));
+  tp.squads.B.forEach(id => sideOf.set(id, 'B'));
+  const unassigned = pool.filter(p => !sideOf.has(p.id)).length;
+  const strength = squadStrengthPct(pool, tp.squads);
+  const ready = countA >= 2 && countB >= 2 && sizeDiff <= 1;
+  const note = unassigned
+    ? `${unassigned} still to assign`
+    : sizeDiff > 1
+      ? 'Tap a few players across to even it out'
+      : (strength.pct != null && Math.abs(strength.pct - 50) <= 8)
+        ? 'Nicely balanced'
+        : 'Tap a few players across to even it out';
+  const order = { A: 0, B: 1 };
+  const rows = [...pool].sort((a, b) =>
+    (order[sideOf.get(a.id)] ?? 2) - (order[sideOf.get(b.id)] ?? 2)
+    || a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }));
+  const markA = (m.teams.A || 'A').trim().charAt(0).toUpperCase() || 'A';
+  const markB = (m.teams.B || 'B').trim().charAt(0).toUpperCase() || 'B';
+  const shuffle = (countA + countB) > 0 ? 'squad-review-reshuffle' : 'auto-pick-teams';
+  return `
+    <div class="screen bcc-setup">
+      ${setupTop('Pick teams', `${pool.length} players in today`, 'back-from-team-pick', `<button type="button" class="bcc-ib" data-action="${shuffle}" aria-label="Shuffle teams">🔀</button>`)}
+      ${setupSteps(3)}
+      <div class="bcc-scroll bcc-setup-body">
+        <div class="bcc-bal">
+          <div class="bcc-bal-r">
+            <div><div class="bcc-an is-g">${countA}</div><small>${esc(m.teams.A)}</small></div>
+            <div class="is-mid"><div class="bcc-an">${strength.pct == null ? '– : –' : `${strength.pct} : ${100 - strength.pct}`}</div><small>Strength</small></div>
+            <div class="is-end"><div class="bcc-an is-b">${countB}</div><small>${esc(m.teams.B)}</small></div>
           </div>
-          <div class="col-6">
-            <div class="card h-100">
-              <div class="card-header py-2 d-flex justify-content-between">
-                <span class="small fw-bold">${esc(m.teams.B)}</span>
-                <span class="badge text-bg-secondary">${countB}</span>
-              </div>
-              <div class="card-body py-2 squad-review-list">
-                ${tp.squads.B.length
-                  ? tp.squads.B.map(id => renderSquadReviewRow(id, 'B', m, tp.squads)).join('')
-                  : '<span class="text-muted small">Empty</span>'}
-              </div>
-            </div>
-          </div>
+          <div class="bcc-split"><i class="is-a" style="flex:${strength.a || 1}"></i><i class="is-b" style="flex:${strength.b || 1}"></i></div>
+          <p>${note}</p>
+        </div>
+        <div class="bcc-plist">
+          ${rows.map(p => {
+            const side = sideOf.get(p.id) || '';
+            return `
+              <div class="bcc-prow">
+                <span class="bcc-av bcc-an">${esc(p.name.charAt(0).toUpperCase())}</span>
+                <span class="bcc-nm"><b>${esc(p.name)}</b><small>${p.batting.runs} runs · ${p.bowling.wickets} wkts</small></span>
+                <span class="bcc-seg">
+                  <button type="button" class="is-a${side === 'A' ? ' is-on' : ''}" data-action="assign-squad" data-player-id="${esc(p.id)}" data-side="A">${esc(markA)}</button>
+                  <button type="button" class="is-b${side === 'B' ? ' is-on' : ''}" data-action="assign-squad" data-player-id="${esc(p.id)}" data-side="B">${esc(markB)}</button>
+                </span>
+              </div>`;
+          }).join('') || '<p class="bcc-empty">No players marked available.</p>'}
         </div>
       </div>
-      <div class="qc-bottom-bar border-top bg-body px-3 py-3 mt-auto d-grid gap-2">
-        <button type="button" class="btn btn-outline-secondary" data-action="squad-review-reshuffle">Reshuffle auto-pick</button>
-        <button type="button" class="btn btn-outline-secondary" data-action="undo-team-pick" ${state.teamPickUndo.length ? '' : 'disabled'}>↶ Undo</button>
-        <button type="button" class="btn btn-primary btn-lg fw-bold" data-action="finish-team-pick">Continue to toss</button>
+      <div class="bcc-setup-bar">
+        <button type="button" class="bcc-cta bcc-an" data-action="finish-team-pick" ${ready ? '' : 'disabled'}>Continue to toss →</button>
       </div>
     </div>`;
-  }
-
-  return `
-    <div class="screen d-flex flex-column">
-      ${renderTopbar('Pick squads', { back: 'back-from-team-pick', ghost: true })}
-      <div class="setup-head text-white px-4 py-3">
-        <h2 class="h5 fw-bold mb-1">${esc(m.teams.A)} vs ${esc(m.teams.B)}</h2>
-        <p class="mb-0 small opacity-75">Captains pick alternately · ${esc(m.teams.A)} ${countA} · ${esc(m.teams.B)} ${countB}</p>
-      </div>
-      <div class="px-3 py-3">
-        <div class="row g-2">
-          <div class="col-6">
-            <div class="card h-100 ${picking === 'A' ? 'border-warning border-2 shadow-sm' : ''}">
-              <div class="card-header py-2 d-flex justify-content-between"><span class="small fw-bold">${esc(m.teams.A)}</span><span class="badge text-bg-secondary">${countA}</span></div>
-              <div class="card-body py-2 d-flex flex-wrap gap-1">${tp.squads.A.map(id => `<span class="badge text-bg-light text-dark border">${esc(playerName(id))}</span>`).join('') || '<span class="text-muted small">Empty</span>'}</div>
-            </div>
-          </div>
-          <div class="col-6">
-            <div class="card h-100 ${picking === 'B' ? 'border-warning border-2 shadow-sm' : ''}">
-              <div class="card-header py-2 d-flex justify-content-between"><span class="small fw-bold">${esc(m.teams.B)}</span><span class="badge text-bg-secondary">${countB}</span></div>
-              <div class="card-body py-2 d-flex flex-wrap gap-1">${tp.squads.B.map(id => `<span class="badge text-bg-light text-dark border">${esc(playerName(id))}</span>`).join('') || '<span class="text-muted small">Empty</span>'}</div>
-            </div>
-          </div>
-        </div>
-      </div>
-      <div class="setup-body flex-grow-1 overflow-auto px-3">
-        <p class="mb-3">Picking for <strong>${esc(teamName)}</strong></p>
-        <div class="d-flex flex-wrap gap-2">
-          ${avail.length ? avail.map(p => `
-            <button type="button" class="btn btn-outline-dark rounded-pill" data-action="team-pick-player" data-player-id="${esc(p.id)}">${esc(p.name)}</button>
-          `).join('') : '<span class="text-muted">All players picked</span>'}
-        </div>
-      </div>
-      <div class="qc-bottom-bar border-top bg-body px-3 py-3 mt-auto d-grid gap-2">
-        <button type="button" class="btn btn-outline-secondary" data-action="auto-pick-teams">Auto-pick teams</button>
-        ${(countA + countB) > 0 ? `<button type="button" class="btn btn-outline-primary" data-action="enter-squad-review">Review squads</button>` : ''}
-        <button type="button" class="btn btn-outline-secondary" data-action="undo-team-pick" ${state.teamPickUndo.length ? '' : 'disabled'}>↶ Undo last pick</button>
-        <button type="button" class="btn btn-primary btn-lg fw-bold" data-action="finish-team-pick">Continue to toss</button>
-        <button type="button" class="btn btn-link text-muted" data-action="skip-team-pick">Skip · type names later</button>
-      </div>
-    </div>
-  `;
 }
 
 function renderPlayers() {
@@ -4445,13 +4601,13 @@ function renderInProgress() {
   const items = state.history.filter(m => m.status !== 'completed')
     .sort((a, b) => b.startedAt - a.startedAt);
   return `
-    <div class="screen d-flex flex-column">
-      ${renderTopbar('In-progress', { right: state.loadingHistory ? '<span class="spinner-border spinner-border-sm text-light"></span>' : '' })}
-      <div class="scroll flex-grow-1 overflow-auto px-3 py-3">
+    <div class="screen bcc-past">
+      ${renderTopbar('In progress')}
+      <div class="bcc-scroll">
         ${items.length === 0 ? `
-          <div class="text-center text-muted py-5">No matches in progress.</div>
+          <p class="bcc-empty">No matches in progress.</p>
         ` : `
-          <p class="small text-uppercase fw-bold text-muted mb-2">${items.length} ${items.length === 1 ? 'match' : 'matches'}</p>
+          <div class="bcc-pm-cnt">${items.length} ${items.length === 1 ? 'match' : 'matches'}</div>
           ${items.map(inProgressCard).join('')}
         `}
       </div>
@@ -4461,21 +4617,23 @@ function renderInProgress() {
 
 function inProgressCard(m) {
   const scorer = canScore(m);
-  const i1 = m.innings[0], i2 = m.innings[1];
+  const inns = (m.innings || []).slice(0, 2);
+  const rows = inns.map(inn => {
+    const name = m.teams[inn.batting] || '';
+    return `<div class="bcc-pm-tm"><span class="bcc-pm-dot is-${teamTone(name)}"></span><b>${esc(name)}</b><span class="bcc-pm-sc bcc-an">${inn.score.runs}/${inn.score.wickets}</span><small>(${fmtOvers(inn.score.balls)})</small></div>`;
+  }).join('');
+  const action = scorer ? 'resume-match' : 'take-scoring';
+  const label = scorer ? 'Resume' : 'Score this match';
   return `
-    <div class="card border-0 shadow-sm mb-3 overflow-hidden">
-      <button type="button" class="card-body w-100 text-start border-0 bg-transparent qc-match-card" data-action="view-detail" data-match-id="${esc(m.id)}">
-        <div class="text-muted small text-uppercase fw-semibold mb-1">${fmtDate(m.startedAt)}</div>
-        <div class="fw-bold mb-2">${esc(m.teams.A)} vs ${esc(m.teams.B)}</div>
-        ${i1 ? `<div class="d-flex justify-content-between small text-secondary mb-1"><span>${esc(m.teams[i1.batting])}</span><span class="font-monospace">${i1.score.runs}/${i1.score.wickets}</span></div>` : ''}
-        ${i2 ? `<div class="d-flex justify-content-between small text-secondary mb-2"><span>${esc(m.teams[i2.batting])}</span><span class="font-monospace">${i2.score.runs}/${i2.score.wickets}</span></div>` : ''}
-        <span class="badge text-bg-success">In progress</span>
+    <div class="bcc-livecard">
+      <button type="button" class="bcc-pm" data-action="view-detail" data-match-id="${esc(m.id)}">
+        <div class="bcc-pm-hd"><span>${fmtDate(m.startedAt)}</span><span>In progress</span></div>
+        <div class="bcc-pm-venue">${esc(matchVenue(m))}</div>
+        ${rows || `<div class="bcc-pm-tm"><b>${esc(m.teams.A)} vs ${esc(m.teams.B)}</b></div>`}
+        <div class="bcc-pm-ft"><span class="bcc-pm-res">${esc(m.teams.A)} vs ${esc(m.teams.B)}</span><span class="bcc-pm-go">Summary →</span></div>
       </button>
-      ${scorer
-      ? `<button type="button" class="btn btn-warning w-100 rounded-0 fw-bold" data-action="resume-match" data-match-id="${esc(m.id)}"><i class="bi bi-play-fill me-2"></i>Resume</button>`
-      : `<button type="button" class="btn btn-success w-100 rounded-0 fw-bold" data-action="take-scoring" data-match-id="${esc(m.id)}"><i class="bi bi-play-fill me-2"></i>Score this match</button>`}
-    </div>
-  `;
+      <button type="button" class="bcc-cta bcc-an" data-action="${action}" data-match-id="${esc(m.id)}">${label}</button>
+    </div>`;
 }
 
 function renderSharedView() {
@@ -4498,16 +4656,13 @@ function renderSharedView() {
   const scorecardOpen = state.sharedScorecardOpen !== undefined ? state.sharedScorecardOpen : defaultOpen;
 
   return `
-    <div class="screen result-screen">
-      <div class="view-banner">${isLive ? 'Live · updates every 3s' : 'Shared scorecard · read-only'}</div>
-      <div class="topbar">
-        <div class="left">
-          <span class="title">${esc(m.teams.A)} vs ${esc(m.teams.B)}</span>
-        </div>
-        <div class="right">
-          <button class="icon-btn" data-action="back-home" title="Close">×</button>
-        </div>
+    <div class="screen bcc-page">
+      <div class="bcc-top">
+        <button type="button" class="bcc-ib" data-action="back-home" aria-label="Close">←</button>
+        <span class="bcc-an">${esc(m.teams.A)} vs ${esc(m.teams.B)}</span>
       </div>
+      <div class="bcc-art"></div>
+      <p class="bcc-share-note">${isLive ? 'Live · updates every 3s' : 'Shared scorecard · read-only'}</p>
 
       ${hasActiveInnings ? renderLivePanel(m) : `
         <div class="result-banner">
@@ -4856,7 +5011,7 @@ function handle(action, dataset) {
         persistMatch(state.current);
         state.shared = null;
         stopPolling();
-        history.replaceState(null, '', location.pathname);
+        history.replaceState(history.state, '', location.pathname);
       } else {
         state.current = m;
         persistMatch(m);
@@ -4887,7 +5042,7 @@ function handle(action, dataset) {
         state.shared = null;
         state.sharedScorecardOpen = undefined;
         stopPolling();
-        history.replaceState(null, '', location.pathname);
+        history.replaceState(history.state, '', location.pathname);
       }
       state.view = 'home'; state.detail = null; state.modal = null; render();
       if (dbOn()) refreshHistory();
@@ -5087,7 +5242,10 @@ function handle(action, dataset) {
     case 'back-from-availability': {
       const m = state.current;
       if (!m) { state.view = 'home'; render(); break; }
-      if (dbOn()) window.QCDB.deleteMatch(m.id).catch(() => { });
+      if (dbOn()) {
+        window.QCDB.cancelSync(m.id);
+        window.QCDB.deleteMatch(m.id).catch(() => { });
+      }
       state.history = state.history.filter(x => x.id !== m.id);
       saveHistory(state.history);
       state.setup = { teamA: m.teams.A, teamB: m.teams.B, overs: m.overs, battingFirst: m.battingFirst, skipTeamPick: false };
@@ -5143,7 +5301,10 @@ function handle(action, dataset) {
       } else if (state.players.length > 0) {
         state.view = 'match-availability';
       } else {
-        if (dbOn()) window.QCDB.deleteMatch(m.id).catch(() => { });
+        if (dbOn()) {
+          window.QCDB.cancelSync(m.id);
+          window.QCDB.deleteMatch(m.id).catch(() => { });
+        }
         state.history = state.history.filter(x => x.id !== m.id);
         saveHistory(state.history);
         state.setup = { teamA: m.teams.A, teamB: m.teams.B, overs: m.overs, battingFirst: 'A', skipTeamPick: false };
@@ -5199,6 +5360,8 @@ function handle(action, dataset) {
         }
         state.inningsPick[pickKey] = { name: dataset.playerName, id: dataset.playerId || null };
         state.inningsManual[pickKey] = false;
+        state.playerPickerFilter = '';
+        state.openerSlot = openerNextSlot();
         render();
         break;
       }
@@ -5261,6 +5424,17 @@ function handle(action, dataset) {
         state.setup.battingFirst = dataset.team;
       }
       render(); break;
+    case 'swap-teams': {
+      const a = state.setup.teamA;
+      state.setup.teamA = state.setup.teamB;
+      state.setup.teamB = a;
+      render();
+      break;
+    }
+    case 'pick-venue':
+      if (VENUES.includes(dataset.venue)) state.setup.venue = dataset.venue;
+      render();
+      break;
     case 'overs-pick':
       state.setup.overs = parseInt(dataset.overs, 10); render(); break;
     case 'overs-step': {
@@ -5520,6 +5694,52 @@ function handle(action, dataset) {
       }
       break;
     }
+    case 'toggle-match-id':
+      state.summaryShowId = !state.summaryShowId;
+      render();
+      break;
+    case 'opener-slot':
+      if (['striker', 'nonStriker', 'bowler'].includes(dataset.slot)) {
+        state.openerSlot = dataset.slot;
+        render();
+      }
+      break;
+    case 'opener-add': {
+      const name = (state.playerPickerFilter || '').trim();
+      if (!name) break;
+      const slot = state.openerSlot === 'bowler' || state.openerSlot === 'nonStriker' ? state.openerSlot : 'striker';
+      handle(slot === 'bowler' ? 'pick-bowler' : slot === 'nonStriker' ? 'pick-non-striker' : 'pick-striker', {
+        playerName: name,
+        playerId: '',
+      });
+      break;
+    }
+    case 'flip-batting': {
+      const m = state.current;
+      if (!m || m.innings.length) break;
+      m.battingFirst = m.battingFirst === 'B' ? 'A' : 'B';
+      persistMatch(m);
+      resetInningsPickers();
+      render();
+      break;
+    }
+    case 'assign-squad': {
+      const id = dataset.playerId;
+      const side = dataset.side === 'B' ? 'B' : 'A';
+      if (!id || !state.teamPick?.squads) break;
+      const squads = state.teamPick.squads;
+      const other = side === 'A' ? 'B' : 'A';
+      pushTeamPickUndo();
+      if (squads[side].includes(id)) {
+        squads[side] = squads[side].filter(x => x !== id);
+      } else {
+        squads[other] = (squads[other] || []).filter(x => x !== id);
+        squads[side].push(id);
+      }
+      state.teamPick.autoBalanced = false;
+      render();
+      break;
+    }
     case 'summary-innings':
       state.summaryInn = Number(dataset.index) || 0;
       render();
@@ -5549,6 +5769,7 @@ function handle(action, dataset) {
         state.detail = m;
         state.summaryInn = 0;
         state.summaryBalls = false;
+        state.summaryShowId = false;
         state.detailReturn = state.view === 'in-progress' ? 'in-progress' : 'history';
         state.view = 'detail';
         render();
@@ -5581,11 +5802,13 @@ async function init() {
     if (parsed.kind === 'snapshot') {
       state.shared = parsed.match;
       state.view = 'view';
+      bootNavHistory();
       render();
       return;
     }
     if (parsed.kind === 'id') {
       state.view = 'view';
+      bootNavHistory();
       render();
       await loadSharedById(parsed.id);
       return;
@@ -5604,6 +5827,7 @@ async function init() {
   }
   purgeStaleInProgress();
   state.view = 'home';
+  bootNavHistory();
   render();
 
   if (dbOn()) {
@@ -5621,6 +5845,7 @@ async function init() {
 
 document.addEventListener('DOMContentLoaded', () => {
   audio.init();
+  window.addEventListener('popstate', onNavPopState);
   init();
   const app = $('app');
 
@@ -5628,13 +5853,17 @@ document.addEventListener('DOMContentLoaded', () => {
     const t = e.target.closest('[data-action]');
     if (!t) return;
     const action = t.dataset.action;
+    if (browserBackMatches(action)) {
+      history.back();
+      return;
+    }
 
     if (action === 'start-match') {
       const a = $('team-a-input')?.value || '';
       const b = $('team-b-input')?.value || '';
       state.setup.teamA = a;
       state.setup.teamB = b;
-      const venue = ($('venue-input')?.value || '').trim() || DEFAULT_VENUE;
+      const venue = VENUES.includes(state.setup.venue) ? state.setup.venue : DEFAULT_VENUE;
       state.setup.venue = venue;
       if (!a.trim() || !b.trim()) return showToast('Enter both team names');
       startMatch(a, b, state.setup.overs, null, venue);
@@ -5879,7 +6108,6 @@ document.addEventListener('DOMContentLoaded', () => {
     if (state.view === 'setup') {
       if (e.target.id === 'team-a-input') state.setup.teamA = e.target.value;
       if (e.target.id === 'team-b-input') state.setup.teamB = e.target.value;
-      if (e.target.id === 'venue-input') state.setup.venue = e.target.value;
     }
     if (state.view === 'history' && e.target.id === 'history-date-input') {
       const v = e.target.value;
@@ -5891,6 +6119,10 @@ document.addEventListener('DOMContentLoaded', () => {
         state.historyFilter = 'all';
       }
       state.historyScroll = 0;
+      render();
+    }
+    if (e.target.id === 'avail-query') {
+      state.availQuery = e.target.value;
       render();
     }
     if (e.target.classList?.contains('player-picker-filter')) {
