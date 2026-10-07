@@ -4372,9 +4372,9 @@ function renderColumns(title, items, color) {
     const x = i * slot + (slot - bw) / 2;
     const y = 86 - bh;
     return `
-      <text x="${(x + bw / 2).toFixed(1)}" y="12" text-anchor="middle" font-size="11" font-weight="700" fill="#08120d">${item.value}</text>
+      <text x="${(x + bw / 2).toFixed(1)}" y="12" text-anchor="middle" font-size="11" font-weight="700" fill="#eef3e4">${item.value}</text>
       <rect x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${bw.toFixed(1)}" height="${bh.toFixed(1)}" rx="4" fill="${color}"/>
-      <text x="${(x + bw / 2).toFixed(1)}" y="104" text-anchor="middle" font-size="11" font-weight="700" fill="#46534c">${esc(item.label)}</text>`;
+      <text x="${(x + bw / 2).toFixed(1)}" y="104" text-anchor="middle" font-size="11" font-weight="700" fill="#8aa092">${esc(item.label)}</text>`;
   }).join('');
   return `
     <div class="stat-chart">
@@ -4391,7 +4391,7 @@ function renderRing(pct, valueText, label, color) {
   return `
     <div class="stat-ring">
       <svg viewBox="0 0 72 72" aria-hidden="true">
-        <circle cx="36" cy="36" r="${r}" fill="none" stroke="#efe8d8" stroke-width="7"/>
+        <circle cx="36" cy="36" r="${r}" fill="none" stroke="#1c3a2a" stroke-width="7"/>
         <circle cx="36" cy="36" r="${r}" fill="none" stroke="${color}" stroke-width="7" stroke-linecap="round"
           stroke-dasharray="${dash} ${circ.toFixed(1)}" transform="rotate(-90 36 36)"/>
       </svg>
