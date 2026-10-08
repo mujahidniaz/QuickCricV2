@@ -2017,6 +2017,10 @@ function addBowler(inn, name, playerId = null) {
     showToast("Can't bowl consecutive overs");
     return false;
   }
+  if (batterNotOutOnField(inn, { id: playerId, name: trimmed })) {
+    showToast('Already batting');
+    return false;
+  }
   pushUndo(state.current, 'pick');
   state.freeUndosUsed = 0;
   playerId = ensurePlayerOnSide(state.current, inn.bowling, trimmed, playerId);
@@ -3389,9 +3393,9 @@ function renderInningsSetup() {
   const query = (state.playerPickerFilter || '').trim().toLowerCase();
   const mode = slot === 'bowler' ? 'bowl' : 'bat';
   const action = slot === 'bowler' ? 'pick-bowler' : slot === 'nonStriker' ? 'pick-non-striker' : 'pick-striker';
+  const crease = [picks.striker, picks.nonStriker].filter(Boolean);
   const taken = new Set(
-    (slot === 'bowler' ? [] : [picks.striker, picks.nonStriker])
-      .filter(p => p && p !== picks[slot])
+    (slot === 'bowler' ? crease : crease.filter(p => p !== picks[slot]))
       .map(p => (p.id || p.name || '').toLowerCase()),
   );
   const roster = rosterForInningsSetup(mode).filter(p => !query || p.name.toLowerCase().includes(query));
@@ -3426,9 +3430,11 @@ function renderInningsSetup() {
         <div class="bcc-pg">
           ${roster.map(p => {
             const blocked = taken.has(p.id.toLowerCase()) || taken.has(p.name.toLowerCase());
-            const meta = mode === 'bowl'
-              ? `${p.bowling?.wickets || 0} wkts`
-              : `SR ${QP ? QP.batSR(p.batting) : '—'}`;
+            const meta = blocked && slot === 'bowler'
+              ? 'Already batting'
+              : mode === 'bowl'
+                ? `${p.bowling?.wickets || 0} wkts`
+                : `SR ${QP ? QP.batSR(p.batting) : '—'}`;
             return `<button type="button" class="bcc-pc" data-action="${action}" data-player-id="${esc(p.id)}" data-player-name="${esc(p.name)}" ${blocked ? 'disabled' : ''}><b>${esc(p.name)}</b><small>${meta}</small></button>`;
           }).join('')}
           ${query && !exact ? `<button type="button" class="bcc-pc is-add" data-action="opener-add"><b>+ Add “${esc(state.playerPickerFilter.trim())}”</b><small>New name</small></button>` : ''}
@@ -3653,10 +3659,10 @@ function renderScore() {
           <div class="sc-chip"><b class="bcc-an sc-g">${rate}</b><small>Run rate</small></div>
           ${need != null && need > 0
             ? `<div class="sc-chip"><b class="bcc-an sc-g">${need}</b><small>Need</small><small class="sc-s2">RRR ${rrr}</small></div>`
-            : `<div class="sc-chip"><b class="bcc-an">${extraTotal}</b><small>Extras</small><small class="sc-s2">B${ex.b} LB${ex.lb} WD${ex.wd} NB${ex.nb} P0</small></div>`}
+            : `<div class="sc-chip"><b class="bcc-an">${extraTotal}</b><small>Extras</small><small class="sc-s2">WD${ex.wd} NB${ex.nb}</small></div>`}
           <div class="sc-chip"><b class="bcc-an">${Math.max(0, ballsLeft)}</b><small>Balls left</small></div>
         </div>
-        ${need != null && need > 0 ? `<div class="sc-xline">Extras ${extraTotal} · B${ex.b} LB${ex.lb} WD${ex.wd} NB${ex.nb} P0</div>` : ''}
+        ${need != null && need > 0 ? `<div class="sc-xline">Extras ${extraTotal} · WD${ex.wd} NB${ex.nb}</div>` : ''}
         <div class="sc-ovr">
           <span>${esc(overLabel)}</span>
           <div class="sc-balls">${overSlots}</div>
@@ -3665,6 +3671,13 @@ function renderScore() {
         </div>
         ${prevEditHtml ? `<div class="sc-ovr"><span>Over ${liveOver}</span><div class="sc-balls">${prevEditHtml}</div></div>` : ''}
         ${!editMode && atOverBreak ? `<button type="button" class="sc-fix" data-action="fix-last-ball">Fix last ball</button>` : ''}
+      </div>
+      <div class="sc-feed">
+        <div class="sc-fc sc-ov">
+          <div class="sc-fh"><span>Over by over</span><em>${finished.length} finished</em></div>
+          <div class="sc-olist">${finishedRows || '<div class="sc-ph">Finished overs show up here,<br>ball by ball.</div>'}</div>
+        </div>
+      </div>
       </div>
       <div class="sc-crew">
         <div class="sc-cbox">
@@ -3686,7 +3699,7 @@ function renderScore() {
           <div class="sc-ec">Econ ${bowlEcon}</div>
         </div>
       </div>
-      ${partner ? `<div class="sc-feed">
+      ${partner ? `<div class="sc-partner">
         <div class="sc-fc">
           <div class="sc-fh"><span>Partnership</span><b class="bcc-an">${partner.total} <em>${partner.balls} balls</em></b></div>
           <div class="sc-pbar"><i style="flex:${partner.side[partner.striker.name].runs || 0.2}"></i><u style="flex:${partner.side[partner.non.name].runs || 0.2}"></u></div>
@@ -3696,26 +3709,15 @@ function renderScore() {
           </div>
           ${partner.extras ? `<div class="sc-pe">incl. ${partner.extras} extra${partner.extras === 1 ? '' : 's'}</div>` : ''}
         </div>
-        <div class="sc-fc sc-ov">
-          <div class="sc-fh"><span>Over by over</span><em>${finished.length} finished</em></div>
-          <div class="sc-olist">${finishedRows || '<div class="sc-ph">Finished overs show up here,<br>ball by ball.</div>'}</div>
-        </div>
-      </div>` : `<div class="sc-feed"><div class="sc-fc sc-ov"><div class="sc-fh"><span>Over by over</span><em>${finished.length} finished</em></div><div class="sc-olist">${finishedRows || '<div class="sc-ph">Finished overs show up here,<br>ball by ball.</div>'}</div></div></div>`}
-      </div>
+      </div>` : ''}
       <div class="actions score-actions${pickingPlayer ? ' score-actions--pick' : ''} sc-dock">
       ${pickingPlayer ? renderInlineScorePicker(inn) : `
         <div class="sc-pad">
           <div class="sc-k1">
-            <div class="sc-wr">
-              <button type="button" class="sc-kw${b.wicket ? ' sc-sel' : ''}" data-action="select-wkt">WKT</button>
-              <button type="button" class="sc-ko${b.runOut ? ' sc-sel' : ''}" data-action="select-ro">RO</button>
-            </div>
-            <div class="sc-ex">
-              <small>Extras</small>
-              <div>
-                ${['wd', 'nb', 'lb', 'b'].map(e => `<button type="button" data-action="select-extra" data-extra="${e}" class="${b.extra === e ? 'sc-sel' : ''}">${e}</button>`).join('')}
-              </div>
-            </div>
+            <button type="button" class="sc-kw${b.wicket ? ' sc-sel' : ''}" data-action="select-wkt">WKT</button>
+            <button type="button" class="sc-ko${b.runOut ? ' sc-sel' : ''}" data-action="select-ro">RunOut</button>
+            <button type="button" class="sc-kx${b.extra === 'wd' ? ' sc-sel' : ''}" data-action="select-extra" data-extra="wd">wd</button>
+            <button type="button" class="sc-kx${b.extra === 'nb' ? ' sc-sel' : ''}" data-action="select-extra" data-extra="nb">nb</button>
           </div>
           <div class="sc-nums">
             <button type="button" class="sc-dot${b.runs === 0 ? ' sc-sel' : ''}" data-action="select-run" data-runs="0">DOT</button>
@@ -4990,12 +4992,12 @@ function renderModal() {
           <div class="input-cluster edit-ball-cluster">
             <div class="wkt-stack">
               <button type="button" class="wkt-btn ${sel.wicket ? 'selected' : ''}" data-action="edit-ball-wkt">WKT</button>
-              <button type="button" class="ro-btn ${sel.runOut ? 'selected' : ''}" data-action="edit-ball-ro">RO</button>
+              <button type="button" class="ro-btn ${sel.runOut ? 'selected' : ''}" data-action="edit-ball-ro">RunOut</button>
             </div>
             <div class="extras-panel">
               <div class="heading">Extras</div>
               <div class="extras-btns">
-                ${['wd', 'nb', 'lb', 'b'].map(e => `<button type="button" class="extra-btn ${sel.extra === e ? 'selected' : ''}" data-action="edit-ball-extra" data-extra="${e}">${e}</button>`).join('')}
+                ${['wd', 'nb'].map(e => `<button type="button" class="extra-btn ${sel.extra === e ? 'selected' : ''}" data-action="edit-ball-extra" data-extra="${e}">${e}</button>`).join('')}
               </div>
             </div>
           </div>
@@ -5587,6 +5589,18 @@ function handle(action, dataset) {
           (dataset.playerId && cur.id === dataset.playerId) ||
           cur.name?.toLowerCase() === (dataset.playerName || '').toLowerCase()
         );
+        if (action === 'pick-bowler' && !samePlayer) {
+          const battingNow = [state.inningsPick.striker, state.inningsPick.nonStriker].some(b =>
+            b && (
+              (dataset.playerId && b.id === dataset.playerId) ||
+              b.name?.toLowerCase() === (dataset.playerName || '').toLowerCase()
+            )
+          );
+          if (battingNow) {
+            showToast('Already batting');
+            break;
+          }
+        }
         pushInningsPickUndo();
         const input = $(inputId);
         if (samePlayer) {
@@ -5604,6 +5618,16 @@ function handle(action, dataset) {
           input.dataset.playerId = dataset.playerId || '';
         }
         state.inningsPick[pickKey] = { name: dataset.playerName, id: dataset.playerId || null };
+        if (pickKey !== 'bowler') {
+          const bowler = state.inningsPick.bowler;
+          const next = state.inningsPick[pickKey];
+          if (bowler && (
+            (next.id && bowler.id === next.id) ||
+            bowler.name?.toLowerCase() === next.name.toLowerCase()
+          )) {
+            state.inningsPick.bowler = null;
+          }
+        }
         state.inningsManual[pickKey] = false;
         state.playerPickerFilter = '';
         state.openerSlot = openerNextSlot();
@@ -6263,6 +6287,7 @@ document.addEventListener('DOMContentLoaded', () => {
       const bwId = state.inningsPick.bowler?.id || $('bowler-input')?.dataset.playerId || null;
       if (!s.trim() || !ns.trim() || !bw.trim()) return showToast('Pick both batters and a bowler');
       if (s.trim().toLowerCase() === ns.trim().toLowerCase()) return showToast('Striker and non-striker must differ');
+      if ([s, ns].some(n => n.trim().toLowerCase() === bw.trim().toLowerCase())) return showToast('Bowler is already batting');
       startInnings(s, ns, bw, sId, nsId, bwId);
       resetInningsPickers();
       render();
