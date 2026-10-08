@@ -3528,10 +3528,10 @@ function renderScore() {
           <b>${esc(nonStrikerRow.name)}</b><small>${esc(nonStrikerRow.figs)}</small>
         </div>
       </div>
-      <div class="bcc-act">
+      ${pickingPlayer ? '' : `<div class="bcc-act">
         <button type="button" data-action="swap-strike" ${canSwap ? '' : 'disabled'}>⇄ Swap strike</button>
         <button type="button" class="is-rh" data-action="retire-hurt" ${canRetireHurt ? '' : 'disabled'}>Retire hurt</button>
-      </div>
+      </div>`}
       ${!pickingPlayer ? `<div class="bcc-over">${overStripsHtml}
       ${!editMode && canEditOver ? `
       <div class="over-edit-bar">
