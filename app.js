@@ -1746,16 +1746,19 @@ function syncScorePick() {
   if (state.modal?.type === 'newBatter' || state.modal?.type === 'newBowler') state.modal = null;
 }
 
-function pickerCareerLine(p, mode) {
+function pickerCareerLine(p, mode, inn) {
   if (mode === 'bowl') {
+    const spell = (inn?.bowlers || []).find(b => innPlayerMatch(b, p));
+    if (spell?.balls) return `${fmtOvers(spell.balls)} ov · ${spell.wickets} wkt${spell.wickets === 1 ? '' : 's'}`;
     const wkts = p.bowling?.wickets || 0;
-    if (wkts > 0) return `${wkts} career wicket${wkts === 1 ? '' : 's'}`;
-    const balls = p.bowling?.balls || 0;
-    if (balls > 0) return `${fmtOvers(balls)} career overs`;
-    return 'Yet to bowl';
+    return wkts ? `${wkts} career wkt${wkts === 1 ? '' : 's'}` : 'Not bowled yet';
   }
   const runs = p.batting?.runs || 0;
   return runs > 0 ? `${runs} career runs` : 'New to the crease';
+}
+
+function spellBalls(inn, player) {
+  return (inn?.bowlers || []).find(b => innPlayerMatch(b, player))?.balls || 0;
 }
 
 function renderScorePickCards(inn, isBatter) {
@@ -1765,44 +1768,49 @@ function renderScorePickCards(inn, isBatter) {
   const opts = { blockOnField: isBatter, blockConsecutive: !isBatter };
   const players = rosterForScoringPicker(inn, mode);
   const filter = (state.playerPickerFilter || '').trim().toLowerCase();
-  const filtered = sortPlayersForPicker(filter
+  let filtered = filter
     ? players.filter(p => p.name.toLowerCase().includes(filter))
-    : players);
-  const available = players.filter(p => !pickerDisabledReason(inn, p, mode, opts)).length;
-  const cards = filtered.map(p => {
+    : players.slice();
+  if (isBatter) filtered = sortPlayersForPicker(filtered);
+  else {
+    filtered = [...filtered].sort((a, b) =>
+      spellBalls(inn, a) - spellBalls(inn, b) ||
+      a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }));
+  }
+  const ready = filtered.filter(p => !pickerDisabledReason(inn, p, mode, opts));
+  const blocked = filtered.filter(p => pickerDisabledReason(inn, p, mode, opts));
+  const card = (p) => {
     const reason = pickerDisabledReason(inn, p, mode, opts);
-    const selected = sp.pick && (
+    const selected = !reason && sp.pick && (
       (sp.pick.id && sp.pick.id === p.id) ||
       sp.pick.name?.toLowerCase() === p.name.toLowerCase()
     );
     const initial = (p.name || '?').charAt(0).toUpperCase();
     return `
-      <button type="button" class="bcc-pick-card${selected ? ' is-on' : ''}${reason ? ' is-off' : ''}"
+      <button type="button" class="sc-card${selected ? ' sc-sel' : ''}${reason ? ' sc-off' : ''}"
         data-action="${reason ? '' : action}"
         data-player-id="${esc(p.id)}"
         data-player-name="${esc(p.name)}"
         ${reason ? 'disabled' : ''}>
-        <span class="bcc-pick-av bcc-an">${esc(initial)}</span>
-        <span class="bcc-pick-copy">
-          <b>${esc(p.name)}</b>
-          <small>${esc(reason || pickerCareerLine(p, mode))}</small>
+        <span class="sc-av bcc-an">${selected ? '✓' : esc(initial)}</span>
+        <span class="sc-tx">
+          <span class="sc-nm">${esc(p.name)}</span>
+          <span class="sc-sub">${esc(reason || pickerCareerLine(p, mode, inn))}</span>
         </span>
       </button>`;
-  }).join('');
+  };
+  const readyLabel = isBatter ? 'Available batters' : 'Available bowlers · fewest overs first';
   return `
-    <input id="score-pick-query" class="bcc-pick-search player-picker-filter" type="search" placeholder="Find player…" value="${esc(state.playerPickerFilter || '')}" autocomplete="off" autocapitalize="off" enterkeyhint="search" />
-    <div class="bcc-pick-meta">
-      <span>${isBatter ? 'Available batters' : 'Available bowlers'}</span>
-      <span class="bcc-pick-n">${available}</span>
+    <div class="sc-srch"><input id="score-pick-query" class="player-picker-filter" type="search" placeholder="Find player…" value="${esc(state.playerPickerFilter || '')}" autocomplete="off" autocapitalize="off" enterkeyhint="search" /></div>
+    <div class="bcc-pick-scroll sc-list">
+      ${filtered.length ? `
+        ${ready.length ? `<div class="sc-lbl">${esc(readyLabel)}<b>${ready.length}</b></div><div class="sc-grid">${ready.map(card).join('')}</div>` : ''}
+        ${blocked.length ? `<div class="sc-lbl sc-dim">Not available<b>${blocked.length}</b></div><div class="sc-grid">${blocked.map(card).join('')}</div>` : ''}
+      ` : `<p class="sc-empty">${players.length ? `No names match “${esc(filter)}”` : 'No saved players — add a name below.'}</p>`}
     </div>
-    <div class="bcc-pick-scroll">
-      ${filtered.length
-        ? `<div class="bcc-pick-grid">${cards}</div>`
-        : `<p class="bcc-pick-empty">${players.length ? 'No names match that search.' : 'No saved players — add a name below.'}</p>`}
-      ${!sp.manual ? `<button type="button" class="bcc-pick-new" data-action="toggle-modal-manual">+ New name</button>` : ''}
-      <div class="player-picker-manual${sp.manual ? '' : ' d-none'}">
-        <input id="${isBatter ? 'new-batter-input' : 'new-bowler-input'}" class="form-control form-control-sm player-picker-input" type="text" placeholder="Type name…" autocomplete="off" autocapitalize="words" />
-      </div>
+    <button type="button" class="sc-new" data-action="toggle-modal-manual">${sp.manual ? 'Cancel new name' : '+ New name'}</button>
+    <div class="sc-manual${sp.manual ? ' sc-on' : ''}">
+      <input id="${isBatter ? 'new-batter-input' : 'new-bowler-input'}" type="text" placeholder="Type name…" autocomplete="off" autocapitalize="words" />
     </div>
   `;
 }
@@ -1817,28 +1825,36 @@ function renderInlineScorePicker(inn) {
     inn.batters[inn.striker]?.dismissal === 'retired hurt' ||
     inn.batters[inn.nonStriker]?.dismissal === 'retired hurt'
   );
-  const runOutDismissal = creaseOut && (
-    inn.batters[inn.striker]?.dismissal === 'run out' ||
-    inn.batters[inn.nonStriker]?.dismissal === 'run out'
-  );
-  const subtitle = isBatter
-    ? (retiredHurt ? 'Retired hurt — tap a name below'
-      : runOutDismissal ? 'Run out — tap a name below'
-        : 'Wicket — tap a name below')
-    : 'Over complete — tap the next bowler';
-  const canUndoPick = canUndoNow(state.current) && lastUndoKind(state.current) === 'pick';
+  const outBatter = [inn.batters[inn.striker], inn.batters[inn.nonStriker]].find(b => b?.out);
+  const overRuns = (inn.ballLog || [])
+    .filter(ball => ball.overNo === liveOverNo(inn))
+    .reduce((sum, ball) => sum + (Number(ball.total) || 0), 0);
+  let subtitle = isBatter ? 'Tap a name below' : 'Tap the next bowler';
+  if (isBatter && outBatter) {
+    const how = outBatter.dismissal === 'retired hurt'
+      ? 'retired hurt'
+      : outBatter.dismissal === 'run out' ? 'is run out' : 'is out';
+    subtitle = `${outBatter.name} ${how} · ${outBatter.runs} (${outBatter.balls}) — tap a name below`;
+  } else if (!isBatter) {
+    const done = Math.floor((inn.score.balls || 0) / 6);
+    subtitle = `Over ${done} complete · ${overRuns} runs — tap the next bowler`;
+  }
+  const retiring = retiredHurt && lastUndoKind(state.current) === 'retire';
+  const goName = sp.pick?.name;
+  const goLabel = goName
+    ? `Continue · ${goName}`
+    : sp.manual ? 'Continue' : (isBatter ? 'Tap a batter above' : 'Tap a bowler above');
   return `
-    <div class="score-inline-pick score-inline-pick--panel">
-      <div class="score-inline-pick-head">
-        <div class="score-inline-pick-title">${esc(title)}</div>
-        <div class="score-inline-pick-sub">${esc(subtitle)}</div>
+    <div class="sc-sheet${isBatter ? '' : ' sc-bowl'}">
+      ${retiring ? `<button type="button" class="sc-cx" data-action="undo" aria-label="Cancel">✕</button>` : ''}
+      <div class="sc-grab"></div>
+      <div class="sc-hd">
+        <h2>${esc(title)}</h2>
+        <p>${esc(subtitle)}</p>
       </div>
       ${renderScorePickCards(inn, isBatter)}
-      <div class="score-inline-pick-actions">
-        ${canUndoPick ? `<button type="button" class="score-inline-pick-undo" data-action="undo">${esc(undoActionLabel(state.current))}</button>` : ''}
-        <button type="button" class="score-inline-pick-continue" data-action="${isBatter ? 'confirm-new-batter' : 'confirm-new-bowler'}">Continue</button>
-        <button type="button" class="score-inline-pick-end" data-action="end-innings">End innings</button>
-      </div>
+      <button type="button" class="sc-go${goName || sp.manual ? '' : ' sc-idle'}" data-action="${isBatter ? 'confirm-new-batter' : 'confirm-new-bowler'}">${esc(goLabel)}</button>
+      ${retiring ? `<button type="button" class="sc-cnl" data-action="undo">Cancel — keep ${esc(outBatter?.name || 'them')} batting</button>` : `<button type="button" class="sc-cnl" data-action="end-innings">End innings</button>`}
     </div>
   `;
 }
@@ -2524,6 +2540,7 @@ const SCREEN_BACK = {
 const MODAL_BACK = {
   adminPin: 'cancel-admin-pin',
   deletePlayerPin: 'cancel-delete-player-pin',
+  deleteMatchPin: 'cancel-delete-match-pin',
   editPlayerName: 'cancel-edit-player-name',
   runOutPick: 'cancel-run-out-pick',
   editBall: 'cancel-edit-ball',
@@ -2751,11 +2768,12 @@ function renderNow() {
     } catch {
       $('new-bowler-input')?.focus();
     }
-  } else if (state.modal?.type === 'deletePlayerPin') {
+  } else if (state.modal?.type === 'deletePlayerPin' || state.modal?.type === 'deleteMatchPin') {
+    const pinInput = $('delete-match-pin-input') || $('delete-player-pin-input');
     try {
-      $('delete-player-pin-input')?.focus({ preventScroll: true });
+      pinInput?.focus({ preventScroll: true });
     } catch {
-      $('delete-player-pin-input')?.focus();
+      pinInput?.focus();
     }
   } else if (state.modal?.type === 'editPlayerName') {
     try {
@@ -3422,6 +3440,89 @@ function renderInningsSetup() {
   `;
 }
 
+function scBallFace(ball) {
+  if (!ball) return { cls: 'sc-ball', text: '' };
+  let cls = 'sc-ball sc-f';
+  if (ball.runOut || ball.wicket) cls += ' sc-bw';
+  else if (ball.extra) cls += ' sc-ex';
+  else if (ball.runs === 4) cls += ' sc-b4';
+  else if (ball.runs === 6) cls += ' sc-b6';
+  const text = (!ball.extra && !ball.wicket && !ball.runOut && ball.runs === 0) ? '•' : (ball.label || '0');
+  return { cls, text };
+}
+
+function scOverRunsMap(inn) {
+  const map = {};
+  for (const ball of inn.ballLog || []) {
+    map[ball.overNo] = (map[ball.overNo] || 0) + (Number(ball.total) || 0);
+  }
+  return map;
+}
+
+function scPaceBars(inn, maxOvers) {
+  const map = scOverRunsMap(inn);
+  const played = Math.floor((inn.score.balls || 0) / 6) + ((inn.score.balls || 0) % 6 === 0 && inn.score.balls ? 0 : 1);
+  const values = [];
+  for (let i = 0; i < maxOvers; i++) {
+    if (map[i] == null && i >= played) values.push(null);
+    else values.push(map[i] || 0);
+  }
+  const peak = Math.max(12, ...values.filter(v => v != null));
+  const current = (inn.score.balls || 0) > 0 && (inn.score.balls % 6 === 0)
+    ? Math.floor(inn.score.balls / 6) - 1
+    : Math.floor((inn.score.balls || 0) / 6);
+  return values.map((v, i) => {
+    if (v == null) return '<i style="height:4px"></i>';
+    const on = i === current && !(inn.score.balls > 0 && inn.score.balls % 6 === 0);
+    const h = Math.max(5, (v / peak) * 46);
+    return `<i class="${on ? 'sc-c' : 'sc-d'}" style="height:${h.toFixed(0)}px"></i>`;
+  }).join('');
+}
+
+function scPartnership(inn) {
+  const striker = inn.batters[inn.striker];
+  const non = inn.batters[inn.nonStriker];
+  if (!striker || striker.out || !non || non.out) return null;
+  const names = new Set([striker.name, non.name]);
+  const log = inn.ballLog || [];
+  let from = log.length;
+  for (let i = log.length - 1; i >= 0; i--) {
+    const pair = [log[i].strikerName, log[i].nonStrikerName];
+    if (!pair[0] || !names.has(pair[0]) || !names.has(pair[1])) break;
+    from = i;
+  }
+  const slice = log.slice(from);
+  const side = {};
+  for (const name of names) side[name] = { runs: 0, balls: 0 };
+  let extras = 0;
+  let total = 0;
+  for (const ball of slice) {
+    total += Number(ball.total) || 0;
+    const batRuns = (ball.extra === 'wd' || ball.extra === 'lb' || ball.extra === 'b') ? 0 : (Number(ball.runs) || 0);
+    if (side[ball.batter]) {
+      side[ball.batter].runs += batRuns;
+      if (ball.legal) side[ball.batter].balls += 1;
+    }
+    if (ball.extra === 'wd') extras += 1 + (Number(ball.runs) || 0);
+    else if (ball.extra === 'nb') extras += 1;
+    else if (ball.extra === 'b' || ball.extra === 'lb') extras += Number(ball.runs) || 0;
+  }
+  const balls = slice.filter(b => b.legal).length;
+  return { striker, non, side, total, balls, extras };
+}
+
+function scFinishedOvers(inn) {
+  const groups = new Map();
+  for (const ball of inn.ballLog || []) {
+    if (!groups.has(ball.overNo)) groups.set(ball.overNo, []);
+    groups.get(ball.overNo).push(ball);
+  }
+  const cutoff = Math.floor((inn.score.balls || 0) / 6);
+  return [...groups.entries()]
+    .filter(([n]) => n < cutoff)
+    .sort((a, b) => b[0] - a[0]);
+}
+
 function creaseRow(inn, idx, needPick) {
   const b = inn.batters[idx];
   if (b?.out) {
@@ -3469,18 +3570,17 @@ function renderScore() {
   const atOverBreak = inn.score.balls > 0 && inn.score.balls % 6 === 0 && !inn.ended;
   const editMode = state.overEditUnlocked && !inn.needNewBatter && !inn.needNewBowler;
   const pickingPlayer = inn.needNewBatter || inn.needNewBowler;
-  const overStripsHtml = !pickingPlayer && editMode
-    ? editableOverNumbers(inn).map((overNo) => renderOverStrip(inn, overNo, {
-        editable: true,
-        label: overNo === liveOver ? 'This over · tap a ball' : `Over ${overNo + 1} · tap a ball`,
-        showSum: true,
-      })).join('')
-    : renderOverStrip(inn, overToShow, {
-        editable: false,
-        label: showingLast ? 'Last over' : (atOverBreak ? 'Over just bowled' : 'This over'),
-        showSum: showingLast || atOverBreak,
-        emptySlots: atOverBreak ? 0 : remainingLegal,
-      });
+  const scOverBallsHtml = (overNo, { editable = false, emptySlots = 0 } = {}) => {
+    const balls = inn.ballLog.filter(b => b.overNo === overNo);
+    const filled = balls.map((ball, slotIdx) => {
+      const face = scBallFace(ball);
+      if (!editable) return `<div class="${face.cls}">${esc(face.text)}</div>`;
+      const logIndex = ballLogGlobalIndex(inn, overNo, slotIdx);
+      if (!isLogIndexEditable(inn, logIndex)) return `<div class="${face.cls}">${esc(face.text)}</div>`;
+      return `<button type="button" class="${face.cls} sc-ed" data-action="edit-ball" data-log-index="${logIndex}" title="Edit this ball">${esc(face.text)}</button>`;
+    }).join('');
+    return filled + Array(emptySlots).fill('<div class="sc-ball"></div>').join('');
+  };
 
   const ballsLeft = (m.overs * 6) - inn.score.balls;
   const need = m.currentInnings === 1 && inn.target != null ? inn.target - inn.score.runs : null;
@@ -3491,6 +3591,36 @@ function renderScore() {
   const ex = inningsExtraRuns(inn);
   const extraTotal = ex.b + ex.lb + ex.wd + ex.nb;
 
+  const maxBalls = m.overs * 6;
+  const pace = inn.score.balls ? Math.round(inn.score.runs / inn.score.balls * maxBalls) : 0;
+  const ringC = 2 * Math.PI * 45;
+  const ringDash = maxBalls ? (ringC * inn.score.balls / maxBalls) : 0;
+  const striker = inn.batters[inn.striker];
+  const nonStriker = inn.batters[inn.nonStriker];
+  const bowlEcon = bowler?.balls ? (bowler.runs / (bowler.balls / 6)).toFixed(1) : '0.0';
+  const partner = scPartnership(inn);
+  const finished = scFinishedOvers(inn);
+  const overLabel = atOverBreak ? `Over ${liveOver + 1} done` : 'This over';
+  const overSlots = scOverBallsHtml(overToShow, {
+    editable: editMode,
+    emptySlots: atOverBreak ? 0 : remainingLegal,
+  });
+  const prevEditHtml = editMode && liveOver >= 1
+    ? scOverBallsHtml(liveOver - 1, { editable: true })
+    : '';
+  const finishedRows = finished.map(([overNo, balls]) => {
+    const who = balls[0]?.bowler || '';
+    const runs = balls.reduce((sum, ball) => sum + (Number(ball.total) || 0), 0);
+    const pills = balls.map(ball => {
+      const face = scBallFace(ball);
+      return `<div class="${face.cls} sc-sm">${esc(face.text)}</div>`;
+    }).join('');
+    return `<div class="sc-orow"><div class="sc-olab">Over ${overNo + 1}<em>${esc(who)}</em></div><div class="sc-bl">${pills}</div><b class="bcc-an">${runs}</b></div>`;
+  }).join('');
+  const chaseSw = need != null && need > 0
+    ? `<br>Need <b>${need}</b> from <b>${ballsLeft}</b><br>RRR <b>${rrr}</b>`
+    : `<br><b>${ballsLeft}</b> balls left`;
+
   return `
     <div class="screen score-screen bcc-score${pickingPlayer ? ' score-screen--picking' : ''}">
       <div class="bcc-top">
@@ -3499,81 +3629,103 @@ function renderScore() {
         <button type="button" class="bcc-ib" data-action="toggle-audio" aria-label="Toggle sound">${audio.enabled ? '🔊' : '🔇'}</button>
         <button type="button" class="bcc-ib" data-action="share" aria-label="Share">↗</button>
       </div>
-      <div class="score-body">
-      <div class="bcc-board">
-        ${chase ? `<div class="bcc-chase">${esc(chase)}</div>` : ''}
-        <div class="bcc-srow">
-          <div class="bcc-sname">${esc(team)}</div>
-          <div class="bcc-sfig">${inn.score.runs}/${inn.score.wickets}</div>
-        </div>
-        <div class="bcc-smeta">
-          <div class="bcc-srates">
-            <div>CRR: <b>${rate}</b></div>
-            ${rrr ? `<div>RRR: <b>${rrr}</b></div>` : ''}
+      <div class="score-body sc-top">
+      <div class="sc-hero">
+        <div class="sc-hr">
+          <div>
+            <span class="sc-tm"><i></i>${esc(team)} · ${m.currentInnings === 1 ? 'Chase' : 'Batting'}</span>
+            ${chase ? `<div class="sc-chase">${esc(chase)}</div>` : ''}
+            ${inn.freeHit ? `<div class="sc-free">Free hit</div>` : ''}
+            <div class="sc-big bcc-an">${inn.score.runs}/${inn.score.wickets}</div>
           </div>
-          <div class="bcc-sovers">${fmtOvers(inn.score.balls)}/${m.overs} Overs</div>
+          <div class="sc-mid">
+            <div class="sc-rp">${scPaceBars(inn, m.overs)}</div>
+            <small>Runs per over</small>
+            <div class="sc-pj">On pace for <b class="bcc-an">${pace}</b></div>
+          </div>
+          <div class="sc-sw"><b>${fmtOvers(inn.score.balls)}</b> / ${m.overs} overs<br>CRR <b>${rate}</b>${chaseSw}</div>
+          <div class="sc-ring" aria-hidden="true">
+            <svg viewBox="0 0 104 104"><circle class="sc-tr" cx="52" cy="52" r="45"/><circle class="sc-pg" cx="52" cy="52" r="45" stroke-dasharray="${ringDash.toFixed(1)} ${ringC.toFixed(1)}"/></svg>
+            <div><b class="bcc-an">${fmtOvers(inn.score.balls)}</b><small>Of ${m.overs} overs</small></div>
+          </div>
         </div>
-        <div class="bcc-sx">Extra ${extraTotal} (B ${ex.b}, LB ${ex.lb}, WD ${ex.wd}, NB ${ex.nb}, P 0)</div>
-        ${inn.freeHit ? `<div class="bcc-free">Free hit</div>` : ''}
-        ${editMode ? `<div class="bcc-free">Tap a ball in this or the previous over</div>` : ''}
+        <div class="sc-chips">
+          <div class="sc-chip"><b class="bcc-an sc-g">${rate}</b><small>Run rate</small></div>
+          ${need != null && need > 0
+            ? `<div class="sc-chip"><b class="bcc-an sc-g">${need}</b><small>Need</small><small class="sc-s2">RRR ${rrr}</small></div>`
+            : `<div class="sc-chip"><b class="bcc-an">${extraTotal}</b><small>Extras</small><small class="sc-s2">B${ex.b} LB${ex.lb} WD${ex.wd} NB${ex.nb} P0</small></div>`}
+          <div class="sc-chip"><b class="bcc-an">${Math.max(0, ballsLeft)}</b><small>Balls left</small></div>
+        </div>
+        ${need != null && need > 0 ? `<div class="sc-xline">Extras ${extraTotal} · B${ex.b} LB${ex.lb} WD${ex.wd} NB${ex.nb} P0</div>` : ''}
+        <div class="sc-ovr">
+          <span>${esc(overLabel)}</span>
+          <div class="sc-balls">${overSlots}</div>
+          ${canEditOver ? `<button type="button" class="sc-ic${editMode ? ' sc-on' : ''}" data-action="${editMode ? 'done-edit-over' : 'edit-over'}" title="${editMode ? 'Done editing' : 'Edit over'}">${editMode ? '✓' : '✎'}</button>` : ''}
+          <button type="button" class="sc-ic" data-action="undo" title="${esc(undoActionLabel(m))}" ${canUndo && !showingLast ? '' : 'disabled'}>↶</button>
+        </div>
+        ${prevEditHtml ? `<div class="sc-ovr"><span>Over ${liveOver}</span><div class="sc-balls">${prevEditHtml}</div></div>` : ''}
+        ${!editMode && atOverBreak ? `<button type="button" class="sc-fix" data-action="fix-last-ball">Fix last ball</button>` : ''}
       </div>
-      <div class="bcc-who">
-        <div class="bcc-pl is-strike${strikerRow.pending ? ' is-pending' : ''}">
-          <b>${esc(strikerRow.name)}</b><small>${esc(strikerRow.figs)}</small>
+      <div class="sc-crew">
+        <div class="sc-cbox">
+          <div class="sc-ch">Batting<div>
+            <button type="button" data-action="swap-strike" ${canSwap ? '' : 'disabled'}>⇄ Swap</button>
+            <button type="button" class="sc-rh" data-action="retire-hurt" ${canRetireHurt ? '' : 'disabled'}>Retire</button>
+          </div></div>
+          ${striker && !striker.out
+            ? `<div class="sc-br sc-on"><span>${esc(striker.name)} 🏏</span><b class="bcc-an">${striker.runs} <small>(${striker.balls})</small></b></div>`
+            : `<div class="sc-br sc-wait"><span>Pick next batter 🏏</span><b>—</b></div>`}
+          ${nonStriker && !nonStriker.out
+            ? `<div class="sc-br"><span>${esc(nonStriker.name)}</span><b class="bcc-an">${nonStriker.runs} <small>(${nonStriker.balls})</small></b></div>`
+            : `<div class="sc-br sc-wait"><span>Pick next batter</span><b>—</b></div>`}
         </div>
-        <div class="bcc-pl is-bowl">
-          <b>${esc(bowler?.name || '—')}</b><small>${bowler ? `${fmtOvers(bowler.balls)} · ${bowler.runs}/${bowler.wickets}` : '—'}</small>
-        </div>
-        <div class="bcc-pl${nonStrikerRow.pending ? ' is-pending' : ''}">
-          <b>${esc(nonStrikerRow.name)}</b><small>${esc(nonStrikerRow.figs)}</small>
+        <div class="sc-cbox sc-bwx">
+          <div class="sc-ch">Bowling</div>
+          <div class="sc-nm2">${esc(bowler?.name || '—')}</div>
+          <div class="sc-st"><b class="bcc-an">${bowler ? fmtOvers(bowler.balls) : '0.0'}</b><small>${bowler ? `${bowler.runs}/${bowler.wickets}` : '0/0'}</small></div>
+          <div class="sc-ec">Econ ${bowlEcon}</div>
         </div>
       </div>
-      ${pickingPlayer ? '' : `<div class="bcc-act">
-        <button type="button" data-action="swap-strike" ${canSwap ? '' : 'disabled'}>⇄ Swap strike</button>
-        <button type="button" class="is-rh" data-action="retire-hurt" ${canRetireHurt ? '' : 'disabled'}>Retire hurt</button>
-      </div>`}
-      ${!pickingPlayer ? `<div class="bcc-over">${overStripsHtml}
-      ${!editMode && canEditOver ? `
-      <div class="over-edit-bar">
-        <button type="button" class="over-edit-primary" data-action="edit-over">Edit over</button>
-        ${atOverBreak ? `<button type="button" class="over-edit-secondary" data-action="fix-last-ball">Fix last ball</button>` : ''}
-      </div>` : ''}
-      ${editMode ? `<div class="over-edit-bar over-edit-bar--active">
-        <span class="over-edit-active-label">Tap a ball to change it</span>
-        <button type="button" class="over-edit-secondary" data-action="done-edit-over">Done</button>
-      </div>` : ''}
-      ${!editMode && hasLastOver ? `
-      <div class="over-strip-nav">
-        <button type="button" class="over-toggle" data-action="toggle-last-over">${showingLast ? 'Show this over' : 'View last over'}</button>
-      </div>` : ''}
-      <div class="undo-row">
-        ${showingLast ? '' : `<button data-action="undo" ${canUndo ? '' : 'disabled'}>${undoActionLabel(m)}</button>`}
-      </div></div>` : ''}
+      ${partner ? `<div class="sc-feed">
+        <div class="sc-fc">
+          <div class="sc-fh"><span>Partnership</span><b class="bcc-an">${partner.total} <em>${partner.balls} balls</em></b></div>
+          <div class="sc-pbar"><i style="flex:${partner.side[partner.striker.name].runs || 0.2}"></i><u style="flex:${partner.side[partner.non.name].runs || 0.2}"></u></div>
+          <div class="sc-pn">
+            <span><i></i>${esc(partner.striker.name)} <b>${partner.side[partner.striker.name].runs} (${partner.side[partner.striker.name].balls})</b></span>
+            <span><i></i>${esc(partner.non.name)} <b>${partner.side[partner.non.name].runs} (${partner.side[partner.non.name].balls})</b></span>
+          </div>
+          ${partner.extras ? `<div class="sc-pe">incl. ${partner.extras} extra${partner.extras === 1 ? '' : 's'}</div>` : ''}
+        </div>
+        <div class="sc-fc sc-ov">
+          <div class="sc-fh"><span>Over by over</span><em>${finished.length} finished</em></div>
+          <div class="sc-olist">${finishedRows || '<div class="sc-ph">Finished overs show up here,<br>ball by ball.</div>'}</div>
+        </div>
+      </div>` : `<div class="sc-feed"><div class="sc-fc sc-ov"><div class="sc-fh"><span>Over by over</span><em>${finished.length} finished</em></div><div class="sc-olist">${finishedRows || '<div class="sc-ph">Finished overs show up here,<br>ball by ball.</div>'}</div></div></div>`}
       </div>
-      <div class="actions score-actions bcc-pad${pickingPlayer ? ' score-actions--pick' : ''}">
+      <div class="actions score-actions${pickingPlayer ? ' score-actions--pick' : ''} sc-dock">
       ${pickingPlayer ? renderInlineScorePicker(inn) : `
-        <div class="input-cluster">
-          <div class="wkt-stack">
-            <button type="button" class="wkt-btn ${b.wicket ? 'selected' : ''}" data-action="select-wkt">WKT</button>
-            <button type="button" class="ro-btn ${b.runOut ? 'selected' : ''}" data-action="select-ro">RO</button>
-          </div>
-          <div class="extras-panel">
-            <div class="heading">Extras</div>
-            <div class="extras-btns">
-              ${['wd', 'nb', 'lb', 'b'].map(e => `<button class="extra-btn ${b.extra === e ? 'selected' : ''}" data-action="select-extra" data-extra="${e}">${e}</button>`).join('')}
+        <div class="sc-pad">
+          <div class="sc-k1">
+            <div class="sc-wr">
+              <button type="button" class="sc-kw${b.wicket ? ' sc-sel' : ''}" data-action="select-wkt">WKT</button>
+              <button type="button" class="sc-ko${b.runOut ? ' sc-sel' : ''}" data-action="select-ro">RO</button>
+            </div>
+            <div class="sc-ex">
+              <small>Extras</small>
+              <div>
+                ${['wd', 'nb', 'lb', 'b'].map(e => `<button type="button" data-action="select-extra" data-extra="${e}" class="${b.extra === e ? 'sc-sel' : ''}">${e}</button>`).join('')}
+              </div>
             </div>
           </div>
-        </div>
-        <div class="runs-grid">
-          <button class="run-btn dot ${b.runs === 0 ? 'selected' : ''}" data-action="select-run" data-runs="0">DOT</button>
-          ${[1, 2, 3, 4, 5, 6].map(n => `<button class="run-btn ${b.runs === n ? 'selected' : ''}" data-action="select-run" data-runs="${n}">${n}</button>`).join('')}
-        </div>
-        <div class="next-bar px-1">
-          <button type="button" class="bcc-next bcc-an next-ball" data-action="next-ball" ${canNext ? '' : 'disabled'}>Next ball</button>
-        </div>
-        <div class="foot-links d-flex justify-content-center gap-3 py-1">
-          <button type="button" class="btn btn-link btn-sm text-muted p-0" data-action="end-innings">End innings</button>
-          <button type="button" class="btn btn-link btn-sm text-danger p-0" data-action="abort-show">Abort match</button>
+          <div class="sc-nums">
+            <button type="button" class="sc-dot${b.runs === 0 ? ' sc-sel' : ''}" data-action="select-run" data-runs="0">DOT</button>
+            ${[1, 2, 3, 4, 5, 6].map(n => `<button type="button" class="${b.runs === n ? 'sc-sel' : ''}" data-action="select-run" data-runs="${n}">${n}</button>`).join('')}
+          </div>
+          <button type="button" class="sc-nb bcc-an" data-action="next-ball" ${canNext ? '' : 'disabled'}>Next ball</button>
+          <div class="sc-ft">
+            <button type="button" data-action="end-innings">End innings</button>
+            <button type="button" class="sc-ab" data-action="abort-show">Abort match</button>
+          </div>
         </div>`}
       </div>
     </div>
@@ -3959,7 +4111,7 @@ function renderSummaryBallLog(inn) {
 function renderDetail() {
   const m = state.detail || state.current;
   if (!m) return renderHome();
-  const isHistoricalView = state.view === 'detail' && m.status === 'completed';
+  const isHistoricalView = (state.view === 'detail' || state.view === 'result') && m.status === 'completed';
   const inns = m.innings || [];
   const innIndex = Math.min(Math.max(0, state.summaryInn || 0), Math.max(0, inns.length - 1));
   const inn = inns[innIndex];
@@ -4001,7 +4153,7 @@ function renderDetail() {
             <button type="button" class="is-dark${state.summaryBalls ? ' is-on' : ''}" data-action="summary-balls">${state.summaryBalls ? 'Hide balls' : 'Ball by ball'}</button>
             <button type="button" class="is-lime" data-action="share">Share scorecard</button>
           </div>
-          ${isHistoricalView ? `<button type="button" class="bcc-sum-del" data-action="delete-match" data-match-id="${esc(m.id)}">Delete match</button>` : ''}
+          ${isHistoricalView ? `<button type="button" class="bcc-sum-del" data-action="delete-match" data-match-id="${esc(m.id)}">Delete match and stats</button>` : ''}
         </div>
       </div>
     </div>
@@ -4859,6 +5011,20 @@ function renderModal() {
       `,
     );
   }
+  if (state.modal.type === 'deleteMatchPin') {
+    return renderBsSheet(
+      'Delete this match?',
+      'The scorecard goes, and its runs and wickets come off the player stats.',
+      `
+        <label class="form-label" for="delete-match-pin-input">Global PIN</label>
+        <input id="delete-match-pin-input" class="form-control form-control-lg text-center font-monospace fw-bold pin-input" type="text" inputmode="numeric" maxlength="4" pattern="[0-9]{4}" placeholder="····" autocomplete="off" enterkeyhint="done" />
+      `,
+      `
+        <button type="button" class="btn btn-danger btn-lg w-100 mb-2" data-action="confirm-delete-match-pin">Delete match and stats</button>
+        <button type="button" class="btn btn-outline-secondary w-100" data-action="cancel-delete-match-pin">Cancel</button>
+      `,
+    );
+  }
   if (state.modal.type === 'deletePlayerPin') {
     const p = playerById(state.modal.playerId);
     const name = p?.name || 'This player';
@@ -4937,6 +5103,58 @@ function renderModal() {
     );
   }
   return '';
+}
+
+async function deleteMatchAndStats(id) {
+  if (!id) return;
+  if (dbOn()) {
+    window.QCDB.cancelSync?.(id);
+    try {
+      await window.QCDB.deleteMatch(id);
+    } catch (err) {
+      console.warn(err);
+      showToast('Could not delete the match');
+      return;
+    }
+  }
+  state.history = state.history.filter(x => x.id !== id);
+  saveHistory(state.history);
+  if (state.adminMatches) state.adminMatches = state.adminMatches.filter(x => x.id !== id);
+  if (state.current?.id === id) {
+    state.current = null;
+    saveCurrent(null);
+  }
+  let matches = state.history.filter(x => x.id !== id);
+  if (dbOn()) {
+    try {
+      const remote = await window.QCDB.loadMatches(500);
+      const byId = new Map();
+      for (const m of remote) {
+        if (m?.id && m.id !== id) byId.set(m.id, m);
+      }
+      for (const m of matches) {
+        if (m?.id && !byId.has(m.id)) byId.set(m.id, m);
+      }
+      matches = [...byId.values()];
+    } catch (err) {
+      console.warn('player stats left unchanged; match list failed', err);
+      state.detail = null;
+      state.detailReturn = null;
+      state.view = 'history';
+      render();
+      showToast('Match deleted. Player stats will refresh when the match list loads.');
+      return;
+    }
+  }
+  if (window.QCPlayers?.rebuildAllStatsFromMatches) {
+    state.players = window.QCPlayers.rebuildAllStatsFromMatches(state.players, matches);
+    if (state.playerDetail) state.playerDetail = playerById(state.playerDetail.id);
+  }
+  state.detail = null;
+  state.detailReturn = null;
+  state.view = 'history';
+  render();
+  showToast('Match deleted. Player stats updated.');
 }
 
 // ---------- Action dispatch ----------
@@ -5128,6 +5346,7 @@ function handle(action, dataset) {
       break;
     }
     case 'cancel-delete-player-pin':
+    case 'cancel-delete-match-pin':
       state.modal = null;
       render();
       break;
@@ -5657,7 +5876,10 @@ function handle(action, dataset) {
     case 'abort-confirm': {
       const m = state.current;
       if (m) {
-        if (dbOn()) window.QCDB.deleteMatch(m.id).catch(err => console.warn(err));
+        if (dbOn()) {
+          window.QCDB.cancelSync?.(m.id);
+          window.QCDB.deleteMatch(m.id).catch(err => console.warn(err));
+        }
         state.history = state.history.filter(x => x.id !== m.id);
         saveHistory(state.history);
       }
@@ -5676,7 +5898,10 @@ function handle(action, dataset) {
       const { A, B } = m.teams;
       const overs = m.overs;
       const battingFirst = m.battingFirst;
-      if (dbOn()) window.QCDB.deleteMatch(m.id).catch(err => console.warn(err));
+      if (dbOn()) {
+        window.QCDB.cancelSync?.(m.id);
+        window.QCDB.deleteMatch(m.id).catch(err => console.warn(err));
+      }
       state.history = state.history.filter(x => x.id !== m.id);
       saveHistory(state.history);
       state.current = null;
@@ -5803,19 +6028,10 @@ function handle(action, dataset) {
       break;
     }
     case 'delete-match': {
-      const expected = (window.QC_CONFIG && window.QC_CONFIG.DELETE_PASSCODE) || '';
-      const code = prompt('Enter passcode to delete this match:');
-      if (code === null) break;
-      if (!expected) { showToast('No passcode configured'); break; }
-      if (code !== expected) { showToast('Wrong passcode'); break; }
       const id = dataset.matchId;
-      if (dbOn()) window.QCDB.deleteMatch(id).catch(err => console.warn(err));
-      state.history = state.history.filter(x => x.id !== id);
-      saveHistory(state.history);
-      state.detail = null;
-      state.detailReturn = null;
-      state.view = 'history'; render();
-      showToast('Match deleted');
+      if (!id) break;
+      state.modal = { type: 'deleteMatchPin', matchId: id };
+      render();
       break;
     }
   }
@@ -5925,6 +6141,16 @@ document.addEventListener('DOMContentLoaded', () => {
       if (!editBallAt(state.current, state.modal.logIndex, sel)) return showToast('Could not save ball');
       showToast('Ball updated');
       finishEditBall();
+      return;
+    }
+    if (action === 'confirm-delete-match-pin') {
+      const pin = ($('delete-match-pin-input')?.value || '').trim();
+      if (!pin) return showToast('Enter the global PIN');
+      if (pin !== EDIT_OVER_PIN) return showToast('Wrong PIN · try again');
+      const id = state.modal?.matchId;
+      state.modal = null;
+      render();
+      if (id) deleteMatchAndStats(id);
       return;
     }
     if (action === 'confirm-delete-player-pin') {
@@ -6082,6 +6308,9 @@ document.addEventListener('DOMContentLoaded', () => {
     } else if (e.target.id === 'delete-player-pin-input') {
       e.preventDefault();
       app.querySelector('[data-action="confirm-delete-player-pin"]')?.click();
+    } else if (e.target.id === 'delete-match-pin-input') {
+      e.preventDefault();
+      app.querySelector('[data-action="confirm-delete-match-pin"]')?.click();
     } else if (e.target.id === 'edit-player-pin-input') {
       e.preventDefault();
       app.querySelector('[data-action="confirm-edit-player-name"]')?.click();
