@@ -4938,6 +4938,11 @@ button.sc-ball { font: inherit; cursor: pointer; }
 
 /* Hero stat chips (run rate / extras / balls left) get more air between them. */
 .screen.bcc-score .sc-chips { gap: 12px; }
+/* Breathing room between a chip's number, its label and its sub-caption (e.g. EXTRAS / WD1 NB0). */
+.screen.bcc-score .sc-chip { padding: 9px 4px 10px; }
+.screen.bcc-score .sc-chip b { margin-bottom: 3px; }
+.screen.bcc-score .sc-chip small { margin-top: 5px; line-height: 1.3; }
+.screen.bcc-score .sc-chip small.sc-s2 { margin-top: 5px; font-size: 9px; letter-spacing: 0.04em; }
 /* Full-word pad labels (WICKET, RUN OUT, WIDE, NO BALL) must stay on one line. */
 .screen.bcc-score .sc-k1 button { white-space: nowrap; letter-spacing: 0.02em; padding-left: 2px; padding-right: 2px; font-size: 11.5px; }
 
