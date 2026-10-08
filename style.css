@@ -4935,3 +4935,10 @@ button.sc-ball { font: inherit; cursor: pointer; }
   .screen.bcc-score .sc-pad { padding-top: 8px; }
   .screen.bcc-score .sc-nums button { padding: 7px 0; }
 }
+
+/* Batting, bowling and partnership sit directly under the score; the over-by-over list is hidden. */
+.screen.bcc-score .sc-feed { display: none; }
+.screen.bcc-score .score-body { flex: 0 1 auto; }
+.screen.bcc-score .sc-dock { margin-top: auto; }
+.screen.bcc-score .sc-crew { margin-top: 10px; }
+.screen.bcc-score .sc-partner { margin-top: 10px; }
