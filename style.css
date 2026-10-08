@@ -4891,3 +4891,47 @@ button.sc-ball { font: inherit; cursor: pointer; }
 .sc-go { flex: none; margin-top: 10px; width: 100%; border: 0; border-radius: 15px; background: #d9ff3f; color: #0a2118; padding: 15px; font: 800 14px "Plus Jakarta Sans", system-ui, sans-serif; letter-spacing: 0.06em; text-transform: uppercase; box-shadow: 0 6px 18px #d9ff3f55; }
 .sc-go.sc-idle { background: #f1ece0; color: #8a968f; box-shadow: none; }
 .sc-cnl { flex: none; display: block; margin: 8px auto 0; border: 0; background: none; color: #46534c; font: 800 13px "Plus Jakarta Sans", system-ui, sans-serif; text-decoration: underline; text-underline-offset: 3px; }
+
+/* ===================== Scoring screen: phone fit pass (393px) =====================
+   Keeps the over strip on one row, stops the ball strip spilling past the hero card,
+   and trims the scoring pad so the scorecard above it has room to breathe. */
+.screen.bcc-score .sc-hero { overflow: visible; }
+.screen.bcc-score .sc-ovr { gap: 6px; min-width: 0; }
+.screen.bcc-score .sc-ovr > span {
+  flex: 0 0 auto;
+  width: 50px;
+  font-size: 9px;
+  letter-spacing: 0.08em;
+  white-space: normal;
+}
+.screen.bcc-score .sc-balls {
+  flex: 1 1 0;
+  min-width: 0;
+  max-width: 100%;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: none;
+}
+.screen.bcc-score .sc-balls::-webkit-scrollbar { display: none; }
+.screen.bcc-score .sc-balls > * { flex: none; }
+.screen.bcc-score .sc-ic { width: 30px; height: 30px; }
+.screen.bcc-score .sc-pad { padding: 10px 10px calc(8px + env(safe-area-inset-bottom, 0px)); }
+.screen.bcc-score .sc-k1 { gap: 5px; }
+.screen.bcc-score .sc-kw,
+.screen.bcc-score .sc-ko,
+.screen.bcc-score .sc-kx { padding: 9px 0; font-size: 12.5px; }
+.screen.bcc-score .sc-nums { gap: 5px; margin-top: 6px; }
+.screen.bcc-score .sc-nums button { padding: 9px 0; font-size: 20px; }
+.screen.bcc-score .sc-nb { margin-top: 6px; padding: 9px; font-size: 17px; }
+.screen.bcc-score .sc-ft { margin-top: 2px; }
+
+/* Shorter phones (SE, mini): give the scorecard more of the height. */
+@media (max-height: 740px) {
+  .screen.bcc-score .sc-big { font-size: 60px; }
+  .screen.bcc-score .sc-ring { width: 84px; height: 84px; }
+  .screen.bcc-score .sc-rp { height: 34px; }
+  .screen.bcc-score .sc-chips { margin-top: 6px; }
+  .screen.bcc-score .sc-hero { padding-top: 10px; padding-bottom: 10px; }
+  .screen.bcc-score .sc-pad { padding-top: 8px; }
+  .screen.bcc-score .sc-nums button { padding: 7px 0; }
+}
