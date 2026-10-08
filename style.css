@@ -4936,6 +4936,11 @@ button.sc-ball { font: inherit; cursor: pointer; }
   .screen.bcc-score .sc-nums button { padding: 7px 0; }
 }
 
+/* Hero stat chips (run rate / extras / balls left) get more air between them. */
+.screen.bcc-score .sc-chips { gap: 12px; }
+/* Full-word pad labels (WICKET, RUN OUT, WIDE, NO BALL) must stay on one line. */
+.screen.bcc-score .sc-k1 button { white-space: nowrap; letter-spacing: 0.02em; padding-left: 2px; padding-right: 2px; font-size: 11.5px; }
+
 /* Batting, bowling and partnership sit right under the score; over-by-over scrolls below them. */
 .screen.bcc-score .sc-crew { margin-top: 10px; }
 .screen.bcc-score .sc-partner { margin-top: 10px; }

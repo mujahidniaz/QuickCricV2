@@ -3715,10 +3715,10 @@ function renderScore() {
       ${pickingPlayer ? renderInlineScorePicker(inn) : `
         <div class="sc-pad">
           <div class="sc-k1">
-            <button type="button" class="sc-kw${b.wicket ? ' sc-sel' : ''}" data-action="select-wkt">WKT</button>
-            <button type="button" class="sc-ko${b.runOut ? ' sc-sel' : ''}" data-action="select-ro">RunOut</button>
-            <button type="button" class="sc-kx${b.extra === 'wd' ? ' sc-sel' : ''}" data-action="select-extra" data-extra="wd">wd</button>
-            <button type="button" class="sc-kx${b.extra === 'nb' ? ' sc-sel' : ''}" data-action="select-extra" data-extra="nb">nb</button>
+            <button type="button" class="sc-kw${b.wicket ? ' sc-sel' : ''}" data-action="select-wkt">WICKET</button>
+            <button type="button" class="sc-ko${b.runOut ? ' sc-sel' : ''}" data-action="select-ro">RUN OUT</button>
+            <button type="button" class="sc-kx${b.extra === 'wd' ? ' sc-sel' : ''}" data-action="select-extra" data-extra="wd">WIDE</button>
+            <button type="button" class="sc-kx${b.extra === 'nb' ? ' sc-sel' : ''}" data-action="select-extra" data-extra="nb">NO BALL</button>
           </div>
           <div class="sc-nums">
             <button type="button" class="sc-dot${b.runs === 0 ? ' sc-sel' : ''}" data-action="select-run" data-runs="0">DOT</button>
