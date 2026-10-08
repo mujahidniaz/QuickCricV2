@@ -847,10 +847,10 @@ function enterSquadReview(squads, toastMsg) {
 /** Auto-picked squads → batting/bowling side lists only; manual or skipped squads → full roster. */
 function rosterForInningsSetup(mode) {
   const m = state.current;
-  if (!m || !matchUsesAutoSquads(m)) return state.players.slice();
+  if (!m || !matchUsesAutoSquads(m)) return sortPlayersForPicker(state.players);
   const { batting, bowling } = inningsSidesForMatch(m);
   const side = mode === 'bowl' ? bowling : batting;
-  return playersForSquadSide(m, side);
+  return sortPlayersForPicker(playersForSquadSide(m, side));
 }
 
 /** Scoring modals: squad-filtered when auto-picked; bowlers exclude crease batters. */
@@ -864,7 +864,7 @@ function rosterForScoringPicker(inn, mode) {
   if (mode === 'bowl' && inn) {
     list = list.filter(p => !batterNotOutOnField(inn, p));
   }
-  return list;
+  return sortPlayersForPicker(list);
 }
 
 function enterTossView() {
@@ -2405,7 +2405,7 @@ async function loadSharedById(id) {
 }
 
 // ---------- Renderers ----------
-const SCROLL_RESTORE_SEL = '.setup-body, .scroll, .break-screen, .result-screen, .score-body';
+const SCROLL_RESTORE_SEL = '.setup-body, .scroll, .break-screen, .result-screen, .score-body, .bcc-sum .bcc-scroll';
 
 function captureScrollPositions(container) {
   return [...container.querySelectorAll(SCROLL_RESTORE_SEL)].map(el => el.scrollTop);
@@ -4209,9 +4209,7 @@ function renderPlayers() {
 
   function rankingRow(p, rank, kind) {
     const topClass = rank <= 3;
-    const detail = kind === 'batting'
-      ? `Avg ${QP.batAvg(p.batting)} · SR ${QP.batSR(p.batting)} · ${p.batting.innings} inns`
-      : `Econ ${QP.bowlEcon(p.bowling)} · Avg ${QP.bowlAvg(p.bowling)} · ${QP.fmtOvers(p.bowling.balls)} ov`;
+    const detail = `SR ${QP.batSR(p.batting)} · ${QP.fmtOvers(p.bowling.balls)} ov`;
     return `
       <button type="button" class="bcc-prow${topClass ? ' is-top' : ''}" data-action="view-player" data-player-id="${esc(p.id)}" data-from="${kind}">
         <span class="bcc-av bcc-an">${rank}</span>
@@ -4304,102 +4302,76 @@ function renderPlayers() {
   `;
 }
 
-function renderStatList(items) {
-  return `
-    <div class="stat-mini-grid">
-      ${items.map(([label, val]) => `
-        <div class="stat-mini">
-          <span class="stat-mini-val">${esc(String(val))}</span>
-          <span class="stat-mini-lbl">${esc(label)}</span>
-        </div>
-      `).join('')}
-    </div>`;
+function renderFactTiles(items) {
+  return `<div class="bcc-f3">${items.map(([val, label, wide]) => `
+    <div${wide ? ' class="is-wide"' : ''}><b class="bcc-an">${esc(String(val))}</b><small>${esc(label)}</small></div>
+  `).join('')}</div>`;
 }
 
-function renderStatGroup(title, items) {
-  if (!items?.length) return '';
-  return `
-    <div class="stat-group">
-      <div class="stat-group-title">${esc(title)}</div>
-      ${renderStatList(items)}
-    </div>`;
+function renderCssRings(rings) {
+  return `<div class="bcc-bx bcc-rings-box"><div class="bcc-rings">${rings.map(r => `
+    <div class="bcc-rg">
+      <div class="bcc-ring" style="--p:${r.pct};--c:${r.color}" data-v="${r.pct}%"></div>
+      <small>${esc(r.label)}</small>
+    </div>`).join('')}</div></div>`;
 }
 
-function renderKpis(items) {
-  return `
-    <div class="stat-kpis">
-      ${items.map(([lbl, val]) => `
-        <div class="stat-kpi">
-          <div class="stat-kpi-val">${esc(String(val))}</div>
-          <div class="stat-kpi-lbl">${esc(lbl)}</div>
-        </div>
-      `).join('')}
-    </div>`;
-}
-
-function renderStackedBar(title, segments) {
-  const total = segments.reduce((s, x) => s + x.value, 0);
+function renderStatDonut(parts, unit) {
+  const shown = parts.filter(p => p.value > 0);
+  const total = shown.reduce((s, p) => s + p.value, 0);
   if (!total) return '';
-  let x = 0;
-  const rects = segments.map((seg) => {
-    const width = (seg.value / total) * 320;
-    const el = `<rect x="${x.toFixed(2)}" y="0" width="${Math.max(width, 0.6).toFixed(2)}" height="16" fill="${seg.color}"/>`;
-    x += width;
+  const r = 42;
+  const C = 2 * Math.PI * r;
+  let off = 0;
+  const arcs = shown.map(p => {
+    const d = (p.value / total) * C;
+    const el = `<circle class="bcc-dn" cx="60" cy="60" r="${r}" fill="none" stroke="${p.color}" stroke-width="16" stroke-dasharray="${d.toFixed(2)} ${(C - d).toFixed(2)}" stroke-dashoffset="${(-off).toFixed(2)}"/>`;
+    off += d;
     return el;
   }).join('');
-  const legend = segments.map(seg => `
-    <span class="stat-legend"><i style="background:${seg.color}"></i>${esc(seg.label)} <b>${seg.value}</b></span>
-  `).join('');
-  return `
-    <div class="stat-chart">
-      <div class="stat-chart-title">${esc(title)}</div>
-      <svg class="stat-stack" viewBox="0 0 320 16" role="img" aria-label="${esc(title)}">${rects}</svg>
-      <div class="stat-legend-row">${legend}</div>
-    </div>`;
-}
-
-function renderColumns(title, items, color) {
-  const rows = (items || []).filter(i => i.value > 0);
-  if (!rows.length) return '';
-  const peak = Math.max(1, ...rows.map(i => i.value));
-  const n = rows.length;
-  const vbW = 320;
-  const slot = vbW / n;
-  const gap = Math.min(8, slot * 0.22);
-  const bars = rows.map((item, i) => {
-    const bh = Math.max(3, (item.value / peak) * 72);
-    const bw = Math.max(6, slot - gap);
-    const x = i * slot + (slot - bw) / 2;
-    const y = 86 - bh;
+  const legend = shown.map(p => {
+    const pc = Math.round((p.value / total) * 100);
     return `
-      <text x="${(x + bw / 2).toFixed(1)}" y="12" text-anchor="middle" font-size="11" font-weight="700" fill="#eef3e4">${item.value}</text>
-      <rect x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${bw.toFixed(1)}" height="${bh.toFixed(1)}" rx="4" fill="${color}"/>
-      <text x="${(x + bw / 2).toFixed(1)}" y="104" text-anchor="middle" font-size="11" font-weight="700" fill="#8aa092">${esc(item.label)}</text>`;
+      <div class="bcc-lg-row">
+        <div class="bcc-lg-l"><span><i class="bcc-dot" style="background:${p.color}"></i>${esc(p.label)}</span><span><em class="bcc-lg-n">${p.value}</em> <b class="bcc-lg-pc">${pc}%</b></span></div>
+        <div class="bcc-trk"><i style="width:${pc}%;background:${p.color}"></i></div>
+      </div>`;
   }).join('');
   return `
-    <div class="stat-chart">
-      <div class="stat-chart-title">${esc(title)}</div>
-      <svg class="stat-cols" viewBox="0 0 320 112" role="img" aria-label="${esc(title)}">${bars}</svg>
+    <div class="bcc-donut">
+      <svg viewBox="0 0 120 120" width="140" height="140" aria-hidden="true">
+        <g transform="rotate(-90 60 60)">
+          <circle cx="60" cy="60" r="${r}" fill="none" stroke="#e2dac6" stroke-width="16"/>
+          ${arcs}
+        </g>
+        <text x="60" y="64" text-anchor="middle" font-size="26" fill="#0a2118" font-family="Anton, Impact, sans-serif">${total}</text>
+        <text x="60" y="78" text-anchor="middle" font-size="8" font-weight="800" fill="#6b766e">${esc(String(unit).toUpperCase())}</text>
+      </svg>
+      <div class="bcc-lgr">${legend}</div>
     </div>`;
 }
 
-function renderRing(pct, valueText, label, color) {
-  const p = Math.max(0, Math.min(1, Number(pct) || 0));
-  const r = 28;
-  const circ = 2 * Math.PI * r;
-  const dash = (circ * p).toFixed(1);
-  return `
-    <div class="stat-ring">
-      <svg viewBox="0 0 72 72" aria-hidden="true">
-        <circle cx="36" cy="36" r="${r}" fill="none" stroke="#1c3a2a" stroke-width="7"/>
-        <circle cx="36" cy="36" r="${r}" fill="none" stroke="${color}" stroke-width="7" stroke-linecap="round"
-          stroke-dasharray="${dash} ${circ.toFixed(1)}" transform="rotate(-90 36 36)"/>
-      </svg>
-      <div class="stat-ring-copy">
-        <div class="stat-ring-val">${esc(valueText)}</div>
-        <div class="stat-ring-lbl">${esc(label)}</div>
-      </div>
-    </div>`;
+function renderHighlightBars(items, hiIndex, color, axis) {
+  if (!items.length) return '';
+  const peak = Math.max(1, ...items.map(i => i.value));
+  const W = 300;
+  const H = 150;
+  const g = W / items.length;
+  const bw = Math.min(30, g - 10);
+  const grid = [0, 0.5, 1].map(f => {
+    const y = 110 - f * 80;
+    return `<line x1="0" x2="${W}" y1="${y}" y2="${y}" stroke="#e2dac6" stroke-dasharray="3 4"/>`;
+  }).join('');
+  const bars = items.map((item, i) => {
+    const h = Math.max(3, (item.value / peak) * 80);
+    const x = g * i + (g - bw) / 2;
+    const on = i === hiIndex;
+    return `
+      <rect class="bcc-gr" style="animation-delay:${i * 60}ms" x="${x.toFixed(1)}" y="${(110 - h).toFixed(1)}" width="${bw.toFixed(1)}" height="${h.toFixed(1)}" rx="8" fill="${on ? color : '#6b766e'}" opacity="${on ? 1 : 0.35}"/>
+      <text x="${(x + bw / 2).toFixed(1)}" y="${Math.max(12, 104 - h).toFixed(1)}" text-anchor="middle" font-size="12" font-weight="800" fill="#0a2118">${item.value}</text>
+      <text x="${(x + bw / 2).toFixed(1)}" y="128" text-anchor="middle" font-size="11" font-weight="800" fill="${on ? '#0a2118' : '#6b766e'}">${esc(String(item.label))}</text>`;
+  }).join('');
+  return `<svg class="bcc-hbars" viewBox="0 0 ${W} ${H}" role="img" aria-label="${esc(axis)}">${grid}${bars}<text x="${W / 2}" y="146" text-anchor="middle" font-size="9" font-weight="800" fill="#6b766e">${esc(axis)}</text></svg>`;
 }
 
 function renderPlayerDetail() {
@@ -4416,116 +4388,118 @@ function renderPlayerDetail() {
   const otherBalls = Math.max(0, balls - dots - fours - sixes);
   const ballMix = [
     { label: 'Dots', value: dots, color: '#8b948d' },
-    { label: '1–3', value: otherBalls, color: '#1f7a4d' },
+    { label: '1–3 runs', value: otherBalls, color: '#1f7a4d' },
     { label: 'Fours', value: fours, color: '#f2a900' },
     { label: 'Sixes', value: sixes, color: '#d8432b' },
-  ].filter(s => s.value > 0);
+  ];
   const positions = Object.entries(bat.positions || {})
     .map(([key, v]) => ({ label: key, value: v.runs || 0 }))
+    .filter(item => item.value > 0 || (bat.positions[item.label]?.inns || 0) > 0)
     .sort((a, b) => Number(a.label) - Number(b.label));
   const overs = Object.entries(bowl.overSlots || {})
-    .map(([key, v]) => ({ label: key, value: v.wickets || 0, runs: v.runs || 0 }))
+    .map(([key, v]) => ({ label: key, value: v.wickets || 0 }))
+    .filter(item => item.value > 0 || (bowl.overSlots[item.label]?.balls || 0) > 0)
     .sort((a, b) => Number(a.label) - Number(b.label));
-  const overHasWkts = overs.some(o => o.value > 0);
-  const overBars = overs.map(o => ({ label: o.label, value: overHasWkts ? o.value : o.runs }));
-  const overTitle = overHasWkts ? 'Wickets from each over number' : 'Runs conceded from each over number';
   const legal = bowl.balls || 0;
-  const wideBalls = bowl.wides || 0;
-  const nbBalls = bowl.noBalls || 0;
   const bowlMix = [
     { label: 'Legal', value: legal, color: '#1f7a4d' },
-    { label: 'Wides', value: wideBalls, color: '#f2a900' },
-    { label: 'No-balls', value: nbBalls, color: '#d8432b' },
-  ].filter(s => s.value > 0);
-  const batWin = bat.innings ? (bat.wins || 0) / bat.innings : 0;
-  const bowlWin = bowl.innings ? (bowl.wins || 0) / bowl.innings : 0;
-  const share = bat.teamRuns ? Math.min(1, bat.runs / bat.teamRuns) : 0;
-  const stood = bowl.innings ? (bowl.stoodUp || 0) / bowl.innings : 0;
-  const bestBowl = bowl.bestWickets ? `${bowl.bestWickets}/${bowl.bestRuns ?? 0}` : '—';
+    { label: 'Wides', value: bowl.wides || 0, color: '#f2a900' },
+    { label: 'No-balls', value: bowl.noBalls || 0, color: '#d8432b' },
+  ];
+  const batWin = bat.innings ? Math.round(((bat.wins || 0) / bat.innings) * 100) : 0;
+  const bowlWin = bowl.innings ? Math.round(((bowl.wins || 0) / bowl.innings) * 100) : 0;
+  const share = bat.teamRuns ? Math.round(Math.min(1, bat.runs / bat.teamRuns) * 100) : 0;
+  const stood = bowl.innings ? Math.round(((bowl.stoodUp || 0) / bowl.innings) * 100) : 0;
   const bestPos = QP.bestBattingPosition(bat);
-  const bestOver = QP.bestBowlingOver(bowl);
-  const batFacts = [
-    ['Innings', bat.innings],
-    ['Not out', bat.notOuts],
-    ['Highest', bat.highest],
-    ['Fifties', bat.fifties],
-    ['Hundreds', bat.hundreds],
-    ['Ducks', bat.ducks],
-    ['Carried', QP.winRate(bat.carriedWins || 0, bat.carried || 0)],
-  ];
-  const batBestFacts = bestPos ? [
-    ['Position', bestPos.pos],
-    ['Runs', bestPos.runs],
-    ['Average', bestPos.avg],
-    ['Innings', bestPos.inns],
-  ] : [];
-  const bowlFacts = [
-    ['Overs', QP.fmtOvers(bowl.balls)],
-    ['Balls bowled', bowl.deliveries || bowl.balls],
-    ['Runs hit off', bowl.runs],
-    ['Dot balls', bowl.dots || 0],
-    ['Strike rate', QP.bowlSR(bowl)],
-    ['Best figures', bestBowl],
-    ['3w / 5w', `${bowl.threeWickets} / ${bowl.fiveWickets}`],
-  ];
-  const bowlBestFacts = bestOver ? [
-    ['Over', bestOver.over],
-    ['Wickets', bestOver.wickets],
-    ['Runs', bestOver.runs],
-    ['Economy', bestOver.econ],
-  ] : [];
+  const clubRuns = state.players.reduce((s, pl) => s + (pl.batting?.runs || 0), 0);
+  const clubWkts = state.players.reduce((s, pl) => s + (pl.bowling?.wickets || 0), 0);
+  const runPct = clubRuns ? Math.round((bat.runs / clubRuns) * 100) : 0;
+  const wktPct = clubWkts ? Math.round((bowl.wickets / clubWkts) * 100) : 0;
+  const batRank = state.players.filter(pl => (pl.batting?.runs || 0) > bat.runs).length + 1;
+  const bowlRank = state.players.filter(pl => (pl.bowling?.wickets || 0) > bowl.wickets).length + 1;
   const statTab = state.playerStatTab === 'bowl' ? 'bowl' : 'bat';
-  const sub = statTab === 'bowl'
-    ? `${QP.fmtOvers(bowl.balls)} overs bowled`
-    : `SR ${QP.batSR(bat)} · ${bat.innings} innings`;
+  const batting = statTab !== 'bowl';
+  const hasBat = (bat.runs || 0) > 0;
+  const hasBowl = (bowl.wickets || 0) > 0;
+  const hiPos = bestPos ? positions.findIndex(item => String(item.label) === String(bestPos.pos)) : -1;
+  const hiOver = overs.reduce((best, item, i) => (item.value > (overs[best]?.value || 0) ? i : best), 0);
+  const kpis = batting
+    ? [[bat.runs, 'Runs'], [QP.batSR(bat), 'Strike rate'], [`${runPct}%`, 'Of club runs']]
+    : [[bowl.wickets, 'Wickets'], [QP.fmtOvers(bowl.balls), 'Overs'], [`${wktPct}%`, 'Of club wkts']];
+  const badge = batting
+    ? (hasBat ? `<span class="bcc-rkb">#${batRank} run scorer</span>` : '')
+    : (hasBowl ? `<span class="bcc-rkb">#${bowlRank} wicket taker</span>` : '');
+  const body = batting
+    ? (hasBat ? `
+        ${renderCssRings([
+          { pct: batWin, color: '#1f7a4d', label: `${bat.wins || 0} of ${bat.innings} innings won` },
+          { pct: share, color: '#f2a900', label: 'Share of team runs' },
+        ])}
+        ${renderFactTiles([
+          [bat.innings, 'Innings'],
+          [bat.notOuts, 'Not out'],
+          [bat.highest, 'Highest'],
+          [bat.fifties, 'Fifties'],
+          [bat.hundreds, 'Hundreds'],
+          [bat.ducks, 'Ducks'],
+          [QP.winRate(bat.carriedWins || 0, bat.carried || 0), 'Carried', true],
+        ])}
+        ${bestPos ? `
+          <div class="bcc-best">
+            <h4>Best batting position</h4>
+            <div class="bcc-best-g">
+              <div><b class="bcc-an">${esc(bestPos.pos)}</b><small>Position</small></div>
+              <div><b class="bcc-an">${bestPos.runs}</b><small>Runs</small></div>
+              <div><b class="bcc-an">${esc(String(bestPos.avg))}</b><small>Average</small></div>
+              <div><b class="bcc-an">${bestPos.inns}</b><small>Innings</small></div>
+            </div>
+            <p>Average is runs each time they were out. A carry is an innings where they outscored the rest of the team.</p>
+          </div>` : ''}
+        ${balls ? `<div class="bcc-bx"><h4>Balls faced</h4>${renderStatDonut(ballMix, 'Balls')}</div>` : ''}
+        ${positions.length ? `<div class="bcc-bx"><h4>Runs by batting position</h4><div class="bcc-sub">Highlighted = their best slot</div>${renderHighlightBars(positions, hiPos, '#f2a900', 'Batting position')}</div>` : ''}
+      ` : `<div class="bcc-bx bcc-emp">No runs yet — get out there!</div>`)
+    : (hasBowl ? `
+        ${renderFactTiles([
+          [QP.bowlAvg(bowl), 'Average'],
+          [QP.bowlEcon(bowl), 'Economy'],
+          [bowl.extras || ((bowl.wides || 0) + (bowl.noBalls || 0)), 'Extras'],
+          [bowl.deliveries || bowl.balls, 'Balls bowled'],
+          [bowl.runs, 'Runs hit off'],
+          [bowl.dots || 0, 'Dot balls'],
+        ])}
+        ${(legal || bowl.wides || bowl.noBalls) ? `<div class="bcc-bx"><h4>Balls bowled</h4>${renderStatDonut(bowlMix, 'Balls')}</div>` : ''}
+        ${overs.length ? `<div class="bcc-bx"><h4>Wickets by over number</h4><div class="bcc-sub">Highlighted = their most dangerous over</div>${renderHighlightBars(overs, hiOver, '#d8432b', 'Over number')}</div>` : ''}
+        ${renderCssRings([
+          { pct: bowlWin, color: '#1f7a4d', label: `${bowl.wins || 0} of ${bowl.innings} spells won` },
+          { pct: stood, color: '#d8432b', label: `${bowl.stoodUp || 0} spells led the attack` },
+        ])}
+      ` : `<div class="bcc-bx bcc-emp">No wickets yet — get out there!</div>`);
   return `
     <div class="screen bcc-player">
       <div class="bcc-top">
         <button type="button" class="bcc-ib" data-action="players" aria-label="Back">←</button>
-        <span class="bcc-an">Player stats</span>
+        <span class="bcc-an">${esc(p.name)}</span>
       </div>
       <div class="bcc-art"></div>
       <div class="bcc-scroll">
-        <div class="bcc-pcard">
+        <div class="bcc-tabs2">
+          <button type="button" class="${batting ? 'is-on' : ''}" data-action="player-stat-tab" data-tab="bat">🏏 Batting</button>
+          <button type="button" class="${batting ? '' : 'is-on'}" data-action="player-stat-tab" data-tab="bowl">🔴 Bowling</button>
+        </div>
+        <div class="bcc-pcard${batting ? '' : ' is-bowl'}">
           <div class="bcc-pcard-in">
-            <div class="bcc-pbig bcc-an">${esc(p.name.charAt(0).toUpperCase())}</div>
+            <div class="bcc-pbig" aria-hidden="true">${batting ? '🏏' : '🔴'}</div>
             <h3 class="bcc-an">${esc(p.name)}</h3>
-            <p>${esc(sub)}</p>
+            <p>${batting ? 'Batting' : 'Bowling'}</p>
+            ${badge}
             <div class="bcc-kp">
-              <div><b class="bcc-an">${bat.runs}</b><small>Runs</small></div>
-              <div><b class="bcc-an">${esc(String(QP.batAvg(bat)))}</b><small>Avg</small></div>
-              <div><b class="bcc-an">${esc(String(QP.batSR(bat)))}</b><small>SR</small></div>
-              <div><b class="bcc-an">${bowl.wickets}</b><small>Wkts</small></div>
+              ${kpis.map(([val, label]) => `<div><b class="bcc-an">${esc(String(val))}</b><small>${esc(label)}</small></div>`).join('')}
             </div>
           </div>
           <div class="bcc-art"></div>
         </div>
-        <div class="bcc-tabs2">
-          <button type="button" class="${statTab === 'bat' ? 'is-on' : ''}" data-action="player-stat-tab" data-tab="bat">Batting</button>
-          <button type="button" class="${statTab === 'bowl' ? 'is-on' : ''}" data-action="player-stat-tab" data-tab="bowl">Bowling</button>
-        </div>
         <div class="bcc-wrap bcc-statbody">
-          ${statTab === 'bat' ? (bat.innings ? `
-            ${renderStackedBar('Balls faced', ballMix)}
-            ${renderColumns('Runs by batting position', positions, '#f2a900')}
-            <div class="stat-rings">
-              ${renderRing(batWin, `${Math.round(batWin * 100)}%`, `${bat.wins || 0} of ${bat.innings} innings won`, '#1f7a4d')}
-              ${renderRing(share, `${Math.round(share * 100)}%`, 'Share of team runs', '#f2a900')}
-            </div>
-            ${renderStatList(batFacts)}
-            ${renderStatGroup('Best batting position', batBestFacts)}
-            <p class="bcc-note">Average is runs each time they were out. A carry is an innings where they outscored the rest of the team.</p>
-          ` : `<p class="bcc-note">No batting innings yet.</p>`) : (bowl.innings ? `
-            ${renderStackedBar('Balls bowled', bowlMix)}
-            ${renderColumns(overTitle, overBars, '#1f7a4d')}
-            <div class="stat-rings">
-              ${renderRing(bowlWin, `${Math.round(bowlWin * 100)}%`, `${bowl.wins || 0} of ${bowl.innings} spells won`, '#1f7a4d')}
-              ${renderRing(stood, `${Math.round(stood * 100)}%`, `${bowl.stoodUp || 0} spells led the attack`, '#d8432b')}
-            </div>
-            ${renderStatList(bowlFacts)}
-            ${renderStatGroup('Best over', bowlBestFacts)}
-            <p class="bcc-note">Extras are wides and no-balls. Balls bowled include those. Leading the attack means at least as many wickets as everyone else.</p>
-          ` : `<p class="bcc-note">No bowling innings yet.</p>`)}
+          ${body}
           <div class="bcc-player-actions">
             <button type="button" data-action="edit-player-name" data-player-id="${esc(p.id)}">Edit name</button>
             <button type="button" class="is-danger" data-action="delete-player" data-player-id="${esc(p.id)}">Remove player</button>
