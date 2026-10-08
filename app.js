@@ -1746,6 +1746,67 @@ function syncScorePick() {
   if (state.modal?.type === 'newBatter' || state.modal?.type === 'newBowler') state.modal = null;
 }
 
+function pickerCareerLine(p, mode) {
+  if (mode === 'bowl') {
+    const wkts = p.bowling?.wickets || 0;
+    if (wkts > 0) return `${wkts} career wicket${wkts === 1 ? '' : 's'}`;
+    const balls = p.bowling?.balls || 0;
+    if (balls > 0) return `${fmtOvers(balls)} career overs`;
+    return 'Yet to bowl';
+  }
+  const runs = p.batting?.runs || 0;
+  return runs > 0 ? `${runs} career runs` : 'New to the crease';
+}
+
+function renderScorePickCards(inn, isBatter) {
+  const sp = state.scorePick;
+  const mode = isBatter ? 'bat' : 'bowl';
+  const action = isBatter ? 'pick-new-batter' : 'pick-new-bowler';
+  const opts = { blockOnField: isBatter, blockConsecutive: !isBatter };
+  const players = rosterForScoringPicker(inn, mode);
+  const filter = (state.playerPickerFilter || '').trim().toLowerCase();
+  const filtered = sortPlayersForPicker(filter
+    ? players.filter(p => p.name.toLowerCase().includes(filter))
+    : players);
+  const available = players.filter(p => !pickerDisabledReason(inn, p, mode, opts)).length;
+  const cards = filtered.map(p => {
+    const reason = pickerDisabledReason(inn, p, mode, opts);
+    const selected = sp.pick && (
+      (sp.pick.id && sp.pick.id === p.id) ||
+      sp.pick.name?.toLowerCase() === p.name.toLowerCase()
+    );
+    const initial = (p.name || '?').charAt(0).toUpperCase();
+    return `
+      <button type="button" class="bcc-pick-card${selected ? ' is-on' : ''}${reason ? ' is-off' : ''}"
+        data-action="${reason ? '' : action}"
+        data-player-id="${esc(p.id)}"
+        data-player-name="${esc(p.name)}"
+        ${reason ? 'disabled' : ''}>
+        <span class="bcc-pick-av bcc-an">${esc(initial)}</span>
+        <span class="bcc-pick-copy">
+          <b>${esc(p.name)}</b>
+          <small>${esc(reason || pickerCareerLine(p, mode))}</small>
+        </span>
+      </button>`;
+  }).join('');
+  return `
+    <input id="score-pick-query" class="bcc-pick-search player-picker-filter" type="search" placeholder="Find player…" value="${esc(state.playerPickerFilter || '')}" autocomplete="off" autocapitalize="off" enterkeyhint="search" />
+    <div class="bcc-pick-meta">
+      <span>${isBatter ? 'Available batters' : 'Available bowlers'}</span>
+      <span class="bcc-pick-n">${available}</span>
+    </div>
+    <div class="bcc-pick-scroll">
+      ${filtered.length
+        ? `<div class="bcc-pick-grid">${cards}</div>`
+        : `<p class="bcc-pick-empty">${players.length ? 'No names match that search.' : 'No saved players — add a name below.'}</p>`}
+      ${!sp.manual ? `<button type="button" class="bcc-pick-new" data-action="toggle-modal-manual">+ New name</button>` : ''}
+      <div class="player-picker-manual${sp.manual ? '' : ' d-none'}">
+        <input id="${isBatter ? 'new-batter-input' : 'new-bowler-input'}" class="form-control form-control-sm player-picker-input" type="text" placeholder="Type name…" autocomplete="off" autocapitalize="words" />
+      </div>
+    </div>
+  `;
+}
+
 function renderInlineScorePicker(inn) {
   const sp = state.scorePick;
   if (!sp) return '';
@@ -1772,24 +1833,7 @@ function renderInlineScorePicker(inn) {
         <div class="score-inline-pick-title">${esc(title)}</div>
         <div class="score-inline-pick-sub">${esc(subtitle)}</div>
       </div>
-      <div class="score-inline-pick-scroll">
-        ${renderPlayerPicker({
-          action: isBatter ? 'pick-new-batter' : 'pick-new-bowler',
-          role: isBatter ? 'batter' : 'bowler',
-          players: rosterForScoringPicker(inn, isBatter ? 'bat' : 'bowl'),
-          inn,
-          mode: isBatter ? 'bat' : 'bowl',
-          blockOnField: isBatter,
-          blockConsecutive: !isBatter,
-          inputId: isBatter ? 'new-batter-input' : 'new-bowler-input',
-          modalManual: sp.manual,
-          selected: sp.pick,
-          compact: true,
-          fluid: true,
-          dark: false,
-          showFilter: false,
-        })}
-      </div>
+      ${renderScorePickCards(inn, isBatter)}
       <div class="score-inline-pick-actions">
         ${canUndoPick ? `<button type="button" class="score-inline-pick-undo" data-action="undo">${esc(undoActionLabel(state.current))}</button>` : ''}
         <button type="button" class="score-inline-pick-continue" data-action="${isBatter ? 'confirm-new-batter' : 'confirm-new-bowler'}">Continue</button>
@@ -2405,7 +2449,7 @@ async function loadSharedById(id) {
 }
 
 // ---------- Renderers ----------
-const SCROLL_RESTORE_SEL = '.setup-body, .scroll, .break-screen, .result-screen, .score-body, .bcc-sum .bcc-scroll';
+const SCROLL_RESTORE_SEL = '.setup-body, .scroll, .break-screen, .result-screen, .score-body, .bcc-sum .bcc-scroll, .bcc-pick-scroll';
 
 function captureScrollPositions(container) {
   return [...container.querySelectorAll(SCROLL_RESTORE_SEL)].map(el => el.scrollTop);
@@ -3410,13 +3454,6 @@ function renderScore() {
   const legalCount = overBalls.filter(b => b.legal).length;
   const remainingLegal = Math.max(0, 6 - legalCount);
 
-  let targetPill = '';
-  if (m.currentInnings === 1 && inn.target != null) {
-    const need = inn.target - inn.score.runs;
-    const ballsLeft = (m.overs * 6) - inn.score.balls;
-    if (need > 0) targetPill = `Need ${need} from ${ballsLeft} balls`;
-  }
-
   const b = state.ball;
   const selCount = ballSelectionCount(b);
   const canNext = selCount > 0 && !inn.needNewBatter && !inn.needNewBowler && !inn.ended;
@@ -3445,7 +3482,14 @@ function renderScore() {
         emptySlots: atOverBreak ? 0 : remainingLegal,
       });
 
-  const overPct = Math.min(100, m.overs ? (inn.score.balls / (m.overs * 6)) * 100 : 0);
+  const ballsLeft = (m.overs * 6) - inn.score.balls;
+  const need = m.currentInnings === 1 && inn.target != null ? inn.target - inn.score.runs : null;
+  const rrr = need != null && need > 0 && ballsLeft > 0 ? ((need / ballsLeft) * 6).toFixed(2) : '';
+  const chase = need != null && need > 0 && ballsLeft > 0
+    ? `${team} require ${need} ${need === 1 ? 'run' : 'runs'} in ${ballsLeft} ${ballsLeft === 1 ? 'ball' : 'balls'}`
+    : '';
+  const ex = inningsExtraRuns(inn);
+  const extraTotal = ex.b + ex.lb + ex.wd + ex.nb;
 
   return `
     <div class="screen score-screen bcc-score${pickingPlayer ? ' score-screen--picking' : ''}">
@@ -3457,11 +3501,19 @@ function renderScore() {
       </div>
       <div class="score-body">
       <div class="bcc-board">
-        <div class="bcc-tm bcc-an">${esc(team)}${m.currentInnings === 1 ? ' · 2nd' : ''}</div>
-        <div class="bcc-big bcc-an">${inn.score.runs}/${inn.score.wickets}</div>
-        <div class="bcc-sub">${fmtOvers(inn.score.balls)} / ${m.overs}.0 overs · CRR <b>${rate}</b></div>
-        ${targetPill ? `<div class="bcc-need">${esc(targetPill)}</div>` : ''}
-        <div class="bcc-pbar"><i style="width:${overPct.toFixed(1)}%"></i></div>
+        ${chase ? `<div class="bcc-chase">${esc(chase)}</div>` : ''}
+        <div class="bcc-srow">
+          <div class="bcc-sname">${esc(team)}</div>
+          <div class="bcc-sfig">${inn.score.runs}/${inn.score.wickets}</div>
+        </div>
+        <div class="bcc-smeta">
+          <div class="bcc-srates">
+            <div>CRR: <b>${rate}</b></div>
+            ${rrr ? `<div>RRR: <b>${rrr}</b></div>` : ''}
+          </div>
+          <div class="bcc-sovers">${fmtOvers(inn.score.balls)}/${m.overs} Overs</div>
+        </div>
+        <div class="bcc-sx">Extra ${extraTotal} (B ${ex.b}, LB ${ex.lb}, WD ${ex.wd}, NB ${ex.nb}, P 0)</div>
         ${inn.freeHit ? `<div class="bcc-free">Free hit</div>` : ''}
         ${editMode ? `<div class="bcc-free">Tap a ball in this or the previous over</div>` : ''}
       </div>
