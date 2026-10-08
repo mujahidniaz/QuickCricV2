@@ -4943,6 +4943,19 @@ button.sc-ball { font: inherit; cursor: pointer; }
 .screen.bcc-score .sc-chip b { margin-bottom: 3px; }
 .screen.bcc-score .sc-chip small { margin-top: 5px; line-height: 1.3; }
 .screen.bcc-score .sc-chip small.sc-s2 { margin-top: 5px; font-size: 9px; letter-spacing: 0.04em; }
+/* Extras chip: wides and no-balls sit in the bottom corners, out of the way of the label. */
+.screen.bcc-score .sc-chip--extras { position: relative; padding-bottom: 20px; }
+.screen.bcc-score .sc-corner {
+  position: absolute;
+  bottom: 6px;
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  color: #b9cfc0;
+  white-space: nowrap;
+}
+.screen.bcc-score .sc-corner--l { left: 7px; }
+.screen.bcc-score .sc-corner--r { right: 7px; }
 /* Full-word pad labels (WICKET, RUN OUT, WIDE, NO BALL) must stay on one line. */
 .screen.bcc-score .sc-k1 button { white-space: nowrap; letter-spacing: 0.02em; padding-left: 2px; padding-right: 2px; font-size: 11.5px; }
 

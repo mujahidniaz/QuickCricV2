@@ -3660,7 +3660,7 @@ function renderScore() {
           <div class="sc-chip"><b class="bcc-an sc-g">${rate}</b><small>Run rate</small></div>
           ${need != null && need > 0
             ? `<div class="sc-chip"><b class="bcc-an sc-g">${need}</b><small>Need</small><small class="sc-s2">RRR ${rrr}</small></div>`
-            : `<div class="sc-chip"><b class="bcc-an">${extraTotal}</b><small>Extras</small><small class="sc-s2">WD${ex.wd} NB${ex.nb}</small></div>`}
+            : `<div class="sc-chip sc-chip--extras"><b class="bcc-an">${extraTotal}</b><small>Extras</small><span class="sc-corner sc-corner--l">WD: ${ex.wd}</span><span class="sc-corner sc-corner--r">NB: ${ex.nb}</span></div>`}
           <div class="sc-chip"><b class="bcc-an">${Math.max(0, ballsLeft)}</b><small>Balls left</small></div>
         </div>
         ${need != null && need > 0 ? `<div class="sc-xline">Extras ${extraTotal} · WD${ex.wd} NB${ex.nb}</div>` : ''}
