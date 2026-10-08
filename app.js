@@ -3673,13 +3673,6 @@ function renderScore() {
         ${prevEditHtml ? `<div class="sc-ovr"><span>Over ${liveOver}</span><div class="sc-balls">${prevEditHtml}</div></div>` : ''}
         ${!editMode && atOverBreak ? `<button type="button" class="sc-fix" data-action="fix-last-ball">Fix last ball</button>` : ''}
       </div>
-      <div class="sc-feed">
-        <div class="sc-fc sc-ov">
-          <div class="sc-fh"><span>Over by over</span><em>${finished.length} finished</em></div>
-          <div class="sc-olist">${finishedRows || '<div class="sc-ph">Finished overs show up here,<br>ball by ball.</div>'}</div>
-        </div>
-      </div>
-      </div>
       <div class="sc-crew">
         <div class="sc-cbox">
           <div class="sc-ch">Batting<div>
@@ -3711,6 +3704,13 @@ function renderScore() {
           ${partner.extras ? `<div class="sc-pe">incl. ${partner.extras} extra${partner.extras === 1 ? '' : 's'}</div>` : ''}
         </div>
       </div>` : ''}
+      <div class="sc-feed">
+        <div class="sc-fc sc-ov">
+          <div class="sc-fh"><span>Over by over</span><em>${finished.length} finished</em></div>
+          <div class="sc-olist">${finishedRows || '<div class="sc-ph">Finished overs show up here,<br>ball by ball.</div>'}</div>
+        </div>
+      </div>
+      </div>
       <div class="actions score-actions${pickingPlayer ? ' score-actions--pick' : ''} sc-dock">
       ${pickingPlayer ? renderInlineScorePicker(inn) : `
         <div class="sc-pad">

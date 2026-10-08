@@ -4936,9 +4936,7 @@ button.sc-ball { font: inherit; cursor: pointer; }
   .screen.bcc-score .sc-nums button { padding: 7px 0; }
 }
 
-/* Batting, bowling and partnership sit directly under the score; the over-by-over list is hidden. */
-.screen.bcc-score .sc-feed { display: none; }
-.screen.bcc-score .score-body { flex: 0 1 auto; }
-.screen.bcc-score .sc-dock { margin-top: auto; }
+/* Batting, bowling and partnership sit right under the score; over-by-over scrolls below them. */
 .screen.bcc-score .sc-crew { margin-top: 10px; }
 .screen.bcc-score .sc-partner { margin-top: 10px; }
+.screen.bcc-score .sc-feed { margin-top: 10px; }
