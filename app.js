@@ -653,7 +653,7 @@ async function runMatchPlayerReassign(matchId, sourceKey, targetId, scope) {
 }
 
 async function refreshCareerStatsIfNeeded() {
-  const REV = '3';
+  const REV = '4';
   try {
     if (localStorage.getItem('quickcric:statsRev') === REV) return;
   } catch { /* ignore */ }
@@ -1519,9 +1519,9 @@ function applyBallCore(inn, sel, match) {
     inn.ended = false;
     inn.endReason = null;
     if (d.isLegalBall && inn.score.balls % 6 === 0) {
-      if (!d.wicket) {
-        [inn.striker, inn.nonStriker] = [inn.nonStriker, inn.striker];
-      }
+      // Ends change at every over, wicket or not. The incoming batter takes the
+      // vacated crease, so the batter who stayed in faces the first ball of the over.
+      [inn.striker, inn.nonStriker] = [inn.nonStriker, inn.striker];
       inn.needNewBowler = true;
     }
     if (d.wicket) inn.needNewBatter = true;
@@ -2145,7 +2145,8 @@ function computeResult(m) {
   const i1 = m.innings[0], i2 = m.innings[1];
   const team2 = m.teams[i2.batting], team1 = m.teams[i1.batting];
   if (i2.score.runs > i1.score.runs) {
-    const w = 10 - i2.score.wickets;
+    // Squad matches end at squad size - 1 wickets, so the margin depends on that cap.
+    const w = maxWicketsForInnings(m, i2) - i2.score.wickets;
     return `${team2} won by ${w} wicket${w !== 1 ? 's' : ''}`;
   } else if (i1.score.runs > i2.score.runs) {
     const r = i1.score.runs - i2.score.runs;

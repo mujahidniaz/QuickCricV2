@@ -1147,8 +1147,33 @@
     return { potm, mvpA, mvpB };
   }
 
-  function applyMatchStatsToRoster(match, players) {
-    if (match.status !== 'completed') return false;
+  /**
+   * Scorecard cards keep the playerId they had when the match was scored. If that player
+   * was later merged or re-created, the id no longer exists on the roster and the innings
+   * silently drops out of career stats. Point such cards at the roster player with the same
+   * name. The stored match itself is not changed.
+   */
+  function withRosterIds(match, players) {
+    const ids = new Set(players.map(p => p.id));
+    const idByName = new Map(players.map(p => [normalizeName(p.name), p.id]));
+    const fix = (card) => {
+      if (!card || (card.playerId && ids.has(card.playerId))) return card;
+      const id = idByName.get(normalizeName(card.name));
+      return id ? { ...card, playerId: id } : card;
+    };
+    return {
+      ...match,
+      innings: (match.innings || []).map(inn => ({
+        ...inn,
+        batters: (inn.batters || []).map(fix),
+        bowlers: (inn.bowlers || []).map(fix),
+      })),
+    };
+  }
+
+  function applyMatchStatsToRoster(input, players) {
+    if (input.status !== 'completed') return false;
+    const match = withRosterIds(input, players);
     const winner = winningSide(match);
     let any = false;
     for (const p of players) {
