@@ -386,7 +386,7 @@ const state = {
   historyScroll: 0,
   adminUnlocked: false,
   adminMerge: { sourceId: '', targetId: '' },
-  adminReassign: { matchId: '', sourceKey: '', targetId: '', scope: 'both' },
+  adminReassign: { matchId: '', sourceKey: '', targetId: '', scope: 'bat' },
   adminMatches: null,
   playerPickerFilter: '',
   matchAvailability: { ids: [] },
@@ -647,7 +647,7 @@ async function runMatchPlayerReassign(matchId, sourceKey, targetId, scope) {
   if (state.playerDetail) {
     state.playerDetail = playerById(state.playerDetail.id);
   }
-  state.adminReassign = { matchId: '', sourceKey: '', targetId: '', scope: 'both' };
+  state.adminReassign = { matchId: '', sourceKey: '', targetId: '', scope: 'bat' };
   state.adminMatches = res.matches;
   return res;
 }
@@ -4078,8 +4078,37 @@ function renderSummaryExtras(inn) {
     </div>`;
 }
 
+function bowlingSpellRows(inn) {
+  const log = inn?.ballLog || [];
+  if (!log.length) {
+    return (inn?.bowlers || []).map(b => ({
+      name: b.name, balls: b.balls || 0, runs: b.runs || 0, wickets: b.wickets || 0,
+    }));
+  }
+  const order = [];
+  const byName = new Map();
+  for (const ball of log) {
+    const name = String(ball.bowler || '').trim();
+    if (!name) continue;
+    const key = name.toLowerCase();
+    if (!byName.has(key)) {
+      byName.set(key, { name, balls: 0, runs: 0, wickets: 0 });
+      order.push(key);
+    }
+    const row = byName.get(key);
+    const offBat = Number(ball.runs) || 0;
+    let conceded = offBat;
+    if (ball.extra === 'wd' || ball.extra === 'nb') conceded = 1 + offBat;
+    else if (ball.extra === 'lb' || ball.extra === 'b') conceded = 0;
+    row.runs += conceded;
+    if (ball.legal) row.balls += 1;
+    if (ball.wicket && !ball.runOut) row.wickets += 1;
+  }
+  return order.map(key => byName.get(key));
+}
+
 function renderSummaryBowling(inn) {
-  const rows = (inn.bowlers || []).map(b => {
+  const rows = bowlingSpellRows(inn).map(b => {
     const extra = bowlerExtraCounts(inn, b.name);
     return `<div class="bcc-tr"><span><b>${esc(b.name)}</b></span><span>${fmtOvers(b.balls)}</span><span>${b.runs}</span><span class="bcc-rn bcc-an">${b.wickets}</span><span class="is-xw">${extra.wides}</span><span class="is-xw">${extra.noBalls}</span><span>${summaryEcon(b.balls, b.runs)}</span></div>`;
   }).join('');

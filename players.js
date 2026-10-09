@@ -1345,11 +1345,23 @@
     return true;
   }
 
-  function rewriteLogNames(inn, sourceName, targetName, scope) {
+  function sourceNamesOn(list, sourceId, sourceName) {
+    const names = [];
+    for (const line of list || []) {
+      if (lineIsSource(line, sourceId, sourceName) && line.name) names.push(line.name);
+    }
+    if (sourceName) names.push(sourceName);
+    return [...new Set(names.map(n => String(n).trim()).filter(Boolean))];
+  }
+
+  function rewriteLogNames(inn, sourceNames, targetName, scope) {
+    const want = new Set((sourceNames || []).map(normalizeName).filter(Boolean));
+    if (!want.size || !targetName) return false;
     let changed = false;
     for (const ball of inn.ballLog || []) {
       const hit = (field) => {
-        if (normalizeName(ball[field]) !== normalizeName(sourceName)) return;
+        if (!want.has(normalizeName(ball[field]))) return;
+        if (ball[field] === targetName) return;
         ball[field] = targetName;
         changed = true;
       };
@@ -1390,6 +1402,8 @@
         non: snapLine(inn.batters?.[inn.nonStriker]),
         bowler: snapLine(inn.bowlers?.[inn.currentBowler]),
       };
+      const batNames = move === 'bowl' ? [] : sourceNamesOn(inn.batters, sourceId, sourceName);
+      const bowlNames = move === 'bat' ? [] : sourceNamesOn(inn.bowlers, sourceId, sourceName);
       if (move !== 'bowl' && moveRoleList(
         inn.batters, sourceId, sourceName, targetId, targetName,
         ['runs', 'balls', 'fours', 'sixes'],
@@ -1411,7 +1425,8 @@
         const bowler = mappedIdentity(before.bowler, sourceId, sourceName, targetId, targetName, true);
         inn.currentBowler = findLineIndex(inn.bowlers, bowler);
       }
-      if (rewriteLogNames(inn, sourceName, targetName, move)) changed = true;
+      const logNames = move === 'bat' ? batNames : move === 'bowl' ? bowlNames : [...batNames, ...bowlNames];
+      if (rewriteLogNames(inn, logNames, targetName, move)) changed = true;
     }
 
     if (move === 'both' && match.awards) {
