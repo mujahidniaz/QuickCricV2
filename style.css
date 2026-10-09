@@ -3777,6 +3777,9 @@ input { background: var(--paper); }
   flex: none;
 }
 .bcc-prow.is-top .bcc-av { background: #f2a900; color: #0a2118; }
+.bcc-prow.is-r1 .bcc-av { background: #f2a900; color: #0a2118; }
+.bcc-prow.is-r2 .bcc-av { background: #8a9590; color: #fffdf7; }
+.bcc-prow.is-r3 .bcc-av { background: #b0643a; color: #fffdf7; }
 .bcc-nm { flex: 1; min-width: 0; }
 .bcc-nm b { display: block; font-size: 15px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .bcc-nm small { font-size: 12px; color: #6b766e; font-weight: 600; }

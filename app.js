@@ -4414,15 +4414,19 @@ function renderPlayers() {
     { id: 'bowling', label: 'Bowling', count: bowlRanked.length },
   ];
 
-  function rankingRow(p, rank, kind) {
-    const topClass = rank <= 3;
-    const detail = `SR ${QP.batSR(p.batting)} · ${QP.fmtOvers(p.bowling.balls)} ov`;
+  function statRow(p, rank, kind) {
+    const line = kind === 'bowl'
+      ? `Econ ${QP.bowlEcon(p.bowling)} · Avg ${QP.bowlAvg(p.bowling)}`
+      : `Avg ${QP.batAvg(p.batting)} · SR ${QP.batSR(p.batting)}`;
+    const chip = kind === 'bowl'
+      ? `<span class="bcc-chip is-wkts bcc-an" title="Wickets">${p.bowling.wickets}</span>`
+      : `<span class="bcc-chip is-runs bcc-an" title="Runs">${p.batting.runs}</span>`;
+    const tone = rank === 1 ? 'is-r1' : rank === 2 ? 'is-r2' : rank === 3 ? 'is-r3' : '';
     return `
-      <button type="button" class="bcc-prow${topClass ? ' is-top' : ''}" data-action="view-player" data-player-id="${esc(p.id)}" data-from="${kind}">
+      <button type="button" class="bcc-prow ${tone}" data-action="view-player" data-player-id="${esc(p.id)}" data-from="${kind === 'bowl' ? 'bowling' : 'batting'}">
         <span class="bcc-av bcc-an">${rank}</span>
-        <span class="bcc-nm"><b>${esc(p.name)}</b><small>${detail}</small></span>
-        <span class="bcc-chip is-runs bcc-an">${p.batting.runs}</span>
-        <span class="bcc-chip is-wkts bcc-an">${p.bowling.wickets}</span>
+        <span class="bcc-nm"><b>${esc(p.name)}</b><small>${esc(line)}</small></span>
+        ${chip}
       </button>`;
   }
 
@@ -4436,48 +4440,21 @@ function renderPlayers() {
       </button>`;
   }
 
-  let tableHead = '';
   let tableBody = '';
-
   if (tab === 'roster') {
-    if (list.length === 0) {
-      tableBody = `<div class="players-empty players-empty--compact"><p>No players yet — add a name above</p></div>`;
-    } else {
-      tableHead = `
-        <div class="players-table-head players-table-head--roster">
-          <span class="col-rank" aria-hidden="true"></span>
-          <span class="col-player">Player</span>
-          <span class="col-nums"><span>R</span><span>W</span></span>
-        </div>`;
-      tableBody = rosterSorted.map(rosterRow).join('');
-    }
+    tableBody = list.length
+      ? rosterSorted.map(rosterRow).join('')
+      : `<div class="players-empty players-empty--compact"><p>No players yet — add a name above</p></div>`;
   } else if (tab === 'batting') {
-    if (batRanked.length === 0) {
-      tableBody = `<div class="players-empty players-empty--compact"><p>No batting stats — finish a match first</p></div>`;
-    } else {
-      tableHead = `
-        <div class="players-table-head">
-          <span class="col-rank">#</span>
-          <span class="col-player">Runs · avg · SR</span>
-          <span class="col-hero">Runs</span>
-        </div>`;
-      tableBody = batRanked.map((p, i) => rankingRow(p, i + 1, 'batting')).join('');
-    }
+    tableBody = batRanked.length
+      ? batRanked.map((p, i) => statRow(p, i + 1, 'bat')).join('')
+      : `<div class="players-empty players-empty--compact"><p>No batting stats — finish a match first</p></div>`;
   } else {
-    if (bowlRanked.length === 0) {
-      tableBody = `<div class="players-empty players-empty--compact"><p>No bowling stats — finish a match first</p></div>`;
-    } else {
-      tableHead = `
-        <div class="players-table-head">
-          <span class="col-rank">#</span>
-          <span class="col-player">Econ · avg · overs</span>
-          <span class="col-hero">Wkts</span>
-        </div>`;
-      tableBody = bowlRanked.map((p, i) => rankingRow(p, i + 1, 'bowling')).join('');
-    }
+    tableBody = bowlRanked.length
+      ? bowlRanked.map((p, i) => statRow(p, i + 1, 'bowl')).join('')
+      : `<div class="players-empty players-empty--compact"><p>No bowling stats — finish a match first</p></div>`;
   }
 
-  const showCols = (tab === 'roster' && list.length) || (tab === 'batting' && batRanked.length) || (tab === 'bowling' && bowlRanked.length);
   return `
     <div class="screen bcc-players">
       <div class="bcc-top">
@@ -4500,7 +4477,9 @@ function renderPlayers() {
               </button>
             `).join('')}
           </div>
-          ${showCols ? `<div class="bcc-colhead"><span>Runs</span><span>Wkts</span></div>` : ''}
+          ${tab === 'roster' && list.length ? `<div class="bcc-colhead"><span>Runs</span><span>Wkts</span></div>` : ''}
+          ${tab === 'batting' && batRanked.length ? `<div class="bcc-colhead"><span>Runs</span></div>` : ''}
+          ${tab === 'bowling' && bowlRanked.length ? `<div class="bcc-colhead"><span>Wkts</span></div>` : ''}
           <div class="bcc-plist">${tableBody}</div>
         </div>
       </div>
