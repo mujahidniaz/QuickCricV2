@@ -168,6 +168,7 @@
       if (dropped.has(m.id)) await deleteMatch(m.id);
     } catch (err) {
       console.warn('[QuickCric] sync failed:', err.message);
+      if (!pending && !dropped.has(m.id)) pending = m;
     } finally {
       inFlight = false;
       if (pending) timer = setTimeout(flush, 200);

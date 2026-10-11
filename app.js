@@ -9,7 +9,7 @@ const MAX_UNDO = 36;          // enough for a full over with extras + player pic
 const FREE_UNDO = 2;          // undos allowed without the edit PIN
 const EDIT_OVER_PIN = '5500'; // global PIN (edit over, delete player, …)
 const POLL_INTERVAL_MS = 3000;
-const IN_PROGRESS_TTL_MS = 6 * 60 * 60 * 1000;
+const IN_PROGRESS_TTL_MS = 24 * 60 * 60 * 1000;
 const DEFAULT_TEAM_A = 'Green';
 const DEFAULT_TEAM_B = 'Blue';
 const VENUES = ['Tempelhofer Feld', 'Schillerpark'];
@@ -499,25 +499,47 @@ function saveHistory(arr) {
   try { localStorage.setItem(STORE_HIST, JSON.stringify(arr)); } catch { }
 }
 function loadCurrent() {
-  if (dbOn()) return null;
   try { return normalizeMatch(JSON.parse(localStorage.getItem(STORE_CURRENT) || 'null')); } catch { return null; }
 }
-let localSaveTimer = null;
+
+function writeCurrentLocal(m) {
+  try {
+    if (m) localStorage.setItem(STORE_CURRENT, JSON.stringify(matchForStorage(m)));
+    else localStorage.removeItem(STORE_CURRENT);
+  } catch { /* quota or private mode */ }
+}
+
+/** Further-along scorecard wins. Equal progress keeps the copy that still has undo. */
+function matchProgress(m) {
+  if (!m) return -1;
+  const inns = m.innings || [];
+  let balls = 0;
+  for (const inn of inns) balls += (inn.ballLog || []).length;
+  return inns.length * 1000000 + balls;
+}
+
+function preferMatch(a, b) {
+  if (!a) return b || null;
+  if (!b) return a;
+  if (a.id && b.id && a.id !== b.id) return a;
+  const pa = matchProgress(a);
+  const pb = matchProgress(b);
+  if (pa !== pb) return pa > pb ? a : b;
+  if (a.status === 'completed' && b.status !== 'completed') return a;
+  if (b.status === 'completed' && a.status !== 'completed') return b;
+  if ((a.undo?.length || 0) !== (b.undo?.length || 0)) {
+    return (a.undo?.length || 0) >= (b.undo?.length || 0) ? a : b;
+  }
+  return (a.savedAt || 0) >= (b.savedAt || 0) ? a : b;
+}
 
 function saveCurrent(m) {
-  if (localSaveTimer) {
-    clearTimeout(localSaveTimer);
-    localSaveTimer = null;
-  }
   if (m) {
-    const stored = matchForStorage(m);
-    localSaveTimer = setTimeout(() => {
-      try { localStorage.setItem(STORE_CURRENT, JSON.stringify(stored)); } catch { }
-      localSaveTimer = null;
-    }, 200);
-    if (dbOn()) window.QCDB.syncMatch(stored);
+    m.savedAt = Date.now();
+    writeCurrentLocal(m);
+    if (dbOn()) window.QCDB.syncMatch(matchForStorage(m));
   } else {
-    try { localStorage.removeItem(STORE_CURRENT); } catch { }
+    writeCurrentLocal(null);
     stopActiveMatchPoll();
   }
 }
@@ -1096,18 +1118,18 @@ async function refreshHistory() {
   try {
     const remote = await window.QCDB.loadMatches();
     state.history = remote.map(normalizeMatch);
-    try {
-      localStorage.removeItem(STORE_HIST);
-      localStorage.removeItem(STORE_CURRENT);
-    } catch { }
-    if (state.current) {
-      const fresh = state.history.find(x => x.id === state.current.id);
-      if (!fresh || fresh.status === 'completed') {
-        if (!canScore(state.current)) state.current = null;
-      } else if (!canScore(state.current)) {
-        state.current = fresh;
+    try { localStorage.removeItem(STORE_HIST); } catch { }
+    const candidate = preferMatch(state.current, loadCurrent());
+    if (candidate) {
+      const fresh = state.history.find(x => x.id === candidate.id) || null;
+      const chosen = preferMatch(candidate, fresh);
+      state.current = chosen;
+      if (!fresh || matchProgress(chosen) > matchProgress(fresh)) {
+        state.history = [chosen, ...state.history.filter(x => x.id !== chosen.id)];
+        writeCurrentLocal(chosen);
+        if (dbOn()) window.QCDB.syncMatch(matchForStorage(chosen));
       } else {
-        normalizeMatch(state.current);
+        writeCurrentLocal(chosen);
       }
     }
     purgeStaleInProgress();
@@ -1143,7 +1165,9 @@ async function refreshPlayers() {
 function purgeStaleInProgress() {
   const now = Date.now();
   const stale = state.history.filter(m =>
-    m.status !== 'completed' && (now - (m.startedAt || 0)) > IN_PROGRESS_TTL_MS
+    m.status !== 'completed'
+    && !(state.current && state.current.id === m.id)
+    && (now - (m.savedAt || m.startedAt || 0)) > IN_PROGRESS_TTL_MS
   );
   if (stale.length === 0) return;
   const staleIds = new Set(stale.map(m => m.id));
@@ -5285,6 +5309,9 @@ function handle(action, dataset) {
             if (r?.match) m = normalizeMatch(r.match);
           } catch { /* fall back to cached list row */ }
         }
+        const local = loadCurrent();
+        if (local && local.id === matchId) m = preferMatch(local, m);
+        if (state.current && state.current.id === matchId) m = preferMatch(state.current, m);
         if (!m) { showToast('Match not found'); return; }
         if (!canScore(m)) { showToast('Cannot score this match'); return; }
         state.current = m;
@@ -6146,13 +6173,13 @@ async function init() {
     }
   }
 
-  state.current = dbOn() ? null : loadCurrent();
+  state.current = loadCurrent();
   state.history = dbOn() ? [] : loadHistory();
   state.players = dbOn() ? [] : loadPlayers();
   if (window.QCPlayers && !dbOn()) {
     state.players = window.QCPlayers.save(state.players, { localOnly: true });
   }
-  if (state.current && !dbOn()) {
+  if (state.current) {
     state.history = [state.current, ...state.history.filter(x => x.id !== state.current.id)];
     saveHistory(state.history);
   }
