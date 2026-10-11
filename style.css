@@ -4966,3 +4966,32 @@ button.sc-ball { font: inherit; cursor: pointer; }
 .screen.bcc-score .sc-crew { margin-top: 10px; }
 .screen.bcc-score .sc-partner { margin-top: 10px; }
 .screen.bcc-score .sc-feed { margin-top: 10px; }
+
+/* Selected pad key stays visible until Next Ball. These follow the phone-fit
+   rules so a later padding tweak cannot paint over the selected color. */
+.screen.bcc-score .sc-pad .sc-nums button.sc-sel,
+.screen.bcc-score .sc-pad .sc-nums .sc-dot.sc-sel {
+  background: #0a2118;
+  color: #d9ff3f;
+  box-shadow: 0 0 0 3px #d9ff3f;
+}
+.screen.bcc-score .sc-pad .sc-kw.sc-sel {
+  background: #d8432b;
+  color: #fff;
+  border-color: #d8432b;
+  box-shadow: 0 0 0 3px rgba(216, 67, 43, 0.45);
+}
+.screen.bcc-score .sc-pad .sc-ko.sc-sel {
+  background: #f2a900;
+  color: #0a2118;
+  border-color: #f2a900;
+  box-shadow: 0 0 0 3px rgba(242, 169, 0, 0.45);
+}
+.screen.bcc-score .sc-pad .sc-kx.sc-sel {
+  background: #0a2118;
+  color: #d9ff3f;
+  border-color: #0a2118;
+  box-shadow: 0 0 0 3px #d9ff3f;
+}
+.sc-card.sc-add { grid-column: 1 / -1; border-style: dashed; border-color: #135d40; background: #f7ffdb; }
+.sc-card.sc-add .sc-av { background: #d9ff3f; color: #0a2118; font-size: 22px; }
