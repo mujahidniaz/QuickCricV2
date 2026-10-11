@@ -4762,7 +4762,7 @@ input { background: var(--paper); }
 .sc-ball.sc-sm { min-width: 24px; height: 24px; font-size: 10.5px; }
 button.sc-ball { font: inherit; cursor: pointer; }
 .sc-ball.sc-ed { outline: 2px dashed #d9ff3f; outline-offset: 1px; }
-.sc-ic { flex: none; width: 32px; height: 32px; border-radius: 10px; border: 1px solid rgba(255, 255, 255, 0.16); background: rgba(255, 255, 255, 0.05); color: #fff; font-size: 14px; }
+.sc-ic { flex: none; width: 42px; height: 42px; border-radius: 12px; border: 1px solid rgba(255, 255, 255, 0.16); background: rgba(255, 255, 255, 0.05); color: #fff; font-size: 20px; display: grid; place-items: center; line-height: 1; padding: 0; }
 .sc-ic.sc-on { background: #d9ff3f; color: #0a2118; border-color: #d9ff3f; }
 .sc-ic:disabled { opacity: 0.3; }
 .sc-fix { margin-top: 8px; border: 0; background: none; color: #d9ff3f; font-size: 12px; font-weight: 800; text-decoration: underline; text-underline-offset: 3px; }
@@ -4917,7 +4917,7 @@ button.sc-ball { font: inherit; cursor: pointer; }
 }
 .screen.bcc-score .sc-balls::-webkit-scrollbar { display: none; }
 .screen.bcc-score .sc-balls > * { flex: none; }
-.screen.bcc-score .sc-ic { width: 30px; height: 30px; }
+.screen.bcc-score .sc-ic { width: 42px; height: 42px; font-size: 20px; }
 .screen.bcc-score .sc-pad { padding: 10px 10px calc(8px + env(safe-area-inset-bottom, 0px)); }
 .screen.bcc-score .sc-k1 { gap: 5px; }
 .screen.bcc-score .sc-kw,
