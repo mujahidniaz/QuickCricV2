@@ -4625,6 +4625,23 @@ function playerRunsInMatch(match, player) {
   return { faced, runs, sixes };
 }
 
+function playerBowlInMatch(match, player) {
+  let wickets = 0;
+  let runs = 0;
+  let balls = 0;
+  let bowled = false;
+  for (const inn of match.innings || []) {
+    for (const b of inn.bowlers || []) {
+      if (!samePlayerCard(b, player)) continue;
+      bowled = true;
+      wickets += Number(b.wickets) || 0;
+      runs += Number(b.runs) || 0;
+      balls += Number(b.balls) || 0;
+    }
+  }
+  return { bowled, wickets, runs, balls };
+}
+
 function seasonDelta(now, prev, asPercent) {
   if (prev == null || Number.isNaN(Number(prev))) return '';
   const d = Number(now) - Number(prev);
@@ -5329,42 +5346,63 @@ function renderPlayerDetail() {
   const share = bat.teamRuns ? Math.round(Math.min(1, bat.runs / bat.teamRuns) * 100) : 0;
   const stood = bowl.innings ? Math.round(((bowl.stoodUp || 0) / bowl.innings) * 100) : 0;
   const bestPos = QP.bestBattingPosition(bat);
-  const clubRuns = rankedPool.reduce((s, pl) => s + (pl.batting?.runs || 0), 0);
-  const clubWkts = rankedPool.reduce((s, pl) => s + (pl.bowling?.wickets || 0), 0);
-  const runPct = clubRuns ? Math.round((bat.runs / clubRuns) * 100) : 0;
-  const wktPct = clubWkts ? Math.round((bowl.wickets / clubWkts) * 100) : 0;
   const statTab = state.playerStatTab === 'bowl' ? 'bowl' : 'bat';
   const batting = statTab !== 'bowl';
-  const hasBat = (bat.runs || 0) > 0;
-  const hasBowl = (bowl.wickets || 0) > 0;
+  const hasBat = (bat.innings || 0) > 0 || (bat.runs || 0) > 0;
+  const hasBowl = (bowl.innings || 0) > 0 || (bowl.balls || 0) > 0;
   const hiPos = bestPos ? positions.findIndex(item => String(item.label) === String(bestPos.pos)) : -1;
   const hiOver = overs.reduce((best, item, i) => (item.value > (overs[best]?.value || 0) ? i : best), 0);
-  const kpis = batting
-    ? [[bat.runs, 'Runs'], [QP.batSR(bat), 'Strike rate'], [`${runPct}%`, 'Of club runs']]
-    : [[bowl.wickets, 'Wickets'], [QP.fmtOvers(bowl.balls), 'Overs'], [`${wktPct}%`, 'Of club wkts']];
   const prevYear = season !== 'all' ? String(Number(season) - 1) : '';
   const prevView = prevYear && years.includes(prevYear) && QP.playerInSeason ? QP.playerInSeason(raw, prevYear) : null;
   const prevBat = prevView && QP.battingView ? QP.battingView(prevView.batting) : null;
   const prevBowl = prevView && QP.bowlingView ? QP.bowlingView(prevView.bowling) : null;
-  const cardKpis = [
-    [bat.runs, 'Runs', prevBat ? seasonDelta(bat.runs, prevBat.runs, false) : ''],
-    [QP.batAvg(bat), 'Avg', prevBat ? seasonDelta(parseFloat(QP.batAvg(bat)), parseFloat(QP.batAvg(prevBat)), false) : ''],
-    [QP.batSR(bat), 'SR', prevBat ? seasonDelta(parseFloat(QP.batSR(bat)), parseFloat(QP.batSR(prevBat)), false) : ''],
-    [bowl.wickets, 'Wkts', prevBowl ? seasonDelta(bowl.wickets, prevBowl.wickets, false) : ''],
-  ];
-  const formMatches = completedSeasonMatches(season).map(m => ({ line: playerRunsInMatch(m, raw) })).filter(x => x.line.faced);
-  const formPeak = Math.max(1, ...formMatches.map(x => x.line.runs), 0);
+  const cardKpis = batting
+    ? [
+      [bat.runs, 'Runs', prevBat ? seasonDelta(bat.runs, prevBat.runs, false) : ''],
+      [QP.batAvg(bat), 'Avg', prevBat ? seasonDelta(parseFloat(QP.batAvg(bat)), parseFloat(QP.batAvg(prevBat)), false) : ''],
+      [QP.batSR(bat), 'SR', prevBat ? seasonDelta(parseFloat(QP.batSR(bat)), parseFloat(QP.batSR(prevBat)), false) : ''],
+      [bat.innings, 'Inns', ''],
+    ]
+    : [
+      [bowl.wickets, 'Wkts', prevBowl ? seasonDelta(bowl.wickets, prevBowl.wickets, false) : ''],
+      [QP.bowlAvg(bowl), 'Avg', prevBowl ? seasonDelta(parseFloat(QP.bowlAvg(bowl)), parseFloat(QP.bowlAvg(prevBowl)), false) : ''],
+      [QP.bowlEcon(bowl), 'Econ', prevBowl ? seasonDelta(parseFloat(QP.bowlEcon(bowl)), parseFloat(QP.bowlEcon(prevBowl)), false) : ''],
+      [QP.fmtOvers(bowl.balls), 'Overs', ''],
+    ];
+  const formMatches = completedSeasonMatches(season).map(m => {
+    if (batting) {
+      const line = playerRunsInMatch(m, raw);
+      return { value: line.runs, on: line.faced };
+    }
+    const line = playerBowlInMatch(m, raw);
+    return { value: line.wickets, on: line.bowled };
+  }).filter(x => x.on);
+  const formPeak = Math.max(1, ...formMatches.map(x => x.value), 0);
+  const formTitle = batting
+    ? (season === 'all' ? 'Runs per match' : `${season} batting · runs per match`)
+    : (season === 'all' ? 'Wickets per match' : `${season} bowling · wickets per match`);
   const formHtml = formMatches.length ? `
-    <div class="bcc-bx"><h4><span>${season === 'all' ? 'Runs per match' : `${season} form · runs per match`}</span><i>Best: ${formPeak}</i></h4>
-      <div class="ssn-form">${formMatches.map((x, i) => `<div>${x.line.runs}<i class="${x.line.runs === formPeak && x.line.runs > 0 ? 'is-hi' : ''}" style="height:${Math.max(3, Math.round((x.line.runs / formPeak) * 72))}px"></i><em>${i + 1}</em></div>`).join('')}</div>
+    <div class="bcc-bx"><h4><span>${esc(formTitle)}</span><i>Best: ${formPeak}</i></h4>
+      <div class="ssn-form${batting ? '' : ' is-bowl'}">${formMatches.map((x, i) => `<div>${x.value}<i class="${x.value === formPeak && x.value > 0 ? 'is-hi' : ''}" style="height:${Math.max(3, Math.round((x.value / formPeak) * 72))}px"></i><em>${i + 1}</em></div>`).join('')}</div>
     </div>` : '';
-  const seasonTable = years.map(y => {
-    const view = QP.playerInSeason(raw, y);
+  const seasonCells = (y, on) => {
+    const view = y === 'all' ? raw : QP.playerInSeason(raw, y);
     const b = QP.battingView(view.batting);
     const w = QP.bowlingView(view.bowling);
-    if (!(b.innings || w.innings || b.runs || w.wickets)) return '';
-    return `<div class="ssn-tb${y === season ? ' is-cur' : ''}"><b>${esc(y)}</b><span>${b.innings}</span><span class="r bcc-an">${b.runs}</span><span>${esc(String(QP.batAvg(b)))}</span><span>${esc(String(QP.batSR(b)))}</span><span>${w.wickets}</span></div>`;
-  }).join('');
+    if (batting) {
+      if (!(b.innings || b.runs)) return '';
+      return `<div class="ssn-tb is-split${on ? ' is-cur' : ''}${y === 'all' ? ' is-all' : ''}"><b>${esc(y === 'all' ? 'All-time' : y)}</b><span>${b.innings}</span><span class="r bcc-an">${b.runs}</span><span>${esc(String(QP.batAvg(b)))}</span><span>${esc(String(QP.batSR(b)))}</span></div>`;
+    }
+    if (!(w.innings || w.wickets || w.balls)) return '';
+    return `<div class="ssn-tb is-split${on ? ' is-cur' : ''}${y === 'all' ? ' is-all' : ''}"><b>${esc(y === 'all' ? 'All-time' : y)}</b><span>${w.innings}</span><span class="r bcc-an">${w.wickets}</span><span>${esc(String(QP.bowlAvg(w)))}</span><span>${esc(String(QP.bowlEcon(w)))}</span></div>`;
+  };
+  const seasonRows = years.map(y => seasonCells(y, y === season)).join('') + seasonCells('all', season === 'all');
+  const seasonHead = batting
+    ? '<span>Season</span><span>Inn</span><span>Runs</span><span>Avg</span><span>SR</span>'
+    : '<span>Season</span><span>Inn</span><span>Wkts</span><span>Avg</span><span>Econ</span>';
+  const seasonTable = seasonRows.trim()
+    ? `<div class="bcc-bx ssn-table"><h4>${batting ? 'Batting by season' : 'Bowling by season'}</h4><div class="ssn-tb is-head is-split">${seasonHead}</div>${seasonRows}</div>`
+    : '';
   const capPool = season !== 'all' && QP.playerInSeason ? state.players.map(pl => QP.playerInSeason(pl, season)) : state.players;
   const capLeader = QP.battingRankings(capPool)[0];
   const holdsCap = season !== 'all' && capLeader && capLeader.id === p.id && (capLeader.batting?.runs || 0) > 0;
@@ -5407,7 +5445,7 @@ function renderPlayerDetail() {
           </div>` : ''}
         ${balls ? `<div class="bcc-bx"><h4>Balls faced</h4>${renderStatDonut(ballMix, 'Balls')}</div>` : ''}
         ${positions.length ? `<div class="bcc-bx"><h4>Runs by batting position</h4><div class="bcc-sub">Highlighted = their best slot</div>${renderHighlightBars(positions, hiPos, '#f2a900', 'Batting position')}</div>` : ''}
-      ` : `<div class="bcc-bx bcc-emp">No runs yet — get out there!</div>`)
+      ` : `<div class="bcc-bx bcc-emp">No batting yet.</div>`)
     : (hasBowl ? `
         ${renderFactTiles([
           [QP.bowlAvg(bowl), 'Average'],
@@ -5423,7 +5461,7 @@ function renderPlayerDetail() {
           { pct: bowlWin, color: '#1f7a4d', label: `${bowl.wins || 0} of ${bowl.innings} spells won` },
           { pct: stood, color: '#d8432b', label: `${bowl.stoodUp || 0} spells led the attack` },
         ])}
-      ` : `<div class="bcc-bx bcc-emp">No wickets yet — get out there!</div>`);
+      ` : `<div class="bcc-bx bcc-emp">No bowling yet.</div>`);
   return `
     <div class="screen bcc-player">
       <div class="bcc-top">
@@ -5432,7 +5470,7 @@ function renderPlayerDetail() {
       </div>
       <div class="bcc-art"></div>
       <div class="bcc-scroll">
-        <div class="bcc-pcard">
+        <div class="bcc-pcard${batting ? '' : ' is-bowl'}">
           <div class="bcc-pcard-in">
             <div class="ssn-sw">
               ${years.map(y => `<button type="button" class="${season === y ? 'is-on' : ''}" data-action="player-season" data-year="${esc(y)}">${esc(y)}</button>`).join('')}
@@ -5440,21 +5478,21 @@ function renderPlayerDetail() {
             </div>
             <div class="bcc-pbig bcc-an" aria-hidden="true">${esc((p.name || '?').trim().charAt(0).toUpperCase())}</div>
             <h3 class="bcc-an">${esc(p.name)}</h3>
-            <p>${bat.innings} innings · ${bowl.wickets} wickets${season === 'all' ? '' : ' this season'}</p>
+            <div class="bcc-tabs2">
+              <button type="button" class="${batting ? 'is-on' : ''}" data-action="player-stat-tab" data-tab="bat">🏏 Batting</button>
+              <button type="button" class="${batting ? '' : 'is-on'}" data-action="player-stat-tab" data-tab="bowl">🔴 Bowling</button>
+            </div>
             <div class="bcc-kp ssn-kp">
               ${cardKpis.map(([val, label, delta]) => `<div><b class="bcc-an">${esc(String(val))}</b><small>${esc(label)}</small>${delta}</div>`).join('')}
             </div>
+            ${badge}
           </div>
           <div class="bcc-art"></div>
         </div>
-        ${formHtml}
-        ${seasonTable ? `<div class="bcc-bx ssn-table"><h4>Season by season</h4><div class="ssn-tb is-head"><span>Season</span><span>Inn</span><span>Runs</span><span>Avg</span><span>SR</span><span>Wkt</span></div>${seasonTable}<div class="ssn-tb is-all"><b>All-time</b><span>${QP.battingView(raw.batting).innings}</span><span class="r bcc-an">${QP.battingView(raw.batting).runs}</span><span>${esc(String(QP.batAvg(raw.batting)))}</span><span>${esc(String(QP.batSR(raw.batting)))}</span><span>${QP.bowlingView(raw.bowling).wickets}</span></div></div>` : ''}
-        ${holdsCap ? `<div class="ssn-capnote"><span>🟠</span><span><b>Orange cap ${esc(season)}</b>Leads the batting board this season</span></div>` : ''}
-        <div class="bcc-tabs2">
-          <button type="button" class="${batting ? 'is-on' : ''}" data-action="player-stat-tab" data-tab="bat">🏏 Batting</button>
-          <button type="button" class="${batting ? '' : 'is-on'}" data-action="player-stat-tab" data-tab="bowl">🔴 Bowling</button>
-        </div>
         <div class="bcc-wrap bcc-statbody">
+          ${batting && holdsCap ? `<div class="ssn-capnote"><span>🟠</span><span><b>Orange cap ${esc(season)}</b>Leads the batting board this season</span></div>` : ''}
+          ${formHtml}
+          ${seasonTable}
           ${body}
           <div class="bcc-player-actions">
             <button type="button" data-action="edit-player-name" data-player-id="${esc(p.id)}">Edit name</button>
