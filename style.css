@@ -3846,6 +3846,7 @@ input { background: var(--paper); }
   color: #6b766e;
 }
 .bcc-colhead span { min-width: 44px; text-align: center; }
+.bcc-ranknote { margin: 10px 2px 0; font-size: 12px; font-weight: 700; color: #6b766e; }
 .bcc-plist { margin-top: 6px; display: flex; flex-direction: column; gap: 8px; padding-bottom: 8px; }
 .bcc-prow {
   display: flex;

@@ -4774,11 +4774,11 @@ function buildSeasonBoard(year) {
     .map(([id, n]) => ({ id, name: state.players.find(p => p.id === id)?.name || '', n }))
     .sort((a, b) => b.n - a.n || a.name.localeCompare(b.name))
     .slice(0, 5);
-  const bySixes = views.filter(p => (p.batting?.sixes || 0) > 0).sort((a, b) => (b.batting.sixes || 0) - (a.batting.sixes || 0));
+  const bySixes = views.filter(p => QP.battingQualifies(p.batting) && (p.batting?.sixes || 0) > 0).sort((a, b) => (b.batting.sixes || 0) - (a.batting.sixes || 0));
   const byRate = views
-    .filter(p => (p.batting?.balls || 0) >= 30)
+    .filter(p => QP.battingQualifies(p.batting) && (p.batting?.balls || 0) >= 30)
     .sort((a, b) => (parseFloat(QP.batSR(b.batting)) || 0) - (parseFloat(QP.batSR(a.batting)) || 0));
-  const byExtras = views.filter(p => (p.bowling?.extras || 0) > 0).sort((a, b) => (b.bowling.extras || 0) - (a.bowling.extras || 0));
+  const byExtras = views.filter(p => QP.bowlingQualifies(p.bowling) && (p.bowling?.extras || 0) > 0).sort((a, b) => (b.bowling.extras || 0) - (a.bowling.extras || 0));
   const clutch = views.slice().sort((a, b) => {
     const ca = (a.batting?.carriedWins || 0) + (a.bowling?.stoodUpWins || 0);
     const cb = (b.batting?.carriedWins || 0) + (b.bowling?.stoodUpWins || 0);
@@ -4963,7 +4963,7 @@ function renderSeasons() {
             <div><small>Biggest win</small><b class="bcc-an">${board.biggest ? esc(board.biggest.label) : '—'}</b><span>${board.biggest ? esc(`${board.biggest.side} · ${board.biggest.when}`) : 'No result yet'}</span></div>
           </div>
         </div>
-        <div class="ssn-lab">Leaders</div>
+        <div class="ssn-lab">Leaders <i>${window.QCPlayers.MIN_QUALIFY_INNINGS} innings minimum</i></div>
         <div class="ssn-box">
           <div class="ssn-tabs">
             ${tabs.map(([id, label]) => `<button type="button" class="${leaders.tab === id ? 'is-on' : ''}" data-action="season-leader" data-tab="${id}">${label}</button>`).join('')}
@@ -4982,7 +4982,7 @@ function renderSeasons() {
               const width = peak ? Math.max(6, Math.round((value / peak) * 100)) : 0;
               return `<button type="button" class="ssn-lr" data-action="view-player" data-player-id="${esc(p.id)}" data-from="${leaders.tab === 'wickets' || leaders.tab === 'econ' ? 'bowling' : 'batting'}"><span class="k bcc-an">${i + 2}</span><span><b>${esc(p.name)}</b><i><u style="width:${width}%"></u></i></span><em class="bcc-an">${esc(String(leaders.figure(p)))}</em></button>`;
             }).join('')}
-          ` : '<p class="ssn-empty">Nobody has qualified yet.</p>'}
+          ` : `<p class="ssn-empty">${state.seasonQualified ? 'Nobody has qualified yet.' : `Need ${window.QCPlayers.MIN_QUALIFY_INNINGS} innings to rank.`}</p>`}
         </div>
         <div class="ssn-lab">Showed up <i>of ${board.played.length} matches</i></div>
         <div class="ssn-box ssn-att">
@@ -5136,20 +5136,17 @@ function renderPlayers() {
   ];
 
   function statRow(p, rank, kind) {
-    const qualified = kind === 'bowl' ? QP.bowlingQualifies(p.bowling) : QP.battingQualifies(p.batting);
-    const inns = kind === 'bowl' ? (p.bowling.innings || 0) : (p.batting.innings || 0);
     const line = kind === 'bowl'
       ? `${QP.bowlingWicketsPerInnings(p.bowling).toFixed(2)} wkts/inns · Econ ${QP.bowlEcon(p.bowling)}`
       : `${QP.battingRunsPerInnings(p.batting).toFixed(1)} runs/inns · SR ${QP.batSR(p.batting)}`;
-    const note = qualified ? line : `Not ranked yet · ${inns}/${QP.MIN_QUALIFY_INNINGS} inns`;
     const chip = kind === 'bowl'
       ? `<span class="bcc-chip is-wkts bcc-an" title="Wickets">${p.bowling.wickets}</span>`
       : `<span class="bcc-chip is-runs bcc-an" title="Runs">${p.batting.runs}</span>`;
-    const tone = !qualified ? '' : rank === 1 ? 'is-r1' : rank === 2 ? 'is-r2' : rank === 3 ? 'is-r3' : '';
+    const tone = rank === 1 ? 'is-r1' : rank === 2 ? 'is-r2' : rank === 3 ? 'is-r3' : '';
     return `
       <button type="button" class="bcc-prow ${tone}" data-action="view-player" data-player-id="${esc(p.id)}" data-from="${kind === 'bowl' ? 'bowling' : 'batting'}">
-        <span class="bcc-av bcc-an">${qualified ? rank : '–'}</span>
-        <span class="bcc-nm"><b>${esc(p.name)}</b><small>${esc(note)}</small></span>
+        <span class="bcc-av bcc-an">${rank}</span>
+        <span class="bcc-nm"><b>${esc(p.name)}</b><small>${esc(line)}</small></span>
         ${chip}
       </button>`;
   }
@@ -5164,6 +5161,8 @@ function renderPlayers() {
       </button>`;
   }
 
+  const rankNote = `Ranked after ${QP.MIN_QUALIFY_INNINGS} innings${year === 'all' ? '' : ` in ${year}`}`;
+  const emptyRank = `Nobody has ${QP.MIN_QUALIFY_INNINGS} innings yet${year === 'all' ? '' : ` in ${year}`}`;
   let tableBody = '';
   if (tab === 'roster') {
     tableBody = rosterSorted.length
@@ -5172,11 +5171,11 @@ function renderPlayers() {
   } else if (tab === 'batting') {
     tableBody = batRanked.length
       ? batRanked.map((p, i) => statRow(p, i + 1, 'bat')).join('')
-      : `<div class="players-empty players-empty--compact"><p>No batting stats — finish a match first</p></div>`;
+      : `<div class="players-empty players-empty--compact"><p>${emptyRank}</p></div>`;
   } else {
     tableBody = bowlRanked.length
       ? bowlRanked.map((p, i) => statRow(p, i + 1, 'bowl')).join('')
-      : `<div class="players-empty players-empty--compact"><p>No bowling stats — finish a match first</p></div>`;
+      : `<div class="players-empty players-empty--compact"><p>${emptyRank}</p></div>`;
   }
 
   return `
@@ -5203,8 +5202,8 @@ function renderPlayers() {
             `).join('')}
           </div>
           ${tab === 'roster' && rosterSorted.length ? `<div class="bcc-colhead"><span>Runs</span><span>Wkts</span></div>` : ''}
-          ${tab === 'batting' && batRanked.length ? `<div class="bcc-colhead"><span>Runs</span></div>` : ''}
-          ${tab === 'bowling' && bowlRanked.length ? `<div class="bcc-colhead"><span>Wkts</span></div>` : ''}
+          ${tab === 'batting' && batRanked.length ? `<p class="bcc-ranknote">${esc(rankNote)}</p><div class="bcc-colhead"><span>Runs</span></div>` : ''}
+          ${tab === 'bowling' && bowlRanked.length ? `<p class="bcc-ranknote">${esc(rankNote)}</p><div class="bcc-colhead"><span>Wkts</span></div>` : ''}
           <div class="bcc-plist">${tableBody}</div>
         </div>
       </div>
@@ -5334,8 +5333,6 @@ function renderPlayerDetail() {
   const clubWkts = rankedPool.reduce((s, pl) => s + (pl.bowling?.wickets || 0), 0);
   const runPct = clubRuns ? Math.round((bat.runs / clubRuns) * 100) : 0;
   const wktPct = clubWkts ? Math.round((bowl.wickets / clubWkts) * 100) : 0;
-  const batRank = rankedPool.filter(pl => (pl.batting?.runs || 0) > bat.runs).length + 1;
-  const bowlRank = rankedPool.filter(pl => (pl.bowling?.wickets || 0) > bowl.wickets).length + 1;
   const statTab = state.playerStatTab === 'bowl' ? 'bowl' : 'bat';
   const batting = statTab !== 'bowl';
   const hasBat = (bat.runs || 0) > 0;
@@ -5371,9 +5368,17 @@ function renderPlayerDetail() {
   const capPool = season !== 'all' && QP.playerInSeason ? state.players.map(pl => QP.playerInSeason(pl, season)) : state.players;
   const capLeader = QP.battingRankings(capPool)[0];
   const holdsCap = season !== 'all' && capLeader && capLeader.id === p.id && (capLeader.batting?.runs || 0) > 0;
+  const batBoard = QP.battingRankings(rankedPool);
+  const bowlBoard = QP.bowlingRankings(rankedPool);
+  const batPlace = batBoard.findIndex(pl => pl.id === p.id);
+  const bowlPlace = bowlBoard.findIndex(pl => pl.id === p.id);
   const badge = batting
-    ? (hasBat ? `<span class="bcc-rkb">#${batRank} run scorer</span>` : '')
-    : (hasBowl ? `<span class="bcc-rkb">#${bowlRank} wicket taker</span>` : '');
+    ? (batPlace >= 0
+      ? `<span class="bcc-rkb">#${batPlace + 1} batting</span>`
+      : (hasBat ? `<span class="bcc-rkb">${bat.innings}/${QP.MIN_QUALIFY_INNINGS} inns to rank</span>` : ''))
+    : (bowlPlace >= 0
+      ? `<span class="bcc-rkb">#${bowlPlace + 1} bowling</span>`
+      : (hasBowl ? `<span class="bcc-rkb">${bowl.innings}/${QP.MIN_QUALIFY_INNINGS} inns to rank</span>` : ''));
   const body = batting
     ? (hasBat ? `
         ${renderCssRings([
@@ -5444,7 +5449,7 @@ function renderPlayerDetail() {
         </div>
         ${formHtml}
         ${seasonTable ? `<div class="bcc-bx ssn-table"><h4>Season by season</h4><div class="ssn-tb is-head"><span>Season</span><span>Inn</span><span>Runs</span><span>Avg</span><span>SR</span><span>Wkt</span></div>${seasonTable}<div class="ssn-tb is-all"><b>All-time</b><span>${QP.battingView(raw.batting).innings}</span><span class="r bcc-an">${QP.battingView(raw.batting).runs}</span><span>${esc(String(QP.batAvg(raw.batting)))}</span><span>${esc(String(QP.batSR(raw.batting)))}</span><span>${QP.bowlingView(raw.bowling).wickets}</span></div></div>` : ''}
-        ${holdsCap ? `<div class="ssn-capnote"><span>🟠</span><span><b>Orange cap ${esc(season)}</b>Top run-scorer of the season so far</span></div>` : ''}
+        ${holdsCap ? `<div class="ssn-capnote"><span>🟠</span><span><b>Orange cap ${esc(season)}</b>Leads the batting board this season</span></div>` : ''}
         <div class="bcc-tabs2">
           <button type="button" class="${batting ? 'is-on' : ''}" data-action="player-stat-tab" data-tab="bat">🏏 Batting</button>
           <button type="button" class="${batting ? '' : 'is-on'}" data-action="player-stat-tab" data-tab="bowl">🔴 Bowling</button>
