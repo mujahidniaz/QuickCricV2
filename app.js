@@ -376,6 +376,12 @@ const state = {
   inningsPick: { striker: null, nonStriker: null, bowler: null },
   inningsPickUndo: [],
   playersTab: 'roster',
+  appSeason: '',
+  seasonLeader: 'runs',
+  seasonQualified: true,
+  wrappedStep: 0,
+  playerFrom: 'players',
+  playerSeason: 'all',
   playerStatTab: 'bat',
   summaryInn: 0,
   summaryBalls: false,
@@ -675,24 +681,27 @@ async function runMatchPlayerReassign(matchId, sourceKey, targetId, scope) {
 }
 
 async function refreshCareerStatsIfNeeded() {
-  const REV = '4';
-  try {
-    if (localStorage.getItem('quickcric:statsRev') === REV) return;
-  } catch { /* ignore */ }
-  if (!window.QCPlayers?.rebuildAllStatsFromMatches) return;
+  const REV = '5';
   let matches = [];
   try {
     matches = await allMatchesForStats();
   } catch (err) {
     console.warn('career stats rebuild skipped', err);
+  }
+  if (matches.length) state.seasonMatches = matches;
+  let rev = '';
+  try { rev = localStorage.getItem('quickcric:statsRev') || ''; } catch { /* ignore */ }
+  if (rev === REV) {
+    if (state.view === 'players' || state.view === 'player-detail' || state.view === 'seasons' || state.view === 'home' || state.view === 'history' || state.view === 'wrapped') render();
     return;
   }
+  if (!window.QCPlayers?.rebuildAllStatsFromMatches) return;
   const hasCareer = state.players.some(p => (p.batting?.runs || 0) > 0 || (p.bowling?.wickets || 0) > 0 || (p.bowling?.balls || 0) > 0);
   if (!matches.length && hasCareer) return;
   state.players = window.QCPlayers.rebuildAllStatsFromMatches(state.players, matches);
   try { localStorage.setItem('quickcric:statsRev', REV); } catch { /* ignore */ }
   if (state.playerDetail) state.playerDetail = playerById(state.playerDetail.id);
-  if (state.view === 'players' || state.view === 'player-detail') render();
+  if (state.view === 'players' || state.view === 'player-detail' || state.view === 'seasons' || state.view === 'home' || state.view === 'history' || state.view === 'wrapped') render();
 }
 
 function persistMatch(m) {
@@ -1365,23 +1374,27 @@ function finishEditOverUnlock() {
   state.showLastOver = false;
   state.modal = null;
   render();
-  if (intent === 'fixLastBall') {
-    const inn = state.current?.innings?.[state.current?.currentInnings];
-    const idx = inn ? lastBallLogIndex(inn) : -1;
-    if (idx >= 0 && openEditBallByIndex(idx)) {
-      render();
-      return;
-    }
+  const inn = state.current?.innings?.[state.current?.currentInnings];
+  const idx = typeof intent === 'number'
+    ? intent
+    : (intent === 'fixLastBall' && inn ? lastBallLogIndex(inn) : -1);
+  if (idx >= 0 && openEditBallByIndex(idx)) {
+    render();
+    return;
   }
-  showToast('Tap a ball to edit, or use Fix last ball');
+  showToast('Tap a ball to edit it');
 }
 
-function isLogIndexEditable(inn, logIndex) {
-  if (!state.overEditUnlocked || logIndex < 0) return false;
+function isLogIndexInEditWindow(inn, logIndex) {
+  if (!inn || logIndex < 0) return false;
   const entry = inn.ballLog[logIndex];
   if (!entry) return false;
   const live = liveOverNo(inn);
   return entry.overNo === live || entry.overNo === live - 1;
+}
+
+function isLogIndexEditable(inn, logIndex) {
+  return !!state.overEditUnlocked && isLogIndexInEditWindow(inn, logIndex);
 }
 
 function findBowlerIdx(inn, name) {
@@ -2786,6 +2799,8 @@ function renderNow() {
     case 'in-progress': html = renderInProgress(); break;
     case 'detail': html = renderDetail(); break;
     case 'players': html = renderPlayers(); break;
+    case 'seasons': html = renderSeasons(); break;
+    case 'wrapped': html = renderWrapped(); break;
     case 'player-detail': html = renderPlayerDetail(); break;
     case 'view': html = renderSharedView(); break;
     case 'terms': html = renderTerms(); break;
@@ -2928,6 +2943,7 @@ function renderBccDock(active) {
     <nav class="bcc-dock" aria-label="Main">
       <div class="bcc-dock-bar">
         <button type="button" data-action="back-home" class="${active === 'home' ? 'is-on' : ''}">Home</button>
+        <button type="button" data-action="seasons" class="${active === 'seasons' || active === 'wrapped' ? 'is-on' : ''}">Season</button>
         <button type="button" class="bcc-dock-go" data-action="new-match" aria-label="Start a match">+</button>
         <button type="button" data-action="players" class="${active === 'players' ? 'is-on' : ''}">Players</button>
       </div>
@@ -2990,6 +3006,18 @@ function renderHome() {
   const live = homeLiveMatch();
   const inProgress = state.history.filter(m => m.status !== 'completed');
   const pastCount = state.history.filter(m => m.status === 'completed').length;
+  const seasonYear = activeSeason();
+  const seasonPlayed = completedSeasonMatches(seasonYear);
+  const allPlayed = completedSeasonMatches('all');
+  const seasonBoard = buildSeasonBoard(seasonYear === 'all' ? 'all' : seasonYear);
+  const orange = seasonBoard.batters[0];
+  const activeMonths = seasonBoard.months.map((n, i) => ({ n, i })).filter(m => m.n > 0);
+  const monthMax = Math.max(1, ...activeMonths.map(m => m.n));
+  const monthBars = activeMonths.map(m => `<div><i style="height:${Math.max(12, Math.round(m.n / monthMax * 100))}%"></i><em>${HISTORY_MONTHS[m.i]}</em></div>`).join('');
+  const playedIds = new Set();
+  for (const match of seasonPlayed) {
+    for (const p of state.players) if (playerAppeared(match, p)) playedIds.add(p.id);
+  }
   const playerCount = state.players.length;
   const otherLive = inProgress.filter(m => m.id !== live?.id).length;
   const playHere = !!(cur && live && cur.id === live.id);
@@ -3000,7 +3028,7 @@ function renderHome() {
           <div class="bcc-seam" aria-hidden="true"></div>
           <div class="bcc-hrow">
             <div class="bcc-logo bcc-an"><span class="bcc-badge">B</span>BCC</div>
-            <span class="bcc-pill"><i></i>Works offline</span>
+            ${renderSeasonChip()}
           </div>
           <h1 class="bcc-an">Berlin<br>Cricket<br><em>Club</em></h1>
           <p class="bcc-tag">Bat, Bowl , Yean , Repeat!</p>
@@ -3032,16 +3060,26 @@ function renderHome() {
             <span><b class="bcc-an">${live ? 'New match' : 'Start a match'}</b><small>Teams, overs, every ball</small></span>
             <span class="bcc-go" aria-hidden="true">→</span>
           </button>
+          <button type="button" class="bcc-sea" data-action="seasons">
+            <div class="bcc-sea-h"><span>${seasonYear === 'all' ? 'All-time' : `Season ${seasonYear}${seasonBoard.open ? ' · in progress' : ''}`}</span><span>Dashboard →</span></div>
+            <div class="bcc-sea-n">
+              <div><b class="bcc-an">${fmtNum(seasonPlayed.length)}</b><small>Matches</small></div>
+              <div><b class="bcc-an">${fmtNum(seasonBoard.runs)}</b><small>Runs</small></div>
+              <div><b class="bcc-an">${fmtNum(seasonBoard.wickets)}</b><small>Wickets</small></div>
+            </div>
+            <div class="bcc-sea-mo" aria-hidden="true">${monthBars}</div>
+            ${orange ? `<div class="bcc-sea-cap">Orange cap: <b>${esc(orange.name)}</b> · ${fmtNum(orange.batting.runs)} runs</div>` : ''}
+          </button>
           <div class="bcc-grid">
             <button type="button" class="bcc-tile" data-action="history">
-              <div class="bcc-n bcc-an">${state.loadingHistory ? '…' : pastCount}</div>
+              <div class="bcc-n bcc-an">${state.loadingHistory ? '…' : seasonPlayed.length}</div>
               <b>Past matches</b>
-              <small>Results and scorecards</small>
+              <small>${seasonYear === 'all' ? 'Results and scorecards' : `this season · ${allPlayed.length} all-time`}</small>
             </button>
             <button type="button" class="bcc-tile" data-action="players">
-              <div class="bcc-n bcc-an">${playerCount}</div>
+              <div class="bcc-n bcc-an">${seasonYear === 'all' ? playerCount : playedIds.size}</div>
               <b>Players</b>
-              <small>Batting and bowling ranks</small>
+              <small>${seasonYear === 'all' ? 'Batting and bowling ranks' : `played in ${seasonYear} · ${playerCount} total`}</small>
             </button>
           </div>
           ${otherLive ? `
@@ -3640,20 +3678,20 @@ function renderScore() {
   const canRetireHurt = !inn.ended && !inn.needNewBatter && !inn.needNewBowler &&
     inn.batters[inn.striker] && inn.batters[inn.nonStriker] &&
     !inn.batters[inn.striker].out && !inn.batters[inn.nonStriker].out;
-  const overBallCount = overBalls.length;
-  const canEditOver = !inn.ended && inn.ballLog.length > 0;
   const atOverBreak = inn.score.balls > 0 && inn.score.balls % 6 === 0 && !inn.ended;
-  const editMode = state.overEditUnlocked && !inn.needNewBatter && !inn.needNewBowler;
   const pickingPlayer = inn.needNewBatter || inn.needNewBowler;
-  const scOverBallsHtml = (overNo, { editable = false, emptySlots = 0 } = {}) => {
+  const scBallHtml = (ball, overNo, slotIdx, small) => {
+    const face = scBallFace(ball);
+    const logIndex = ballLogGlobalIndex(inn, overNo, slotIdx);
+    const size = small ? ' sc-sm' : '';
+    if (inn.ended || pickingPlayer || !isLogIndexInEditWindow(inn, logIndex)) {
+      return `<div class="${face.cls}${size}">${esc(face.text)}</div>`;
+    }
+    return `<button type="button" class="${face.cls}${size}" data-action="edit-ball" data-log-index="${logIndex}" title="Edit this ball">${esc(face.text)}</button>`;
+  };
+  const scOverBallsHtml = (overNo, { emptySlots = 0 } = {}) => {
     const balls = inn.ballLog.filter(b => b.overNo === overNo);
-    const filled = balls.map((ball, slotIdx) => {
-      const face = scBallFace(ball);
-      if (!editable) return `<div class="${face.cls}">${esc(face.text)}</div>`;
-      const logIndex = ballLogGlobalIndex(inn, overNo, slotIdx);
-      if (!isLogIndexEditable(inn, logIndex)) return `<div class="${face.cls}">${esc(face.text)}</div>`;
-      return `<button type="button" class="${face.cls} sc-ed" data-action="edit-ball" data-log-index="${logIndex}" title="Edit this ball">${esc(face.text)}</button>`;
-    }).join('');
+    const filled = balls.map((ball, slotIdx) => scBallHtml(ball, overNo, slotIdx, false)).join('');
     return filled + Array(emptySlots).fill('<div class="sc-ball"></div>').join('');
   };
 
@@ -3677,19 +3715,12 @@ function renderScore() {
   const finished = scFinishedOvers(inn);
   const overLabel = atOverBreak ? `Over ${liveOver + 1} done` : 'This over';
   const overSlots = scOverBallsHtml(overToShow, {
-    editable: editMode,
     emptySlots: atOverBreak ? 0 : remainingLegal,
   });
-  const prevEditHtml = editMode && liveOver >= 1
-    ? scOverBallsHtml(liveOver - 1, { editable: true })
-    : '';
   const finishedRows = finished.map(([overNo, balls]) => {
     const who = balls[0]?.bowler || '';
     const runs = balls.reduce((sum, ball) => sum + (Number(ball.total) || 0), 0);
-    const pills = balls.map(ball => {
-      const face = scBallFace(ball);
-      return `<div class="${face.cls} sc-sm">${esc(face.text)}</div>`;
-    }).join('');
+    const pills = balls.map((ball, slotIdx) => scBallHtml(ball, overNo, slotIdx, true)).join('');
     return `<div class="sc-orow"><div class="sc-olab">Over ${overNo + 1}<em>${esc(who)}</em></div><div class="sc-bl">${pills}</div><b class="bcc-an">${runs}</b></div>`;
   }).join('');
   const chaseSw = need != null && need > 0
@@ -3735,11 +3766,7 @@ function renderScore() {
         <div class="sc-ovr">
           <span>${esc(overLabel)}</span>
           <div class="sc-balls">${overSlots}</div>
-          ${canEditOver ? `<button type="button" class="sc-ic${editMode ? ' sc-on' : ''}" data-action="${editMode ? 'done-edit-over' : 'edit-over'}" title="${editMode ? 'Done editing' : 'Edit over'}">${editMode ? '✓' : '✎'}</button>` : ''}
-          <button type="button" class="sc-ic" data-action="undo" title="${esc(undoActionLabel(m))}" ${canUndo && !showingLast ? '' : 'disabled'}>↶</button>
         </div>
-        ${prevEditHtml ? `<div class="sc-ovr"><span>Over ${liveOver}</span><div class="sc-balls">${prevEditHtml}</div></div>` : ''}
-        ${!editMode && atOverBreak ? `<button type="button" class="sc-fix" data-action="fix-last-ball">Fix last ball</button>` : ''}
       </div>
       <div class="sc-crew">
         <div class="sc-cbox">
@@ -3792,7 +3819,10 @@ function renderScore() {
             <button type="button" class="sc-dot${b.runs === 0 ? ' sc-sel' : ''}" data-action="select-run" data-runs="0">DOT</button>
             ${[1, 2, 3, 4, 5, 6].map(n => `<button type="button" class="${b.runs === n ? 'sc-sel' : ''}" data-action="select-run" data-runs="${n}">${n}</button>`).join('')}
           </div>
-          <button type="button" class="sc-nb bcc-an" data-action="next-ball" ${canNext ? '' : 'disabled'}>Next ball</button>
+          <div class="sc-act">
+            <button type="button" class="sc-undo" data-action="undo" title="${esc(undoActionLabel(m))}" ${canUndo && !showingLast ? '' : 'disabled'}>Undo</button>
+            <button type="button" class="sc-nb bcc-an" data-action="next-ball" ${canNext ? '' : 'disabled'}>Next ball</button>
+          </div>
           <div class="sc-ft">
             <button type="button" data-action="end-innings">End innings</button>
             <button type="button" class="sc-ab" data-action="abort-show">Abort match</button>
@@ -4497,10 +4527,604 @@ function renderTeamPick() {
     </div>`;
 }
 
-function renderPlayers() {
-  const list = state.players;
-  const tab = state.playersTab || 'roster';
+function seasonMatchPool() {
+  const byId = new Map();
+  for (const m of state.seasonMatches || []) if (m?.id) byId.set(m.id, m);
+  for (const m of state.history || []) if (m?.id) byId.set(m.id, m);
+  if (state.current?.id) byId.set(state.current.id, state.current);
+  return [...byId.values()];
+}
+
+function renderSeasonSwitch(years, selected, action, includeOverall = true) {
+  const items = [
+    ...(includeOverall ? [{ id: 'all', label: 'Overall' }] : []),
+    ...years.map(year => ({ id: year, label: year })),
+  ];
+  return `<div class="bcc-years" role="tablist">${items.map(item => `
+    <button type="button" role="tab" aria-selected="${selected === item.id}"
+      class="${selected === item.id ? 'is-on' : ''}"
+      data-action="${action}" data-year="${esc(item.id)}">${esc(item.label)}</button>
+  `).join('')}</div>`;
+}
+
+function renderSeasonBoard(facts) {
+  if (!facts) return '';
+  const row = (label, player, figure, tone) => {
+    if (!player) return '';
+    return `
+      <button type="button" class="bcc-prow" data-action="view-player" data-player-id="${esc(player.id)}" data-from="${tone === 'bowl' ? 'bowling' : 'batting'}">
+        <span class="bcc-nm"><b>${esc(player.name)}</b><small>${esc(label)}</small></span>
+        <span class="bcc-chip ${tone === 'bowl' ? 'is-wkts' : 'is-runs'} bcc-an">${esc(String(figure))}</span>
+      </button>`;
+  };
+  return `
+    <div class="bcc-season">
+      <div class="bcc-season-top">
+        <div><b class="bcc-an">${facts.matches}</b><small>Matches</small></div>
+        <div><b class="bcc-an">${facts.balls}</b><small>Balls bowled</small></div>
+      </div>
+      ${row('Best batter', facts.batter, facts.batter?.batting?.runs ?? '', 'bat')}
+      ${row('Best bowler', facts.bowler, facts.bowler?.bowling?.wickets ?? '', 'bowl')}
+      ${row('Most extras', facts.extrasLeader, facts.extrasLeader?.bowling?.extras ?? '', 'bowl')}
+      ${row('Best economy', facts.economy, facts.economy ? window.QCPlayers.bowlEcon(facts.economy.bowling) : '', 'bowl')}
+      ${row('Clutch wins', facts.clutch, facts.clutchWins || '', 'bat')}
+    </div>`;
+}
+
+function fmtNum(n) {
+  return Number(n || 0).toLocaleString('en-GB');
+}
+
+function samePlayerCard(card, player) {
+  if (!card || !player) return false;
+  if (player.id && card.playerId) return card.playerId === player.id;
+  return String(card.name || '').trim().toLowerCase() === String(player.name || '').trim().toLowerCase();
+}
+
+function seasonChoices() {
   const QP = window.QCPlayers;
+  return QP?.seasonYears ? QP.seasonYears(state.players, seasonMatchPool()) : [];
+}
+
+function activeSeason() {
+  const years = seasonChoices();
+  const now = String(new Date().getFullYear());
+  if (state.appSeason === 'all') return 'all';
+  if (state.appSeason && years.includes(state.appSeason)) return state.appSeason;
+  if (years.includes(now)) return now;
+  return years[0] || now;
+}
+
+function completedSeasonMatches(year) {
+  const QP = window.QCPlayers;
+  return seasonMatchPool()
+    .filter(m => m && m.status === 'completed' && m.innings && (year === 'all' || !QP?.seasonKeyOf || QP.seasonKeyOf(m) === String(year)))
+    .sort((a, b) => (a.startedAt || 0) - (b.startedAt || 0));
+}
+
+function playerAppeared(match, player) {
+  for (const inn of match.innings || []) {
+    if ((inn.batters || []).some(b => samePlayerCard(b, player))) return true;
+    if ((inn.bowlers || []).some(b => samePlayerCard(b, player))) return true;
+  }
+  return false;
+}
+
+function playerRunsInMatch(match, player) {
+  let runs = 0;
+  let faced = false;
+  let sixes = 0;
+  for (const inn of match.innings || []) {
+    for (const b of inn.batters || []) {
+      if (!samePlayerCard(b, player)) continue;
+      faced = true;
+      runs += Number(b.runs) || 0;
+      sixes += Number(b.sixes) || 0;
+    }
+  }
+  return { faced, runs, sixes };
+}
+
+function seasonDelta(now, prev, asPercent) {
+  if (prev == null || Number.isNaN(Number(prev))) return '';
+  const d = Number(now) - Number(prev);
+  if (!d) return '';
+  const up = d > 0;
+  let text = String(Math.abs(Math.round(d)));
+  if (asPercent && Number(prev) > 0) text = `${Math.abs(Math.round((d / Number(prev)) * 100))}%`;
+  return `<em class="${up ? 'is-up' : 'is-dn'}">${up ? '▲' : '▼'} ${text}</em>`;
+}
+
+function renderSeasonChip() {
+  const label = activeSeason() === 'all' ? 'All-time' : activeSeason();
+  return `<button type="button" class="ssn-chip" data-action="season-picker">${esc(label)} ▾</button>`;
+}
+
+function buildSeasonBoard(year) {
+  const QP = window.QCPlayers;
+  const y = year === 'all' ? 'all' : String(year || '');
+  const played = completedSeasonMatches(y);
+  const views = (y === 'all' || !QP?.playerInSeason)
+    ? state.players
+    : state.players.map(p => QP.playerInSeason(p, y));
+  const batters = QP?.battingRankings ? QP.battingRankings(views) : [];
+  const bowlers = QP?.bowlingRankings ? QP.bowlingRankings(views) : [];
+  let runs = 0;
+  let wickets = 0;
+  let sixes = 0;
+  const months = Array.from({ length: 12 }, () => 0);
+  let closest = null;
+  let biggestWkts = null;
+  let biggestRuns = null;
+  const impact = new Map();
+  const potm = new Map();
+  const showed = new Map();
+  const running = new Map();
+  const snaps = [];
+  let bestBat = null;
+  let bestBowl = null;
+  for (const match of played) {
+    const when = new Date(match.startedAt || 0);
+    if (match.startedAt) months[when.getMonth()] += 1;
+    for (const inn of match.innings || []) {
+      runs += inn.score?.runs || 0;
+      wickets += inn.score?.wickets || 0;
+      for (const b of inn.batters || []) {
+        sixes += Number(b.sixes) || 0;
+        const score = Number(b.runs) || 0;
+        if (!bestBat || score > bestBat.runs) {
+          bestBat = { runs: score, name: b.name, balls: b.balls || 0, when };
+        }
+      }
+      for (const b of inn.bowlers || []) {
+        const wk = Number(b.wickets) || 0;
+        const conceded = Number(b.runs) || 0;
+        if (!bestBowl || wk > bestBowl.wickets || (wk === bestBowl.wickets && conceded < bestBowl.runs)) {
+          bestBowl = { wickets: wk, runs: conceded, name: b.name, when };
+        }
+      }
+    }
+    const res = String(match.result || '');
+    const byRuns = res.match(/by (\d+) runs/);
+    const byWkts = res.match(/by (\d+) wickets/);
+    const winner = [match.teams?.A, match.teams?.B].find(name => name && res.startsWith(`${name} won`)) || '';
+    const stamp = `${when.getDate()} ${HISTORY_MONTHS[when.getMonth()]}`;
+    if (byRuns) {
+      const n = Number(byRuns[1]);
+      if (!closest || n < closest.n) closest = { n, label: `${n} ${n === 1 ? 'run' : 'runs'}`, side: winner, when: stamp };
+    }
+    if (byWkts) {
+      const n = Number(byWkts[1]);
+      if (!biggestWkts || n > biggestWkts.n) biggestWkts = { n, label: `${n} ${n === 1 ? 'wicket' : 'wickets'}`, side: winner, when: stamp };
+    }
+    if (byRuns) {
+      const n = Number(byRuns[1]);
+      if (!biggestRuns || n > biggestRuns.n) biggestRuns = { n, label: `${n} ${n === 1 ? 'run' : 'runs'}`, side: winner, when: stamp };
+    }
+    if (QP?.computeAwards && QP.matchPerformanceScore) {
+      try {
+        const awards = QP.computeAwards(match, state.players);
+        if (awards?.potm?.playerId) potm.set(awards.potm.playerId, (potm.get(awards.potm.playerId) || 0) + 1);
+      } catch { /* skip a broken scorecard */ }
+      for (const p of state.players) {
+        if (!playerAppeared(match, p)) continue;
+        showed.set(p.id, (showed.get(p.id) || 0) + 1);
+        const line = playerRunsInMatch(match, p);
+        running.set(p.id, (running.get(p.id) || 0) + line.runs);
+        try {
+          const perf = QP.matchPerformanceScore(match, p.id, p.name);
+          const row = impact.get(p.id) || { id: p.id, name: p.name, score: 0 };
+          row.score += perf.score || 0;
+          impact.set(p.id, row);
+        } catch { /* ignore */ }
+      }
+      snaps.push(new Map(running));
+    }
+  }
+  const rankedImpact = [...impact.values()].sort((a, b) => b.score - a.score);
+  const potmLeader = rankedImpact[0] ? {
+    ...rankedImpact[0],
+    awards: potm.get(rankedImpact[0].id) || 0,
+    view: views.find(p => p.id === rankedImpact[0].id) || null,
+  } : null;
+  const topIds = [...running.entries()].sort((a, b) => b[1] - a[1]).slice(0, 3).map(([id]) => id);
+  const colors = ['#f2a900', '#1f7a4d', '#2f6fe4'];
+  const race = topIds.map((id, i) => ({
+    id,
+    name: state.players.find(p => p.id === id)?.name || 'Player',
+    color: colors[i],
+    points: snaps.map(snap => snap.get(id) || 0),
+  }));
+  let leaderId = null;
+  let flips = 0;
+  let flipAt = -1;
+  let flipName = '';
+  for (let i = 0; i < snaps.length; i++) {
+    let bestId = null;
+    let best = -1;
+    for (const [id, value] of snaps[i]) {
+      if (value > best) { best = value; bestId = id; }
+    }
+    if (bestId && bestId !== leaderId) {
+      if (leaderId) {
+        flips += 1;
+        flipAt = i;
+        flipName = state.players.find(p => p.id === bestId)?.name || '';
+      }
+      leaderId = bestId;
+    }
+  }
+  const prevYear = y !== 'all' ? String(Number(y) - 1) : '';
+  const prevPlayed = prevYear && seasonChoices().includes(prevYear) ? completedSeasonMatches(prevYear) : [];
+  let prevRuns = 0;
+  let prevWickets = 0;
+  let prevSixes = 0;
+  for (const match of prevPlayed) {
+    for (const inn of match.innings || []) {
+      prevRuns += inn.score?.runs || 0;
+      prevWickets += inn.score?.wickets || 0;
+      for (const b of inn.batters || []) prevSixes += Number(b.sixes) || 0;
+    }
+  }
+  const dates = played.map(m => m.startedAt).filter(Boolean);
+  const first = dates.length ? new Date(dates[0]) : null;
+  const last = dates.length ? new Date(dates[dates.length - 1]) : null;
+  const open = y !== 'all' && Number(y) === new Date().getFullYear();
+  const showedRows = [...showed.entries()]
+    .map(([id, n]) => ({ id, name: state.players.find(p => p.id === id)?.name || '', n }))
+    .sort((a, b) => b.n - a.n || a.name.localeCompare(b.name))
+    .slice(0, 5);
+  const bySixes = views.filter(p => (p.batting?.sixes || 0) > 0).sort((a, b) => (b.batting.sixes || 0) - (a.batting.sixes || 0));
+  const byRate = views
+    .filter(p => (p.batting?.balls || 0) >= 30)
+    .sort((a, b) => (parseFloat(QP.batSR(b.batting)) || 0) - (parseFloat(QP.batSR(a.batting)) || 0));
+  const byExtras = views.filter(p => (p.bowling?.extras || 0) > 0).sort((a, b) => (b.bowling.extras || 0) - (a.bowling.extras || 0));
+  const clutch = views.slice().sort((a, b) => {
+    const ca = (a.batting?.carriedWins || 0) + (a.bowling?.stoodUpWins || 0);
+    const cb = (b.batting?.carriedWins || 0) + (b.bowling?.stoodUpWins || 0);
+    return cb - ca;
+  })[0];
+  const clutchWins = clutch ? (clutch.batting?.carriedWins || 0) + (clutch.bowling?.stoodUpWins || 0) : 0;
+  return {
+    year: y,
+    played,
+    runs,
+    wickets,
+    sixes,
+    months,
+    batters,
+    bowlers,
+    bySixes,
+    byRate,
+    byExtras,
+    clutch: clutchWins > 0 ? clutch : null,
+    clutchWins,
+    potm: potmLeader,
+    impactRunners: rankedImpact.slice(1, 3),
+    race,
+    flips,
+    flipAt,
+    flipName,
+    closest,
+    biggest: biggestWkts || biggestRuns,
+    prev: prevPlayed.length ? { matches: prevPlayed.length, runs: prevRuns, wickets: prevWickets, sixes: prevSixes } : null,
+    open,
+    first,
+    last,
+    showed: showedRows,
+    bestBat,
+    bestBowl,
+    views,
+  };
+}
+
+function renderCapRace(board) {
+  const lines = board.race.filter(r => r.points.some(v => v > 0));
+  if (lines.length < 1 || !board.played.length) return '<p class="ssn-empty">The race starts after the first match.</p>';
+  const W = 320;
+  const H = 168;
+  const L = 28;
+  const R = 78;
+  const T = 10;
+  const B = 22;
+  const n = Math.max(1, board.played.length - 1);
+  const peak = Math.max(10, ...lines.flatMap(r => r.points));
+  const X = i => L + ((W - L - R) * i) / n;
+  const Y = v => T + (H - T - B) - (v / peak) * (H - T - B);
+  let g = '';
+  for (const v of [0, Math.round(peak / 2), peak]) {
+    g += `<line x1="${L}" x2="${W - R}" y1="${Y(v).toFixed(1)}" y2="${Y(v).toFixed(1)}" stroke="#e5dfcf"/><text x="${L - 4}" y="${(Y(v) + 3).toFixed(1)}" text-anchor="end" font-size="9" font-weight="700" fill="#74807a">${v}</text>`;
+  }
+  const monthMarks = [];
+  for (let i = 0; i < board.played.length; ) {
+    const month = new Date(board.played[i].startedAt || 0).getMonth();
+    let j = i + 1;
+    while (j < board.played.length && new Date(board.played[j].startedAt || 0).getMonth() === month) j += 1;
+    monthMarks.push({ i: Math.floor((i + j - 1) / 2), label: HISTORY_MONTHS[month] });
+    i = j;
+  }
+  monthMarks.forEach(mark => {
+    g += `<text x="${X(mark.i).toFixed(1)}" y="${H - 4}" text-anchor="middle" font-size="9" font-weight="700" fill="#74807a">${esc(mark.label)}</text>`;
+  });
+  if (board.flipAt > 0) {
+    g += `<line x1="${X(board.flipAt).toFixed(1)}" x2="${X(board.flipAt).toFixed(1)}" y1="${T}" y2="${T + (H - T - B)}" stroke="#0a2118" stroke-dasharray="3 3" opacity="0.35"/>`;
+  }
+  lines.forEach(line => {
+    const d = line.points.map((v, i) => `${i ? 'L' : 'M'}${X(i).toFixed(1)} ${Y(v).toFixed(1)}`).join(' ');
+    const end = line.points[line.points.length - 1] || 0;
+    g += `<path d="${d}" fill="none" stroke="${line.color}" stroke-width="3" stroke-linejoin="round" stroke-linecap="round"/>`;
+    g += `<circle cx="${X(line.points.length - 1).toFixed(1)}" cy="${Y(end).toFixed(1)}" r="4.5" fill="${line.color}" stroke="#fffdf7" stroke-width="2"/>`;
+    g += `<text x="${(X(line.points.length - 1) + 8).toFixed(1)}" y="${(Y(end) + 4).toFixed(1)}" font-size="11" font-weight="800" fill="#0a2118">${esc(line.name.split(' ')[0])} <tspan fill="#74807a" font-weight="700">${end}</tspan></text>`;
+  });
+  const note = board.flipAt > 0 && board.flipName
+    ? `<p class="ssn-note">${esc(board.flipName)} took the lead at match ${board.flipAt + 1}.</p>`
+    : '';
+  return `<svg class="ssn-race" viewBox="0 0 ${W} ${H}" role="img" aria-label="Runs of the top batters after each match">${g}</svg>${note}`;
+}
+
+function leaderRows(board) {
+  const tab = state.seasonLeader || 'runs';
+  const qualified = !!state.seasonQualified;
+  const minBalls = 30;
+  let rows = [];
+  let figure = p => p.batting?.runs || 0;
+  let unit = 'runs';
+  if (tab === 'wickets') {
+    rows = board.bowlers.filter(p => !qualified || (p.bowling?.balls || 0) >= minBalls);
+    figure = p => p.bowling?.wickets || 0;
+    unit = 'wickets';
+  } else if (tab === 'sixes') {
+    rows = board.bySixes.filter(p => !qualified || (p.batting?.balls || 0) >= minBalls);
+    figure = p => p.batting?.sixes || 0;
+    unit = 'sixes';
+  } else if (tab === 'sr') {
+    rows = board.batters.filter(p => (p.batting?.balls || 0) >= (qualified ? minBalls : 1));
+    rows = rows.slice().sort((a, b) => (parseFloat(window.QCPlayers.batSR(b.batting)) || 0) - (parseFloat(window.QCPlayers.batSR(a.batting)) || 0));
+    figure = p => window.QCPlayers.batSR(p.batting);
+    unit = 'strike rate';
+  } else if (tab === 'econ') {
+    rows = board.bowlers.filter(p => (p.bowling?.balls || 0) >= (qualified ? minBalls : 1));
+    rows = rows.slice().sort((a, b) => (parseFloat(window.QCPlayers.bowlEcon(a.bowling)) || 99) - (parseFloat(window.QCPlayers.bowlEcon(b.bowling)) || 99));
+    figure = p => window.QCPlayers.bowlEcon(p.bowling);
+    unit = 'economy';
+  } else {
+    rows = board.batters.filter(p => !qualified || (p.batting?.balls || 0) >= minBalls);
+    figure = p => p.batting?.runs || 0;
+  }
+  return { rows: rows.slice(0, 8), figure, unit, tab };
+}
+
+function renderSeasons() {
+  const year = activeSeason();
+  const boardYear = year === 'all' ? (seasonChoices()[0] || String(new Date().getFullYear())) : year;
+  const board = buildSeasonBoard(year === 'all' ? 'all' : boardYear);
+  const titleYear = year === 'all' ? 'All-time' : board.year;
+  const leaders = leaderRows(board);
+  const peak = leaders.rows.length ? Number(leaders.figure(leaders.rows[0])) || 1 : 1;
+  const cap = leaders.tab === 'runs' ? 'Orange cap' : leaders.tab === 'wickets' ? 'Purple cap' : leaders.tab === 'sixes' ? 'Sixes' : leaders.tab === 'sr' ? 'Strike rate' : 'Economy';
+  const head = leaders.rows[0];
+  const headMeta = head ? (
+    leaders.tab === 'wickets' || leaders.tab === 'econ'
+      ? `Econ ${window.QCPlayers.bowlEcon(head.bowling)} · Avg ${window.QCPlayers.bowlAvg(head.bowling)}`
+      : `Avg ${window.QCPlayers.batAvg(head.batting)} · SR ${window.QCPlayers.batSR(head.batting)} · HS ${head.batting.highest || 0}`
+  ) : '';
+  const range = board.first
+    ? `${board.first.getDate()} ${HISTORY_MONTHS[board.first.getMonth()]} – ${board.open ? 'today' : `${board.last.getDate()} ${HISTORY_MONTHS[board.last.getMonth()]}`}`
+    : 'No matches yet';
+  const potmView = board.potm?.view;
+  const awards = [
+    board.bySixes[0] ? ['🏏', 'Six machine', board.bySixes[0].name, `${board.bySixes[0].batting.sixes} sixes`, board.bySixes[0].id, 'batting'] : null,
+    board.byRate[0] ? ['⚡', 'Highest run rate', board.byRate[0].name, `${((board.byRate[0].batting.runs / board.byRate[0].batting.balls) * 6).toFixed(2)} per over`, board.byRate[0].id, 'batting'] : null,
+    board.bowlers[0] ? ['🎯', 'Best bowler', board.bowlers[0].name, `${board.bowlers[0].bowling.wickets} wickets`, board.bowlers[0].id, 'bowling'] : null,
+    board.byExtras[0] ? ['➕', 'Most extras', board.byExtras[0].name, `${board.byExtras[0].bowling.extras} extras`, board.byExtras[0].id, 'bowling'] : null,
+    board.clutch ? ['🧊', 'Clutch', board.clutch.name, `${board.clutchWins} clutch wins`, board.clutch.id, 'batting'] : null,
+  ].filter(Boolean);
+  const tabs = [['runs', 'Runs'], ['wickets', 'Wickets'], ['sixes', 'Sixes'], ['sr', 'SR'], ['econ', 'Econ']];
+  return `
+    <div class="screen ssn-page">
+      <div class="bcc-top">
+        <button type="button" class="bcc-ib" data-action="back-home" aria-label="Back">←</button>
+        <span class="bcc-an">Season</span>
+        ${renderSeasonChip()}
+        <button type="button" class="bcc-ib" data-action="open-wrapped" aria-label="Season wrapped">↗</button>
+      </div>
+      <div class="bcc-scroll">
+        <div class="ssn-hero">
+          <div class="ssn-yr">
+            <div class="ssn-big bcc-an">${esc(titleYear)}</div>
+            <div class="ssn-meta"><b>${board.open ? 'Season open' : year === 'all' ? 'Every match' : 'Season closed'}</b><br>${esc(range)}${board.open ? '<br>closes 31 Dec' : ''}</div>
+          </div>
+          <div class="ssn-st">
+            <div><b class="bcc-an">${fmtNum(board.played.length)}</b><small>Matches</small>${board.prev ? seasonDelta(board.played.length, board.prev.matches, false) : ''}</div>
+            <div><b class="bcc-an">${fmtNum(board.runs)}</b><small>Runs</small>${board.prev ? seasonDelta(board.runs, board.prev.runs, true) : ''}</div>
+            <div><b class="bcc-an">${fmtNum(board.wickets)}</b><small>Wickets</small>${board.prev ? seasonDelta(board.wickets, board.prev.wickets, true) : ''}</div>
+            <div><b class="bcc-an">${fmtNum(board.sixes)}</b><small>Sixes</small>${board.prev ? seasonDelta(board.sixes, board.prev.sixes, false) : ''}</div>
+          </div>
+        </div>
+        ${board.potm ? `
+          <button type="button" class="ssn-potm" data-action="view-player" data-player-id="${esc(board.potm.id)}" data-from="batting">
+            <span class="ssn-tr" aria-hidden="true">🏆</span>
+            <span class="ssn-tx">
+              <small>Player of the season</small>
+              <b class="bcc-an">${esc(board.potm.name)}</b>
+              <span>${board.potm.awards} match award${board.potm.awards === 1 ? '' : 's'}</span>
+              <span>${potmView?.bowling?.wickets || 0} wkts · ${potmView?.batting?.runs || 0} runs</span>
+            </span>
+            <span class="ssn-im"><b class="bcc-an">${Math.round(board.potm.score).toLocaleString('en-GB')}</b><small>Impact</small></span>
+          </button>
+          ${board.impactRunners.length ? `<div class="ssn-runn">${board.impactRunners.map((p, i) => `<div><span>${i + 2} ${esc(p.name)}</span><em class="bcc-an">${Math.round(p.score).toLocaleString('en-GB')}</em></div>`).join('')}</div>` : ''}
+        ` : ''}
+        <div class="ssn-lab">Orange cap race <i>${board.flips ? `lead changed ${board.flips}×` : 'one leader so far'}</i></div>
+        <div class="ssn-box">
+          <div class="ssn-rh"><span class="is-on">Runs</span></div>
+          ${renderCapRace(board)}
+          <div class="ssn-two">
+            <div><small>Closest finish</small><b class="bcc-an">${board.closest ? esc(board.closest.label) : '—'}</b><span>${board.closest ? esc(`${board.closest.side} · ${board.closest.when}`) : 'No result yet'}</span></div>
+            <div><small>Biggest win</small><b class="bcc-an">${board.biggest ? esc(board.biggest.label) : '—'}</b><span>${board.biggest ? esc(`${board.biggest.side} · ${board.biggest.when}`) : 'No result yet'}</span></div>
+          </div>
+        </div>
+        <div class="ssn-lab">Leaders</div>
+        <div class="ssn-box">
+          <div class="ssn-tabs">
+            ${tabs.map(([id, label]) => `<button type="button" class="${leaders.tab === id ? 'is-on' : ''}" data-action="season-leader" data-tab="${id}">${label}</button>`).join('')}
+          </div>
+          <button type="button" class="ssn-qual" data-action="season-qualified">
+            <span>Qualified only · min 30 balls</span>
+            <i class="${state.seasonQualified ? 'is-on' : ''}" aria-hidden="true"></i>
+          </button>
+          ${head ? `
+            <button type="button" class="ssn-ld" data-action="view-player" data-player-id="${esc(head.id)}" data-from="${leaders.tab === 'wickets' || leaders.tab === 'econ' ? 'bowling' : 'batting'}">
+              <span><span class="ssn-cp">${esc(cap)}</span><b class="bcc-an">${esc(head.name)}</b><span class="ssn-mn">${esc(headMeta)}</span></span>
+              <span class="ssn-bg bcc-an">${esc(String(leaders.figure(head)))}<small>${esc(leaders.unit)}</small></span>
+            </button>
+            ${leaders.rows.slice(1).map((p, i) => {
+              const value = Number(leaders.figure(p)) || 0;
+              const width = peak ? Math.max(6, Math.round((value / peak) * 100)) : 0;
+              return `<button type="button" class="ssn-lr" data-action="view-player" data-player-id="${esc(p.id)}" data-from="${leaders.tab === 'wickets' || leaders.tab === 'econ' ? 'bowling' : 'batting'}"><span class="k bcc-an">${i + 2}</span><span><b>${esc(p.name)}</b><i><u style="width:${width}%"></u></i></span><em class="bcc-an">${esc(String(leaders.figure(p)))}</em></button>`;
+            }).join('')}
+          ` : '<p class="ssn-empty">Nobody has qualified yet.</p>'}
+        </div>
+        <div class="ssn-lab">Showed up <i>of ${board.played.length} matches</i></div>
+        <div class="ssn-box ssn-att">
+          ${board.showed.map(p => `<button type="button" data-action="view-player" data-player-id="${esc(p.id)}" data-from="batting"><span>${esc(p.name)}</span><i><u style="width:${board.played.length ? Math.round(p.n / board.played.length * 100) : 0}%"></u></i><b class="bcc-an">${p.n}</b></button>`).join('') || '<p class="ssn-empty">No appearances yet.</p>'}
+        </div>
+        <div class="ssn-lab">Season awards</div>
+        <div class="ssn-aw">
+          ${awards.map(([icon, label, name, fig, id, from]) => `
+            <button type="button" data-action="view-player" data-player-id="${esc(id)}" data-from="${from}">
+              <span>${icon}</span><small>${esc(label)}</small><b>${esc(name)}</b><em>${esc(fig)}</em>
+            </button>`).join('')}
+        </div>
+        <div class="ssn-lab">Records</div>
+        <div class="ssn-box ssn-rec">
+          ${board.bestBat ? `<div><span>Highest score</span><b>${esc(board.bestBat.name)}</b><em class="bcc-an">${board.bestBat.runs}</em></div>` : ''}
+          ${board.bestBowl && board.bestBowl.wickets ? `<div><span>Best bowling</span><b>${esc(board.bestBowl.name)}</b><em class="bcc-an">${board.bestBowl.wickets}/${board.bestBowl.runs}</em></div>` : ''}
+          ${board.bySixes[0] ? `<div><span>Most sixes</span><b>${esc(board.bySixes[0].name)}</b><em class="bcc-an">${board.bySixes[0].batting.sixes}</em></div>` : ''}
+        </div>
+      </div>
+      ${renderBccDock('seasons')}
+    </div>`;
+}
+
+function shareSeasonWrap() {
+  const year = activeSeason() === 'all' ? (seasonChoices()[0] || String(new Date().getFullYear())) : activeSeason();
+  const board = buildSeasonBoard(year);
+  const bat = board.batters[0];
+  const text = [
+    `BCC season ${board.year}`,
+    `${board.played.length} matches, ${fmtNum(board.runs)} runs, ${board.wickets} wickets, ${board.sixes} sixes.`,
+    bat ? `Orange cap: ${bat.name}, ${bat.batting.runs} runs.` : '',
+    board.potm ? `Player of the season: ${board.potm.name}.` : '',
+    'Bat, Bowl , Yean , Repeat!',
+  ].filter(Boolean).join('\n');
+  if (navigator.share) {
+    navigator.share({ title: `BCC ${board.year}`, text }).catch(() => {});
+    return;
+  }
+  if (navigator.clipboard?.writeText) {
+    navigator.clipboard.writeText(text).then(() => showToast('Copied the season summary')).catch(() => showToast('Could not copy'));
+    return;
+  }
+  showToast('Sharing is not available here');
+}
+
+function renderWrapped() {
+  const year = activeSeason() === 'all' ? (seasonChoices()[0] || String(new Date().getFullYear())) : activeSeason();
+  const board = buildSeasonBoard(year);
+  const bat = board.batters[0];
+  const bowl = board.bowlers[0];
+  const steps = [];
+  if (bat) steps.push({
+    kicker: 'The orange cap',
+    num: String(bat.batting.runs),
+    name: bat.name,
+    sub: `runs this season, ${bat.batting.sixes || 0} sixes, and a best of ${bat.batting.highest || 0}.`,
+  });
+  if (bowl) steps.push({
+    kicker: 'The purple cap',
+    num: String(bowl.bowling.wickets),
+    name: bowl.name,
+    sub: `wickets at an economy of ${window.QCPlayers.bowlEcon(bowl.bowling)}.`,
+  });
+  if (board.potm) steps.push({
+    kicker: 'Player of the season',
+    num: board.potm.score.toFixed(0),
+    name: board.potm.name,
+    sub: `${board.potm.awards} player-of-the-match awards. Impact ${board.potm.score.toFixed(1)}.`,
+  });
+  steps.push({
+    kicker: 'The year in numbers',
+    title: `That was ${board.year}`,
+    grid: [
+      [fmtNum(board.played.length), 'Matches'],
+      [fmtNum(board.runs), 'Runs'],
+      [fmtNum(board.sixes), 'Sixes'],
+      [fmtNum(board.showed.length ? state.players.filter(p => board.played.some(m => playerAppeared(m, p))).length : 0), 'Players'],
+    ],
+    line: board.potm ? `Player of the season: ${board.potm.name}` : '',
+    share: true,
+  });
+  const step = Math.min(state.wrappedStep || 0, steps.length - 1);
+  const card = steps[step] || steps[0];
+  if (!card) {
+    return `<div class="screen ssn-wrap"><p>No season to wrap yet.</p></div>`;
+  }
+  const bars = steps.map((_, i) => `<i class="${i <= step ? 'is-on' : ''}"></i>`).join('');
+  return `
+    <div class="screen ssn-wrap">
+      <div class="ssn-sb">${bars}</div>
+      <div class="ssn-wh"><span>BCC · Season ${esc(board.year)}</span><button type="button" data-action="wrapped-close" aria-label="Close">✕</button></div>
+      <button type="button" class="ssn-stage" data-action="${card.share ? '' : 'wrapped-next'}">
+        <span class="ssn-k">${esc(card.kicker)}</span>
+        ${card.title ? `<b class="bcc-an ssn-wtitle">${esc(card.title)}</b>` : `<b class="bcc-an ssn-wnum">${esc(card.num || '')}</b><b class="bcc-an ssn-wname">${esc(card.name || '')}</b><span class="ssn-wsub">${esc(card.sub || '')}</span>`}
+        ${card.grid ? `<span class="ssn-wgrid">${card.grid.map(([n, l]) => `<span><b class="bcc-an">${esc(n)}</b><small>${esc(l)}</small></span>`).join('')}</span>` : ''}
+        ${card.line ? `<span class="ssn-wline">${esc(card.line)}</span>` : ''}
+      </button>
+      ${card.share ? `<button type="button" class="ssn-wshare" data-action="wrapped-share">Share to the group</button>` : ''}
+      <div class="ssn-wfoot">${card.share ? 'Bat, Bowl , Yean , Repeat!' : 'Tap to continue'}</div>
+      <div class="bcc-art"></div>
+    </div>`;
+}
+
+function renderSeasonPicker() {
+  const years = seasonChoices();
+  const current = activeSeason();
+  const now = String(new Date().getFullYear());
+  const allCount = completedSeasonMatches('all').length;
+  const opt = (year, title, detail, on) => `
+    <button type="button" class="ssn-opt${on ? ' is-on' : ''}" data-action="pick-season" data-year="${esc(year)}">
+      <span class="y bcc-an">${esc(year === 'all' ? 'All-time' : year)}</span>
+      <span class="tx"><b>${esc(title)}${year === now ? '<i>Live</i>' : ''}</b>${esc(detail)}</span>
+      ${on ? '<span class="ck">✓</span>' : ''}
+    </button>`;
+  const yearOpts = years.map((year, i) => {
+    const matches = completedSeasonMatches(year);
+    const first = matches[0]?.startedAt ? HISTORY_MONTHS[new Date(matches[0].startedAt).getMonth()] : '';
+    const last = matches.length ? HISTORY_MONTHS[new Date(matches[matches.length - 1].startedAt).getMonth()] : '';
+    const title = year === now ? 'Current season' : (i === 1 ? 'Last season' : 'Season');
+    return opt(year, title, `${matches.length} matches${first ? ` · ${first} – ${last}` : ''}`, current === year);
+  }).join('');
+  return `
+    <div class="ssn-shade">
+      <button type="button" class="ssn-shade-hit" data-action="close-season-picker" aria-label="Close"></button>
+      <div class="ssn-sheet" role="dialog" aria-label="Choose season">
+        <div class="ssn-grab"></div>
+        <h3 class="bcc-an">Choose season</h3>
+        <p>Home, past matches, players and this dashboard follow the year.</p>
+        ${yearOpts}
+        ${opt('all', 'Every match ever', `${allCount} matches · ${state.players.length} players`, current === 'all')}
+        <p class="ssn-hint">A match counts in the year it was played. Nothing to set up.</p>
+      </div>
+    </div>`;
+}
+
+
+function renderPlayers() {
+  const year = activeSeason();
+  const QP = window.QCPlayers;
+  const source = year === 'all' || !QP.playerInSeason ? state.players : state.players.map(p => QP.playerInSeason(p, year));
+  const list = year === 'all' ? source : source.filter(p => (p.batting?.innings || 0) > 0 || (p.bowling?.innings || 0) > 0 || (p.batting?.runs || 0) > 0 || (p.bowling?.balls || 0) > 0);
+  const tab = state.playersTab || 'roster';
   const batRanked = QP.battingRankings(list);
   const bowlRanked = QP.bowlingRankings(list);
   const rosterSorted = [...list].sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }));
@@ -4512,17 +5136,20 @@ function renderPlayers() {
   ];
 
   function statRow(p, rank, kind) {
+    const qualified = kind === 'bowl' ? QP.bowlingQualifies(p.bowling) : QP.battingQualifies(p.batting);
+    const inns = kind === 'bowl' ? (p.bowling.innings || 0) : (p.batting.innings || 0);
     const line = kind === 'bowl'
-      ? `Econ ${QP.bowlEcon(p.bowling)} · Avg ${QP.bowlAvg(p.bowling)}`
-      : `Avg ${QP.batAvg(p.batting)} · SR ${QP.batSR(p.batting)}`;
+      ? `${QP.bowlingWicketsPerInnings(p.bowling).toFixed(2)} wkts/inns · Econ ${QP.bowlEcon(p.bowling)}`
+      : `${QP.battingRunsPerInnings(p.batting).toFixed(1)} runs/inns · SR ${QP.batSR(p.batting)}`;
+    const note = qualified ? line : `Not ranked yet · ${inns}/${QP.MIN_QUALIFY_INNINGS} inns`;
     const chip = kind === 'bowl'
       ? `<span class="bcc-chip is-wkts bcc-an" title="Wickets">${p.bowling.wickets}</span>`
       : `<span class="bcc-chip is-runs bcc-an" title="Runs">${p.batting.runs}</span>`;
-    const tone = rank === 1 ? 'is-r1' : rank === 2 ? 'is-r2' : rank === 3 ? 'is-r3' : '';
+    const tone = !qualified ? '' : rank === 1 ? 'is-r1' : rank === 2 ? 'is-r2' : rank === 3 ? 'is-r3' : '';
     return `
       <button type="button" class="bcc-prow ${tone}" data-action="view-player" data-player-id="${esc(p.id)}" data-from="${kind === 'bowl' ? 'bowling' : 'batting'}">
-        <span class="bcc-av bcc-an">${rank}</span>
-        <span class="bcc-nm"><b>${esc(p.name)}</b><small>${esc(line)}</small></span>
+        <span class="bcc-av bcc-an">${qualified ? rank : '–'}</span>
+        <span class="bcc-nm"><b>${esc(p.name)}</b><small>${esc(note)}</small></span>
         ${chip}
       </button>`;
   }
@@ -4539,9 +5166,9 @@ function renderPlayers() {
 
   let tableBody = '';
   if (tab === 'roster') {
-    tableBody = list.length
+    tableBody = rosterSorted.length
       ? rosterSorted.map(rosterRow).join('')
-      : `<div class="players-empty players-empty--compact"><p>No players yet — add a name above</p></div>`;
+      : `<div class="players-empty players-empty--compact"><p>${year === 'all' ? 'No players yet — add a name above' : `Nobody played in ${year}`}</p></div>`;
   } else if (tab === 'batting') {
     tableBody = batRanked.length
       ? batRanked.map((p, i) => statRow(p, i + 1, 'bat')).join('')
@@ -4557,6 +5184,7 @@ function renderPlayers() {
       <div class="bcc-top">
         <button type="button" class="bcc-ib" data-action="back-home" aria-label="Back">←</button>
         <span class="bcc-an">Players</span>
+        ${renderSeasonChip()}
       </div>
       <div class="bcc-art"></div>
       <div class="bcc-scroll">
@@ -4574,7 +5202,7 @@ function renderPlayers() {
               </button>
             `).join('')}
           </div>
-          ${tab === 'roster' && list.length ? `<div class="bcc-colhead"><span>Runs</span><span>Wkts</span></div>` : ''}
+          ${tab === 'roster' && rosterSorted.length ? `<div class="bcc-colhead"><span>Runs</span><span>Wkts</span></div>` : ''}
           ${tab === 'batting' && batRanked.length ? `<div class="bcc-colhead"><span>Runs</span></div>` : ''}
           ${tab === 'bowling' && bowlRanked.length ? `<div class="bcc-colhead"><span>Wkts</span></div>` : ''}
           <div class="bcc-plist">${tableBody}</div>
@@ -4661,9 +5289,17 @@ function renderPlayerDetail() {
   const raw = state.playerDetail;
   if (!raw) return renderPlayers();
   const QP = window.QCPlayers;
-  const bat = QP.battingView ? QP.battingView(raw.batting) : raw.batting;
-  const bowl = QP.bowlingView ? QP.bowlingView(raw.bowling) : raw.bowling;
+  const pool = seasonMatchPool();
+  const years = QP.seasonYears ? QP.seasonYears(state.players, pool) : [];
+  const season = years.includes(state.playerSeason) ? state.playerSeason : 'all';
+  if (season !== state.playerSeason) state.playerSeason = season;
+  const viewed = season !== 'all' && QP.playerInSeason ? QP.playerInSeason(raw, season) : raw;
+  const bat = QP.battingView ? QP.battingView(viewed.batting) : viewed.batting;
+  const bowl = QP.bowlingView ? QP.bowlingView(viewed.bowling) : viewed.bowling;
   const p = raw;
+  const rankedPool = season !== 'all' && QP.playerInSeason
+    ? state.players.map(pl => QP.playerInSeason(pl, season))
+    : state.players;
   const balls = bat.balls || 0;
   const dots = Math.min(bat.dots || 0, balls);
   const fours = Math.min(bat.fours || 0, balls);
@@ -4694,12 +5330,12 @@ function renderPlayerDetail() {
   const share = bat.teamRuns ? Math.round(Math.min(1, bat.runs / bat.teamRuns) * 100) : 0;
   const stood = bowl.innings ? Math.round(((bowl.stoodUp || 0) / bowl.innings) * 100) : 0;
   const bestPos = QP.bestBattingPosition(bat);
-  const clubRuns = state.players.reduce((s, pl) => s + (pl.batting?.runs || 0), 0);
-  const clubWkts = state.players.reduce((s, pl) => s + (pl.bowling?.wickets || 0), 0);
+  const clubRuns = rankedPool.reduce((s, pl) => s + (pl.batting?.runs || 0), 0);
+  const clubWkts = rankedPool.reduce((s, pl) => s + (pl.bowling?.wickets || 0), 0);
   const runPct = clubRuns ? Math.round((bat.runs / clubRuns) * 100) : 0;
   const wktPct = clubWkts ? Math.round((bowl.wickets / clubWkts) * 100) : 0;
-  const batRank = state.players.filter(pl => (pl.batting?.runs || 0) > bat.runs).length + 1;
-  const bowlRank = state.players.filter(pl => (pl.bowling?.wickets || 0) > bowl.wickets).length + 1;
+  const batRank = rankedPool.filter(pl => (pl.batting?.runs || 0) > bat.runs).length + 1;
+  const bowlRank = rankedPool.filter(pl => (pl.bowling?.wickets || 0) > bowl.wickets).length + 1;
   const statTab = state.playerStatTab === 'bowl' ? 'bowl' : 'bat';
   const batting = statTab !== 'bowl';
   const hasBat = (bat.runs || 0) > 0;
@@ -4709,6 +5345,32 @@ function renderPlayerDetail() {
   const kpis = batting
     ? [[bat.runs, 'Runs'], [QP.batSR(bat), 'Strike rate'], [`${runPct}%`, 'Of club runs']]
     : [[bowl.wickets, 'Wickets'], [QP.fmtOvers(bowl.balls), 'Overs'], [`${wktPct}%`, 'Of club wkts']];
+  const prevYear = season !== 'all' ? String(Number(season) - 1) : '';
+  const prevView = prevYear && years.includes(prevYear) && QP.playerInSeason ? QP.playerInSeason(raw, prevYear) : null;
+  const prevBat = prevView && QP.battingView ? QP.battingView(prevView.batting) : null;
+  const prevBowl = prevView && QP.bowlingView ? QP.bowlingView(prevView.bowling) : null;
+  const cardKpis = [
+    [bat.runs, 'Runs', prevBat ? seasonDelta(bat.runs, prevBat.runs, false) : ''],
+    [QP.batAvg(bat), 'Avg', prevBat ? seasonDelta(parseFloat(QP.batAvg(bat)), parseFloat(QP.batAvg(prevBat)), false) : ''],
+    [QP.batSR(bat), 'SR', prevBat ? seasonDelta(parseFloat(QP.batSR(bat)), parseFloat(QP.batSR(prevBat)), false) : ''],
+    [bowl.wickets, 'Wkts', prevBowl ? seasonDelta(bowl.wickets, prevBowl.wickets, false) : ''],
+  ];
+  const formMatches = completedSeasonMatches(season).map(m => ({ line: playerRunsInMatch(m, raw) })).filter(x => x.line.faced);
+  const formPeak = Math.max(1, ...formMatches.map(x => x.line.runs), 0);
+  const formHtml = formMatches.length ? `
+    <div class="bcc-bx"><h4><span>${season === 'all' ? 'Runs per match' : `${season} form · runs per match`}</span><i>Best: ${formPeak}</i></h4>
+      <div class="ssn-form">${formMatches.map((x, i) => `<div>${x.line.runs}<i class="${x.line.runs === formPeak && x.line.runs > 0 ? 'is-hi' : ''}" style="height:${Math.max(3, Math.round((x.line.runs / formPeak) * 72))}px"></i><em>${i + 1}</em></div>`).join('')}</div>
+    </div>` : '';
+  const seasonTable = years.map(y => {
+    const view = QP.playerInSeason(raw, y);
+    const b = QP.battingView(view.batting);
+    const w = QP.bowlingView(view.bowling);
+    if (!(b.innings || w.innings || b.runs || w.wickets)) return '';
+    return `<div class="ssn-tb${y === season ? ' is-cur' : ''}"><b>${esc(y)}</b><span>${b.innings}</span><span class="r bcc-an">${b.runs}</span><span>${esc(String(QP.batAvg(b)))}</span><span>${esc(String(QP.batSR(b)))}</span><span>${w.wickets}</span></div>`;
+  }).join('');
+  const capPool = season !== 'all' && QP.playerInSeason ? state.players.map(pl => QP.playerInSeason(pl, season)) : state.players;
+  const capLeader = QP.battingRankings(capPool)[0];
+  const holdsCap = season !== 'all' && capLeader && capLeader.id === p.id && (capLeader.batting?.runs || 0) > 0;
   const badge = batting
     ? (hasBat ? `<span class="bcc-rkb">#${batRank} run scorer</span>` : '')
     : (hasBowl ? `<span class="bcc-rkb">#${bowlRank} wicket taker</span>` : '');
@@ -4760,26 +5422,32 @@ function renderPlayerDetail() {
   return `
     <div class="screen bcc-player">
       <div class="bcc-top">
-        <button type="button" class="bcc-ib" data-action="players" aria-label="Back">←</button>
+        <button type="button" class="bcc-ib" data-action="${state.playerFrom === 'seasons' ? 'seasons' : 'players'}" aria-label="Back">←</button>
         <span class="bcc-an">${esc(p.name)}</span>
       </div>
       <div class="bcc-art"></div>
       <div class="bcc-scroll">
-        <div class="bcc-tabs2">
-          <button type="button" class="${batting ? 'is-on' : ''}" data-action="player-stat-tab" data-tab="bat">🏏 Batting</button>
-          <button type="button" class="${batting ? '' : 'is-on'}" data-action="player-stat-tab" data-tab="bowl">🔴 Bowling</button>
-        </div>
-        <div class="bcc-pcard${batting ? '' : ' is-bowl'}">
+        <div class="bcc-pcard">
           <div class="bcc-pcard-in">
-            <div class="bcc-pbig" aria-hidden="true">${batting ? '🏏' : '🔴'}</div>
+            <div class="ssn-sw">
+              ${years.map(y => `<button type="button" class="${season === y ? 'is-on' : ''}" data-action="player-season" data-year="${esc(y)}">${esc(y)}</button>`).join('')}
+              <button type="button" class="${season === 'all' ? 'is-on' : ''}" data-action="player-season" data-year="all">All-time</button>
+            </div>
+            <div class="bcc-pbig bcc-an" aria-hidden="true">${esc((p.name || '?').trim().charAt(0).toUpperCase())}</div>
             <h3 class="bcc-an">${esc(p.name)}</h3>
-            <p>${batting ? 'Batting' : 'Bowling'}</p>
-            ${badge}
-            <div class="bcc-kp">
-              ${kpis.map(([val, label]) => `<div><b class="bcc-an">${esc(String(val))}</b><small>${esc(label)}</small></div>`).join('')}
+            <p>${bat.innings} innings · ${bowl.wickets} wickets${season === 'all' ? '' : ' this season'}</p>
+            <div class="bcc-kp ssn-kp">
+              ${cardKpis.map(([val, label, delta]) => `<div><b class="bcc-an">${esc(String(val))}</b><small>${esc(label)}</small>${delta}</div>`).join('')}
             </div>
           </div>
           <div class="bcc-art"></div>
+        </div>
+        ${formHtml}
+        ${seasonTable ? `<div class="bcc-bx ssn-table"><h4>Season by season</h4><div class="ssn-tb is-head"><span>Season</span><span>Inn</span><span>Runs</span><span>Avg</span><span>SR</span><span>Wkt</span></div>${seasonTable}<div class="ssn-tb is-all"><b>All-time</b><span>${QP.battingView(raw.batting).innings}</span><span class="r bcc-an">${QP.battingView(raw.batting).runs}</span><span>${esc(String(QP.batAvg(raw.batting)))}</span><span>${esc(String(QP.batSR(raw.batting)))}</span><span>${QP.bowlingView(raw.bowling).wickets}</span></div></div>` : ''}
+        ${holdsCap ? `<div class="ssn-capnote"><span>🟠</span><span><b>Orange cap ${esc(season)}</b>Top run-scorer of the season so far</span></div>` : ''}
+        <div class="bcc-tabs2">
+          <button type="button" class="${batting ? 'is-on' : ''}" data-action="player-stat-tab" data-tab="bat">🏏 Batting</button>
+          <button type="button" class="${batting ? '' : 'is-on'}" data-action="player-stat-tab" data-tab="bowl">🔴 Bowling</button>
         </div>
         <div class="bcc-wrap bcc-statbody">
           ${body}
@@ -4789,7 +5457,7 @@ function renderPlayerDetail() {
           </div>
         </div>
       </div>
-      ${renderBccDock('players')}
+      ${renderBccDock(state.playerFrom === 'seasons' ? 'seasons' : 'players')}
     </div>
   `;
 }
@@ -4797,7 +5465,9 @@ function renderPlayerDetail() {
 function renderHistory() {
   const filter = state.historyFilter;
   const customDate = state.historyDate;
-  const completed = state.history.filter(m => m.status === 'completed');
+  const year = activeSeason();
+  const allCompleted = completedSeasonMatches('all');
+  const completed = year === 'all' ? allCompleted : completedSeasonMatches(year);
   const filtered = filterByDate(completed, filter, customDate)
     .slice()
     .sort((a, b) => (b.startedAt || 0) - (a.startedAt || 0));
@@ -4823,6 +5493,7 @@ function renderHistory() {
       <div class="bcc-top">
         <button type="button" class="bcc-ib" data-action="back-home" aria-label="Back">←</button>
         <span class="bcc-an">Past matches</span>
+        ${renderSeasonChip()}
         ${state.loadingHistory ? '<span class="bcc-pm-spin" aria-label="Loading"></span>' : ''}
       </div>
       <div class="bcc-scroll">
@@ -4847,7 +5518,7 @@ function renderHistory() {
             <input id="history-date-input" type="date" value="${esc(customDate || '')}" max="${todayIso()}" />
           </label>
         </div>
-        <div class="bcc-pm-cnt">Showing ${filtered.length} of ${completed.length} ${completed.length === 1 ? 'match' : 'matches'}</div>
+        <div class="bcc-pm-cnt">Showing ${filtered.length} of ${allCompleted.length} ${allCompleted.length === 1 ? 'match' : 'matches'}</div>
         ${list}
       </div>
     </div>
@@ -5029,10 +5700,11 @@ function renderAbortModal() {
 
 function renderModal() {
   if (!state.modal) return '';
+  if (state.modal.type === 'seasonPicker') return renderSeasonPicker();
   if (state.modal.type === 'abort') return renderAbortModal();
   if (state.modal.type === 'install') return renderInstallModal();
   if (state.modal.type === 'editOverPin') {
-    return renderBsSheet('Edit overs', 'Enter the PIN, then tap any ball in this over or the previous over to change it.', `
+    return renderBsSheet('Edit this ball', 'Enter the PIN to change a ball from this over or the one before it.', `
       <label class="form-label" for="edit-over-pin-input">PIN</label>
       <input id="edit-over-pin-input" class="form-control form-control-lg text-center font-monospace fw-bold pin-input" type="text" inputmode="numeric" maxlength="4" pattern="[0-9]{4}" placeholder="····" autocomplete="off" enterkeyhint="done" />
     `, `
@@ -5380,11 +6052,63 @@ function handle(action, dataset) {
     case 'players':
       state.view = 'players';
       state.playerDetail = null;
+      state.playerFrom = 'players';
       render();
       refreshCareerStatsIfNeeded();
       break;
+    case 'seasons':
+      state.view = 'seasons';
+      state.playerDetail = null;
+      state.playerFrom = 'seasons';
+      render();
+      refreshCareerStatsIfNeeded();
+      break;
+    case 'season-picker':
+      state.modal = { type: 'seasonPicker' };
+      render();
+      break;
+    case 'close-season-picker':
+      state.modal = null;
+      render();
+      break;
+    case 'pick-season':
+      state.appSeason = dataset.year || 'all';
+      state.playerSeason = state.appSeason;
+      state.modal = null;
+      render();
+      break;
+    case 'season-leader':
+      state.seasonLeader = dataset.tab || 'runs';
+      render();
+      break;
+    case 'season-qualified':
+      state.seasonQualified = !state.seasonQualified;
+      render();
+      break;
+    case 'open-wrapped':
+      state.wrappedStep = 0;
+      state.view = 'wrapped';
+      state.modal = null;
+      render();
+      break;
+    case 'wrapped-next':
+      state.wrappedStep = (state.wrappedStep || 0) + 1;
+      render();
+      break;
+    case 'wrapped-close':
+      state.view = 'seasons';
+      render();
+      break;
+    case 'wrapped-share':
+      shareSeasonWrap();
+      break;
     case 'players-tab':
       state.playersTab = dataset.tab || 'roster';
+      render();
+      break;
+    case 'player-season':
+      state.playerSeason = dataset.year || 'all';
+      state.appSeason = state.playerSeason;
       render();
       break;
     case 'admin-reassign-scope': {
@@ -5404,6 +6128,8 @@ function handle(action, dataset) {
       if (p) {
         state.playerDetail = p;
         state.playerStatTab = dataset.from === 'bowling' ? 'bowl' : 'bat';
+        state.playerFrom = state.view === 'seasons' ? 'seasons' : 'players';
+        state.playerSeason = activeSeason();
         state.view = 'player-detail';
         render();
       }
@@ -5846,8 +6572,14 @@ function handle(action, dataset) {
     case 'edit-ball': {
       const logIndex = parseInt(dataset.logIndex, 10);
       const inn = state.current?.innings?.[state.current?.currentInnings];
-      if (!inn || !isLogIndexEditable(inn, logIndex)) {
+      if (!inn || !isLogIndexInEditWindow(inn, logIndex)) {
         showToast('That ball cannot be edited');
+        break;
+      }
+      if (!state.overEditUnlocked) {
+        state.editOverIntent = logIndex;
+        state.modal = { type: 'editOverPin' };
+        render();
         break;
       }
       const entry = inn.ballLog[logIndex];
@@ -5970,7 +6702,7 @@ function handle(action, dataset) {
       } else if (state.current?.undo?.length && !state.overEditUnlocked) {
         const inn = state.current.innings?.[state.current.currentInnings];
         if (inn?.needNewBatter || inn?.needNewBowler) {
-          showToast('Enter PIN via Edit over to undo earlier balls');
+          showToast('Enter the PIN to undo an earlier ball');
         } else {
           state.modal = { type: 'editOverPin' };
           render();
@@ -6188,10 +6920,11 @@ async function init() {
   bootNavHistory();
   render();
 
-  if (dbOn()) {
+    if (dbOn()) {
     await refreshPlayers();
     render();
     refreshHistory();
+    refreshCareerStatsIfNeeded();
   }
 
   document.addEventListener('visibilitychange', () => {

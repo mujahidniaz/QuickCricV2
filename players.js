@@ -111,6 +111,7 @@
       updatedAt: now,
       batting: emptyBatting(),
       bowling: emptyBowling(),
+      seasons: {},
     };
   }
 
@@ -183,6 +184,18 @@
     };
   }
 
+  function mergeSeasons(a, b) {
+    const out = {};
+    const years = new Set([...Object.keys(a || {}), ...Object.keys(b || {})]);
+    for (const year of years) {
+      out[year] = {
+        batting: mergeBatting(a?.[year]?.batting, b?.[year]?.batting),
+        bowling: mergeBowling(a?.[year]?.bowling, b?.[year]?.bowling),
+      };
+    }
+    return out;
+  }
+
   function playerActivity(p) {
     return (p.batting?.runs || 0) + (p.bowling?.wickets || 0) * 25 +
       (p.batting?.matches || 0) + (p.bowling?.matches || 0);
@@ -219,10 +232,12 @@
         name: winner.name.trim().replace(/\s+/g, ' '),
         batting: emptyBatting(),
         bowling: emptyBowling(),
+        seasons: {},
       };
       for (const p of group) {
         merged.batting = mergeBatting(merged.batting, p.batting || emptyBatting());
         merged.bowling = mergeBowling(merged.bowling, p.bowling || emptyBowling());
+        merged.seasons = mergeSeasons(merged.seasons, p.seasons);
         if (p.id !== winner.id) removedIds.push(p.id);
       }
       touch(merged);
@@ -509,10 +524,129 @@
     }
   }
 
+  function seasonKeyOf(match) {
+    const t = Number(match?.startedAt) || Number(match?.endedAt) || 0;
+    if (!t) return '';
+    return String(new Date(t).getFullYear());
+  }
+
+  function ensureSeason(p, year) {
+    if (!year) return null;
+    if (!p.seasons || typeof p.seasons !== 'object' || Array.isArray(p.seasons)) p.seasons = {};
+    if (!p.seasons[year]) p.seasons[year] = { batting: emptyBatting(), bowling: emptyBowling() };
+    p.seasons[year].batting = battingView(p.seasons[year].batting);
+    p.seasons[year].bowling = bowlingView(p.seasons[year].bowling);
+    return p.seasons[year];
+  }
+
+  /** Career figures, or a copy limited to one calendar year. */
+  function playerInSeason(p, year) {
+    if (!p || !year || year === 'all') return p;
+    const bag = p.seasons?.[String(year)];
+    return {
+      id: p.id,
+      name: p.name,
+      batting: battingView(bag?.batting),
+      bowling: bowlingView(bag?.bowling),
+    };
+  }
+
+  function seasonYears(players, matches) {
+    const years = new Set();
+    for (const p of players || []) {
+      for (const year of Object.keys(p?.seasons || {})) {
+        if (/^\d{4}$/.test(year)) years.add(year);
+      }
+    }
+    for (const match of matches || []) {
+      const year = seasonKeyOf(match);
+      if (year) years.add(year);
+    }
+    return [...years].sort((a, b) => Number(b) - Number(a));
+  }
+
+  function seasonFacts(players, matches, year) {
+    const y = String(year || '');
+    const played = (matches || []).filter(m => m && m.status === 'completed' && seasonKeyOf(m) === y);
+    let balls = 0;
+    for (const match of played) {
+      for (const inn of match.innings || []) balls += inn.score?.balls || 0;
+    }
+    const views = (players || []).map(p => playerInSeason(p, y));
+    const batter = battingRankings(views)[0] || null;
+    const bowler = bowlingRankings(views)[0] || null;
+    const extrasLeader = views
+      .filter(p => (p.bowling?.extras || 0) > 0)
+      .sort((a, b) => (b.bowling.extras || 0) - (a.bowling.extras || 0))[0] || null;
+    const withBalls = views.filter(p => (p.bowling?.balls || 0) > 0);
+    const qualified = withBalls.filter(p => (p.bowling.balls || 0) >= 24);
+    const econPool = qualified.length ? qualified : withBalls;
+    const economy = econPool.slice().sort((a, b) => {
+      const ea = (a.bowling.runs / a.bowling.balls) * 6;
+      const eb = (b.bowling.runs / b.bowling.balls) * 6;
+      if (ea !== eb) return ea - eb;
+      return (b.bowling.balls || 0) - (a.bowling.balls || 0);
+    })[0] || null;
+    const clutch = views.slice().sort((a, b) => {
+      const ca = (a.batting?.carriedWins || 0) + (a.bowling?.stoodUpWins || 0);
+      const cb = (b.batting?.carriedWins || 0) + (b.bowling?.stoodUpWins || 0);
+      if (cb !== ca) return cb - ca;
+      const ta = (a.batting?.carried || 0) + (a.bowling?.stoodUp || 0);
+      const tb = (b.batting?.carried || 0) + (b.bowling?.stoodUp || 0);
+      return tb - ta;
+    })[0] || null;
+    const clutchWins = clutch
+      ? (clutch.batting?.carriedWins || 0) + (clutch.bowling?.stoodUpWins || 0)
+      : 0;
+    if (!balls) {
+      balls = views.reduce((sum, p) => sum + (p.bowling?.balls || 0), 0);
+    }
+    return {
+      year: y,
+      matches: played.length,
+      balls,
+      batter: (batter && (batter.batting?.runs || 0) > 0) ? batter : null,
+      bowler: (bowler && ((bowler.bowling?.wickets || 0) > 0 || (bowler.bowling?.balls || 0) > 0)) ? bowler : null,
+      extrasLeader,
+      economy,
+      clutch: clutchWins > 0 ? clutch : null,
+      clutchWins,
+    };
+  }
+
+  /**
+   * Leaderboards compare per-innings rates, so a player who featured in fewer matches is
+   * not ranked lower just for missing games. Players need MIN_QUALIFY_INNINGS to be ranked
+   * above the rest; everyone else still appears, after the qualified players.
+   */
+  const MIN_QUALIFY_INNINGS = 5;
+
+  function battingRunsPerInnings(s) {
+    const inns = s?.innings || 0;
+    return inns ? (s.runs || 0) / inns : 0;
+  }
+
+  function bowlingWicketsPerInnings(s) {
+    const inns = s?.innings || 0;
+    return inns ? (s.wickets || 0) / inns : 0;
+  }
+
+  function battingQualifies(s) {
+    return (s?.innings || 0) >= MIN_QUALIFY_INNINGS;
+  }
+
+  function bowlingQualifies(s) {
+    return (s?.innings || 0) >= MIN_QUALIFY_INNINGS;
+  }
+
   function battingRankings(players) {
     return [...players]
       .filter(p => (p.batting?.innings || 0) > 0 || (p.batting?.runs || 0) > 0)
       .sort((a, b) => {
+        const qa = battingQualifies(a.batting), qb = battingQualifies(b.batting);
+        if (qa !== qb) return qa ? -1 : 1;
+        const rateA = battingRunsPerInnings(a.batting), rateB = battingRunsPerInnings(b.batting);
+        if (Math.abs(rateB - rateA) > 1e-9) return rateB - rateA;
         const runsA = a.batting.runs || 0;
         const runsB = b.batting.runs || 0;
         if (runsB !== runsA) return runsB - runsA;
@@ -527,6 +661,10 @@
     return [...players]
       .filter(p => (p.bowling?.wickets || 0) > 0 || (p.bowling?.balls || 0) > 0)
       .sort((a, b) => {
+        const qa = bowlingQualifies(a.bowling), qb = bowlingQualifies(b.bowling);
+        if (qa !== qb) return qa ? -1 : 1;
+        const rateA = bowlingWicketsPerInnings(a.bowling), rateB = bowlingWicketsPerInnings(b.bowling);
+        if (Math.abs(rateB - rateA) > 1e-9) return rateB - rateA;
         const wA = a.bowling.wickets || 0;
         const wB = b.bowling.wickets || 0;
         if (wB !== wA) return wB - wA;
@@ -1182,41 +1320,39 @@
       if (!bat.faced && !bowl.bowled) continue;
 
       any = true;
-      p.batting = battingView(p.batting);
-      p.bowling = bowlingView(p.bowling);
-      touch(p);
+      const stat = { batting: emptyBatting(), bowling: emptyBowling() };
       const side = playerTeamInMatch(match, p.id, p.name);
       const won = !!(side && winner && side === winner);
 
       if (bat.faced) {
-        p.batting.matches += 1;
-        p.batting.innings += 1;
-        p.batting.runs += bat.runs;
-        p.batting.balls += bat.balls;
-        p.batting.fours += bat.fours;
-        p.batting.sixes += bat.sixes;
-        if (bat.runs > p.batting.highest) p.batting.highest = bat.runs;
-        if (bat.runs >= 100) p.batting.hundreds += 1;
-        else if (bat.runs >= 50) p.batting.fifties += 1;
-        if (bat.out && bat.runs === 0) p.batting.ducks += 1;
-        if (!bat.out) p.batting.notOuts += 1;
-        if (won) p.batting.wins += 1;
+        stat.batting.matches += 1;
+        stat.batting.innings += 1;
+        stat.batting.runs += bat.runs;
+        stat.batting.balls += bat.balls;
+        stat.batting.fours += bat.fours;
+        stat.batting.sixes += bat.sixes;
+        if (bat.runs > stat.batting.highest) stat.batting.highest = bat.runs;
+        if (bat.runs >= 100) stat.batting.hundreds += 1;
+        else if (bat.runs >= 50) stat.batting.fifties += 1;
+        if (bat.out && bat.runs === 0) stat.batting.ducks += 1;
+        if (!bat.out) stat.batting.notOuts += 1;
+        if (won) stat.batting.wins += 1;
       }
 
       if (bowl.bowled) {
-        p.bowling.matches += 1;
-        p.bowling.innings += 1;
-        p.bowling.balls += bowl.balls;
-        p.bowling.runs += bowl.runs;
-        p.bowling.wickets += bowl.wickets;
-        if (bowl.wickets > p.bowling.bestWickets ||
-          (bowl.wickets === p.bowling.bestWickets && bowl.runs < (p.bowling.bestRuns ?? 999))) {
-          p.bowling.bestWickets = bowl.wickets;
-          p.bowling.bestRuns = bowl.runs;
+        stat.bowling.matches += 1;
+        stat.bowling.innings += 1;
+        stat.bowling.balls += bowl.balls;
+        stat.bowling.runs += bowl.runs;
+        stat.bowling.wickets += bowl.wickets;
+        if (bowl.wickets > stat.bowling.bestWickets ||
+          (bowl.wickets === stat.bowling.bestWickets && bowl.runs < (stat.bowling.bestRuns ?? 999))) {
+          stat.bowling.bestWickets = bowl.wickets;
+          stat.bowling.bestRuns = bowl.runs;
         }
-        if (bowl.wickets >= 5) p.bowling.fiveWickets += 1;
-        else if (bowl.wickets >= 3) p.bowling.threeWickets += 1;
-        if (won) p.bowling.wins += 1;
+        if (bowl.wickets >= 5) stat.bowling.fiveWickets += 1;
+        else if (bowl.wickets >= 3) stat.bowling.threeWickets += 1;
+        if (won) stat.bowling.wins += 1;
       }
 
       let carriedThisMatch = false;
@@ -1226,22 +1362,22 @@
           (p.id && b.playerId === p.id) || nameHit(b.name, p.name));
         if (batter) {
           const pos = String((inn.batters.indexOf(batter) || 0) + 1);
-          if (!p.batting.positions[pos]) {
-            p.batting.positions[pos] = { inns: 0, runs: 0, outs: 0, balls: 0, dots: 0 };
+          if (!stat.batting.positions[pos]) {
+            stat.batting.positions[pos] = { inns: 0, runs: 0, outs: 0, balls: 0, dots: 0 };
           }
           const dots = battingDotsFromLog(inn, batter.name);
-          const slot = p.batting.positions[pos];
+          const slot = stat.batting.positions[pos];
           slot.inns += 1;
           slot.runs += batter.runs || 0;
           slot.balls += batter.balls || 0;
           slot.dots += dots;
           const dismissed = !!(batter.out && batter.dismissal !== 'retired hurt');
           if (dismissed) slot.outs += 1;
-          p.batting.dots += dots;
-          p.batting.teamRuns += inn.score?.runs || 0;
+          stat.batting.dots += dots;
+          stat.batting.teamRuns += inn.score?.runs || 0;
           const rest = (inn.score?.runs || 0) - (batter.runs || 0);
           if ((batter.runs || 0) > 0 && (batter.runs || 0) > rest) {
-            p.batting.carried += 1;
+            stat.batting.carried += 1;
             carriedThisMatch = true;
           }
         }
@@ -1250,26 +1386,34 @@
           (p.id && b.playerId === p.id) || nameHit(b.name, p.name));
         const spell = bowlingFromLog(inn, card?.name || p.name);
         if (spell.bowled) {
-          p.bowling.deliveries += spell.deliveries;
-          p.bowling.extras += spell.extras;
-          p.bowling.wides += spell.wides;
-          p.bowling.noBalls += spell.noBalls;
-          p.bowling.dots += spell.dots;
-          addOverSlots(p.bowling, spell.slots);
+          stat.bowling.deliveries += spell.deliveries;
+          stat.bowling.extras += spell.extras;
+          stat.bowling.wides += spell.wides;
+          stat.bowling.noBalls += spell.noBalls;
+          stat.bowling.dots += spell.dots;
+          addOverSlots(stat.bowling, spell.slots);
           const others = (inn.bowlers || [])
             .filter(b => b !== card)
             .reduce((sum, b) => sum + (b.wickets || 0), 0);
           const wkts = card ? (card.wickets || 0) : spell.wickets;
           if (wkts >= 1 && wkts >= others) {
-            p.bowling.stoodUp += 1;
+            stat.bowling.stoodUp += 1;
             stoodThisMatch = true;
           }
         } else if (card && (card.balls || card.runs || card.wickets)) {
-          p.bowling.deliveries += card.balls || 0;
+          stat.bowling.deliveries += card.balls || 0;
         }
       }
-      if (carriedThisMatch && won) p.batting.carriedWins += 1;
-      if (stoodThisMatch && won) p.bowling.stoodUpWins += 1;
+      if (carriedThisMatch && won) stat.batting.carriedWins += 1;
+      if (stoodThisMatch && won) stat.bowling.stoodUpWins += 1;
+      p.batting = mergeBatting(p.batting, stat.batting);
+      p.bowling = mergeBowling(p.bowling, stat.bowling);
+      const season = ensureSeason(p, seasonKeyOf(match));
+      if (season) {
+        season.batting = mergeBatting(season.batting, stat.batting);
+        season.bowling = mergeBowling(season.bowling, stat.bowling);
+      }
+      touch(p);
     }
     return any;
   }
@@ -1283,6 +1427,7 @@
   function resetCareerStats(p) {
     p.batting = emptyBatting();
     p.bowling = emptyBowling();
+    p.seasons = {};
   }
 
   function lineIsSource(line, sourceId, sourceName) {
@@ -1630,6 +1775,15 @@
     bowlingView,
     battingRankings,
     bowlingRankings,
+    battingRunsPerInnings,
+    bowlingWicketsPerInnings,
+    battingQualifies,
+    bowlingQualifies,
+    MIN_QUALIFY_INNINGS,
+    seasonKeyOf,
+    seasonYears,
+    seasonFacts,
+    playerInSeason,
     teamBalanceScores,
     balanceTeams,
     normalizeSquadSizes,
