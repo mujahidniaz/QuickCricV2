@@ -5236,6 +5236,26 @@ button.sc-ball { font: inherit; cursor: pointer; }
 .ssn-tb .r { font-size: 18px; color: #0a2118; }
 .ssn-tb.is-cur { background: #f7f2e4; margin: 0 -14px; padding-left: 14px; padding-right: 14px; }
 .ssn-tb.is-all { border-top: 2px solid #0a2118; }
+.ssn-tb.is-split { grid-template-columns: 1.4fr 40px 52px 52px 56px; }
+.ssn-form.is-bowl i { background: #f0b8ae; }
+.ssn-form.is-bowl i.is-hi { background: #d8432b; box-shadow: inset 0 0 0 2px #0a2118; }
+.bcc-player .bcc-pcard .bcc-tabs2 { margin: 14px 0 0; position: relative; z-index: 2; }
+.bcc-player .bcc-pcard .bcc-tabs2.is-rank { margin-top: 8px; }
+.bcc-players .bcc-seg.is-rank { margin-top: 8px; }
+.bcc-prow.is-me { border-color: #0a2118; box-shadow: inset 0 0 0 1px #0a2118; }
+.bcc-player .bcc-pcard .bcc-tabs2 button {
+  background: rgba(255, 255, 255, 0.14);
+  border-color: transparent;
+  color: #f1f5e9;
+}
+.bcc-player .bcc-pcard .bcc-tabs2 button.is-on {
+  background: #d9ff3f;
+  border-color: #d9ff3f;
+  color: #0a2118;
+}
+.bcc-player .bcc-pcard .bcc-kp,
+.bcc-player .bcc-pcard .bcc-rkb { z-index: 1; }
+.bcc-player .bcc-statbody .ssn-capnote { margin: 12px 0 0; }
 .ssn-capnote { display: flex; gap: 10px; align-items: center; margin: 0 14px 12px; background: rgba(242, 169, 0, 0.12); border: 1px solid rgba(242, 169, 0, 0.35); border-radius: 16px; padding: 10px 12px; font-size: 12px; font-weight: 700; color: #6b766e; }
 .ssn-capnote b { display: block; color: #0a2118; font-size: 13px; }
 

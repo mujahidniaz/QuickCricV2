@@ -615,8 +615,8 @@
   }
 
   /**
-   * Leaderboards compare per-innings rates, so a regular who missed a few games is not
-   * ranked lower for that. Players under MIN_QUALIFY_INNINGS stay off the board.
+   * Batting and bowling lists are ordered by total runs and total wickets.
+   * MIN_QUALIFY_INNINGS is the floor for the strike-rate, sixes and extras lists.
    */
   const MIN_QUALIFY_INNINGS = 20;
 
@@ -638,12 +638,186 @@
     return (s?.innings || 0) >= MIN_QUALIFY_INNINGS;
   }
 
+  /**
+   * Club ratings using the ICC player-ranking method (icc-cricket.com/rankings/about
+   * and the MRF Tyres rankings note). ICC publishes the factors and the 0–1000
+   * moving average, not the secret coefficients. The scale below is anchored to
+   * their own example: a 50 is a "50-type" innings (about 500 points) before the
+   * new-player discount, and a T20 batter shows about 40% of that until the
+   * discount fades, reaching 100% after 20 innings.
+   *
+   * Batting weighs runs, strike rate (T20), the bowling attack's rating, how
+   * easy runs were in that innings, a small not-out bonus, and a win bonus.
+   * Bowling weighs wickets, the ratings of the batters dismissed, economy
+   * (heavier in T20), workload, and a win bonus. A bowler who sits out a
+   * high-scoring innings loses a little. Recent innings count more; the career
+   * still counts.
+   */
+  const ICC_FULL_INNINGS = 20;
+  const ICC_PRIOR = 500;
+  const ICC_DECAY = 0.97;
+  const ICC_PAR_RPO = 7.5;
+
+  function iccClamp(n, lo, hi) {
+    return Math.min(hi, Math.max(lo, n));
+  }
+
+  function iccQualify(innings) {
+    const n = innings || 0;
+    if (n <= 0) return 0;
+    if (n >= ICC_FULL_INNINGS) return 1;
+    return 0.4 + 0.6 * ((n - 1) / (ICC_FULL_INNINGS - 1));
+  }
+
+  function iccRankings(players, matches) {
+    const roster = (players || []).filter(p => p && p.id);
+    const byId = new Map(roster.map(p => [p.id, p]));
+    const byName = new Map(roster.map(p => [normalizeName(p.name), p]));
+    const resolve = (card) => {
+      if (!card) return null;
+      if (card.playerId && byId.has(card.playerId)) return byId.get(card.playerId);
+      return byName.get(normalizeName(card.name)) || null;
+    };
+    const batState = new Map();
+    const bowlState = new Map();
+    const blank = () => ({ points: 0, weight: 0, inns: 0 });
+    const bucket = (map, id) => {
+      let s = map.get(id);
+      if (!s) { s = blank(); map.set(id, s); }
+      return s;
+    };
+    const rawOf = (map, id) => {
+      const s = map.get(id);
+      if (!s || !s.weight || !s.inns) return ICC_PRIOR;
+      return s.points / s.weight;
+    };
+    const addPerf = (map, id, perf) => {
+      const s = bucket(map, id);
+      s.points = s.points * ICC_DECAY + perf;
+      s.weight = s.weight * ICC_DECAY + 1;
+      s.inns += 1;
+    };
+
+    const ordered = (matches || [])
+      .filter(m => m && m.status === 'completed' && m.innings)
+      .slice()
+      .sort((a, b) => (a.startedAt || 0) - (b.startedAt || 0));
+
+    for (const match of ordered) {
+      const winner = winningSide(match);
+      const overs = Number(match.overs) || 20;
+      for (const inn of match.innings || []) {
+        const innRuns = inn.score?.runs || 0;
+        const innBalls = inn.score?.balls || 0;
+        const innRPO = innBalls ? (innRuns / innBalls) * 6 : ICC_PAR_RPO;
+        const scoringFactor = iccClamp(ICC_PAR_RPO / (innRPO || ICC_PAR_RPO), 0.7, 1.45);
+        let atkSum = 0;
+        let atkW = 0;
+        for (const card of inn.bowlers || []) {
+          const pl = resolve(card);
+          const balls = card.balls || 0;
+          if (!pl || !balls) continue;
+          atkSum += rawOf(bowlState, pl.id) * balls;
+          atkW += balls;
+        }
+        const attack = atkW ? atkSum / atkW : ICC_PRIOR;
+        const opp = iccClamp(attack / ICC_PRIOR, 0.75, 1.4);
+
+        const dismissals = new Map();
+        for (const ball of inn.ballLog || []) {
+          if (!ball.wicket || ball.runOut || !ball.dismissed) continue;
+          const bowler = byName.get(normalizeName(ball.bowler));
+          const batter = byName.get(normalizeName(ball.dismissed));
+          if (!bowler) continue;
+          const list = dismissals.get(bowler.id) || [];
+          list.push(batter ? rawOf(batState, batter.id) : ICC_PRIOR);
+          dismissals.set(bowler.id, list);
+        }
+
+        const bowledIds = new Set();
+        for (const card of inn.batters || []) {
+          const pl = resolve(card);
+          if (!pl) continue;
+          const runs = card.runs || 0;
+          const balls = card.balls || 0;
+          const dismissed = !!(card.out && card.dismissal !== 'retired hurt');
+          if (!balls && !runs && !dismissed) continue;
+          const notOut = !dismissed;
+          const sr = balls ? (runs / balls) * 100 : 0;
+          const innSR = innBalls ? (innRuns / innBalls) * 100 : (sr || 100);
+          const srFactor = balls ? iccClamp(sr / (innSR || 100), 0.7, 1.55) : 1;
+          const scoredHighly = runs >= 20 || (innRuns > 0 && runs >= innRuns * 0.25);
+          const won = !!(winner && winner === inn.batting);
+          const winFactor = won && scoredHighly ? 1 + 0.1 * opp : 1;
+          const notOutFactor = notOut && runs > 0 ? 1.05 : 1;
+          const perf = iccClamp(runs * 10 * srFactor * scoringFactor * opp * notOutFactor * winFactor, 0, 1000);
+          addPerf(batState, pl.id, perf);
+        }
+
+        for (const card of inn.bowlers || []) {
+          const pl = resolve(card);
+          const balls = card.balls || 0;
+          const hadSpell = balls > 0 || (card.wickets || 0) > 0 || (card.runs || 0) > 0;
+          if (!pl || !hadSpell) continue;
+          bowledIds.add(pl.id);
+          if (!balls) continue;
+          const oversBowled = balls / 6;
+          const econ = (card.runs || 0) / oversBowled;
+          const econRatio = econ > 0 ? innRPO / econ : 3;
+          const spell = iccClamp(oversBowled / 4, 0.25, 1);
+          const econPoints = iccClamp(econRatio, 0.4, 3) * 180 * spell;
+          const known = dismissals.get(pl.id) || [];
+          const wickets = card.wickets || 0;
+          const ratings = known.slice(0, wickets);
+          const avgWkt = ratings.length
+            ? ratings.reduce((sum, r) => sum + r, 0) / ratings.length
+            : ICC_PRIOR;
+          while (ratings.length < wickets) ratings.push(avgWkt);
+          const wktPoints = ratings.reduce((sum, r) => sum + 140 * (r / ICC_PRIOR), 0);
+          const workload = iccClamp(oversBowled / 4, 0, 1) * 80;
+          let perf = econPoints + wktPoints + workload;
+          const won = !!(winner && winner === inn.bowling);
+          if (won && wickets >= 2) perf *= 1 + 0.08 * iccClamp(avgWkt / ICC_PRIOR, 0.75, 1.4);
+          addPerf(bowlState, pl.id, iccClamp(perf, 0, 1000));
+        }
+
+        const bigTotal = innRuns >= ICC_PAR_RPO * overs;
+        if (bigTotal) {
+          for (const id of match.squads?.[inn.bowling] || []) {
+            if (bowledIds.has(id) || !byId.has(id)) continue;
+            const s = bowlState.get(id);
+            if (!s || !s.inns) continue;
+            s.points *= 0.98;
+          }
+        }
+      }
+    }
+
+    const publish = (map) => roster
+      .map(p => {
+        const s = map.get(p.id);
+        if (!s || !s.inns) return null;
+        const factor = iccQualify(s.inns);
+        const raw = s.weight ? s.points / s.weight : 0;
+        return {
+          id: p.id,
+          name: p.name,
+          innings: s.inns,
+          factor,
+          raw: Math.round(iccClamp(raw, 0, 1000)),
+          rating: Math.round(iccClamp(raw * factor, 0, 1000)),
+        };
+      })
+      .filter(Boolean)
+      .sort((a, b) => b.rating - a.rating || b.innings - a.innings || a.name.localeCompare(b.name));
+
+    return { batting: publish(batState), bowling: publish(bowlState) };
+  }
+
   function battingRankings(players) {
     return [...players]
-      .filter(p => battingQualifies(p.batting))
+      .filter(p => (p.batting?.innings || 0) > 0 || (p.batting?.runs || 0) > 0)
       .sort((a, b) => {
-        const rateA = battingRunsPerInnings(a.batting), rateB = battingRunsPerInnings(b.batting);
-        if (Math.abs(rateB - rateA) > 1e-9) return rateB - rateA;
         const runsA = a.batting.runs || 0;
         const runsB = b.batting.runs || 0;
         if (runsB !== runsA) return runsB - runsA;
@@ -656,10 +830,8 @@
 
   function bowlingRankings(players) {
     return [...players]
-      .filter(p => bowlingQualifies(p.bowling))
+      .filter(p => (p.bowling?.wickets || 0) > 0 || (p.bowling?.balls || 0) > 0)
       .sort((a, b) => {
-        const rateA = bowlingWicketsPerInnings(a.bowling), rateB = bowlingWicketsPerInnings(b.bowling);
-        if (Math.abs(rateB - rateA) > 1e-9) return rateB - rateA;
         const wA = a.bowling.wickets || 0;
         const wB = b.bowling.wickets || 0;
         if (wB !== wA) return wB - wA;
@@ -1774,6 +1946,7 @@
     bowlingWicketsPerInnings,
     battingQualifies,
     bowlingQualifies,
+    iccRankings,
     MIN_QUALIFY_INNINGS,
     seasonKeyOf,
     seasonYears,
