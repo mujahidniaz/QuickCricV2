@@ -615,8 +615,8 @@
   }
 
   /**
-   * Leaderboards compare per-innings rates, so a regular who missed a few games is not
-   * ranked lower for that. Players under MIN_QUALIFY_INNINGS stay off the board.
+   * Batting and bowling lists are ordered by total runs and total wickets.
+   * MIN_QUALIFY_INNINGS is the floor for the strike-rate, sixes and extras lists.
    */
   const MIN_QUALIFY_INNINGS = 20;
 
@@ -816,10 +816,8 @@
 
   function battingRankings(players) {
     return [...players]
-      .filter(p => battingQualifies(p.batting))
+      .filter(p => (p.batting?.innings || 0) > 0 || (p.batting?.runs || 0) > 0)
       .sort((a, b) => {
-        const rateA = battingRunsPerInnings(a.batting), rateB = battingRunsPerInnings(b.batting);
-        if (Math.abs(rateB - rateA) > 1e-9) return rateB - rateA;
         const runsA = a.batting.runs || 0;
         const runsB = b.batting.runs || 0;
         if (runsB !== runsA) return runsB - runsA;
@@ -832,10 +830,8 @@
 
   function bowlingRankings(players) {
     return [...players]
-      .filter(p => bowlingQualifies(p.bowling))
+      .filter(p => (p.bowling?.wickets || 0) > 0 || (p.bowling?.balls || 0) > 0)
       .sort((a, b) => {
-        const rateA = bowlingWicketsPerInnings(a.bowling), rateB = bowlingWicketsPerInnings(b.bowling);
-        if (Math.abs(rateB - rateA) > 1e-9) return rateB - rateA;
         const wA = a.bowling.wickets || 0;
         const wB = b.bowling.wickets || 0;
         if (wB !== wA) return wB - wA;

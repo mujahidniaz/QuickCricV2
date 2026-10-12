@@ -4980,7 +4980,7 @@ function renderSeasons() {
             <div><small>Biggest win</small><b class="bcc-an">${board.biggest ? esc(board.biggest.label) : '—'}</b><span>${board.biggest ? esc(`${board.biggest.side} · ${board.biggest.when}`) : 'No result yet'}</span></div>
           </div>
         </div>
-        <div class="ssn-lab">Leaders <i>${window.QCPlayers.MIN_QUALIFY_INNINGS} innings minimum</i></div>
+        <div class="ssn-lab">Leaders</div>
         <div class="ssn-box">
           <div class="ssn-tabs">
             ${tabs.map(([id, label]) => `<button type="button" class="${leaders.tab === id ? 'is-on' : ''}" data-action="season-leader" data-tab="${id}">${label}</button>`).join('')}
@@ -4999,7 +4999,7 @@ function renderSeasons() {
               const width = peak ? Math.max(6, Math.round((value / peak) * 100)) : 0;
               return `<button type="button" class="ssn-lr" data-action="view-player" data-player-id="${esc(p.id)}" data-from="${leaders.tab === 'wickets' || leaders.tab === 'econ' ? 'bowling' : 'batting'}"><span class="k bcc-an">${i + 2}</span><span><b>${esc(p.name)}</b><i><u style="width:${width}%"></u></i></span><em class="bcc-an">${esc(String(leaders.figure(p)))}</em></button>`;
             }).join('')}
-          ` : `<p class="ssn-empty">${state.seasonQualified ? 'Nobody has qualified yet.' : `Need ${window.QCPlayers.MIN_QUALIFY_INNINGS} innings to rank.`}</p>`}
+          ` : `<p class="ssn-empty">${state.seasonQualified ? 'Nobody has qualified yet.' : 'No figures yet.'}</p>`}
         </div>
         <div class="ssn-lab">Showed up <i>of ${board.played.length} matches</i></div>
         <div class="ssn-box ssn-att">
@@ -5159,8 +5159,8 @@ function renderPlayers() {
 
   function statRow(p, rank, kind) {
     const line = kind === 'bowl'
-      ? `${QP.bowlingWicketsPerInnings(p.bowling).toFixed(2)} wkts/inns · Econ ${QP.bowlEcon(p.bowling)}`
-      : `${QP.battingRunsPerInnings(p.batting).toFixed(1)} runs/inns · SR ${QP.batSR(p.batting)}`;
+      ? `Econ ${QP.bowlEcon(p.bowling)} · Avg ${QP.bowlAvg(p.bowling)}`
+      : `Avg ${QP.batAvg(p.batting)} · SR ${QP.batSR(p.batting)}`;
     const chip = kind === 'bowl'
       ? `<span class="bcc-chip is-wkts bcc-an" title="Wickets">${p.bowling.wickets}</span>`
       : `<span class="bcc-chip is-runs bcc-an" title="Runs">${p.batting.runs}</span>`;
@@ -5183,9 +5183,8 @@ function renderPlayers() {
       </button>`;
   }
 
-  const rankNote = `Ranked after ${QP.MIN_QUALIFY_INNINGS} innings${year === 'all' ? '' : ` in ${year}`}`;
   const iccNote = 'ICC rating, 0–1000. A fifty is about 500. Recent innings weigh more, and the rating is full after 20 innings.';
-  const emptyRank = `Nobody has ${QP.MIN_QUALIFY_INNINGS} innings yet${year === 'all' ? '' : ` in ${year}`}`;
+  const emptyRank = year === 'all' ? 'Nobody has batted or bowled yet.' : `Nobody has batted or bowled in ${year}.`;
   function iccListRow(row, rank, kind) {
     const tone = rank === 1 ? 'is-r1' : rank === 2 ? 'is-r2' : rank === 3 ? 'is-r3' : '';
     const pct = Math.round(row.factor * 100);
@@ -5253,8 +5252,8 @@ function renderPlayers() {
             `).join('')}
           </div>
           ${tab === 'roster' && rosterSorted.length ? `<div class="bcc-colhead"><span>Runs</span><span>Wkts</span></div>` : ''}
-          ${tab === 'batting' && batRanked.length ? `<p class="bcc-ranknote">${esc(rankNote)}</p><div class="bcc-colhead"><span>Runs</span></div>` : ''}
-          ${tab === 'bowling' && bowlRanked.length ? `<p class="bcc-ranknote">${esc(rankNote)}</p><div class="bcc-colhead"><span>Wkts</span></div>` : ''}
+          ${tab === 'batting' && batRanked.length ? `<div class="bcc-colhead"><span>Runs</span></div>` : ''}
+          ${tab === 'bowling' && bowlRanked.length ? `<div class="bcc-colhead"><span>Wkts</span></div>` : ''}
           ${(tab === 'bat-rank' && icc.batting.length) || (tab === 'bowl-rank' && icc.bowling.length) ? `<p class="bcc-ranknote">${esc(iccNote)}</p><div class="bcc-colhead"><span>Pts</span></div>` : ''}
           <div class="bcc-plist">${tableBody}</div>
         </div>
