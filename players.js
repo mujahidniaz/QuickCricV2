@@ -615,11 +615,10 @@
   }
 
   /**
-   * Leaderboards compare per-innings rates, so a player who featured in fewer matches is
-   * not ranked lower just for missing games. Players need MIN_QUALIFY_INNINGS to be ranked
-   * above the rest; everyone else still appears, after the qualified players.
+   * Leaderboards compare per-innings rates, so a regular who missed a few games is not
+   * ranked lower for that. Players under MIN_QUALIFY_INNINGS stay off the board.
    */
-  const MIN_QUALIFY_INNINGS = 5;
+  const MIN_QUALIFY_INNINGS = 20;
 
   function battingRunsPerInnings(s) {
     const inns = s?.innings || 0;
@@ -641,10 +640,8 @@
 
   function battingRankings(players) {
     return [...players]
-      .filter(p => (p.batting?.innings || 0) > 0 || (p.batting?.runs || 0) > 0)
+      .filter(p => battingQualifies(p.batting))
       .sort((a, b) => {
-        const qa = battingQualifies(a.batting), qb = battingQualifies(b.batting);
-        if (qa !== qb) return qa ? -1 : 1;
         const rateA = battingRunsPerInnings(a.batting), rateB = battingRunsPerInnings(b.batting);
         if (Math.abs(rateB - rateA) > 1e-9) return rateB - rateA;
         const runsA = a.batting.runs || 0;
@@ -659,10 +656,8 @@
 
   function bowlingRankings(players) {
     return [...players]
-      .filter(p => (p.bowling?.wickets || 0) > 0 || (p.bowling?.balls || 0) > 0)
+      .filter(p => bowlingQualifies(p.bowling))
       .sort((a, b) => {
-        const qa = bowlingQualifies(a.bowling), qb = bowlingQualifies(b.bowling);
-        if (qa !== qb) return qa ? -1 : 1;
         const rateA = bowlingWicketsPerInnings(a.bowling), rateB = bowlingWicketsPerInnings(b.bowling);
         if (Math.abs(rateB - rateA) > 1e-9) return rateB - rateA;
         const wA = a.bowling.wickets || 0;
