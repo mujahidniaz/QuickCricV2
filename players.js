@@ -641,17 +641,22 @@
   /**
    * Club ratings using the ICC player-ranking method (icc-cricket.com/rankings/about
    * and the MRF Tyres rankings note). ICC publishes the factors and the 0–1000
-   * moving average, not the secret coefficients. The scale below is anchored to
-   * their own example: a 50 is a "50-type" innings (about 500 points) before the
-   * new-player discount, and a T20 batter shows about 40% of that until the
-   * discount fades, reaching 100% after 20 innings.
+   * moving average, not the secret coefficients.
    *
-   * Batting weighs runs, strike rate (T20), the bowling attack's rating, how
-   * easy runs were in that innings, a small not-out bonus, and a win bonus.
-   * Bowling weighs wickets, the ratings of the batters dismissed, economy
-   * (heavier in T20), workload, and a win bonus. A bowler who sits out a
-   * high-scoring innings loses a little. Recent innings count more; the career
-   * still counts.
+   * Their published anchor is a fifty in a 20-over game: about 500 points before
+   * the new-player discount. These matches are shorter — usually 8 overs,
+   * sometimes fewer — and sides are about 8 or 9 players, not 11. A fifty is
+   * one third of a 20-over par total (150). The same share of an 8-over par
+   * total (60) is 20 runs, so 20 runs here is the 500-point innings. A full
+   * bowling spell is a quarter of the overs (2 out of 8), not the T20 quota of
+   * 4. A wicket is worth more when fewer wickets exist. The new-player rule is
+   * unchanged: about 40% at first, 100% after 20 innings.
+   *
+   * Batting weighs runs, strike rate, the bowling attack's rating, how easy
+   * runs were, a small not-out bonus, and a win bonus. Bowling weighs wickets,
+   * the ratings of the batters dismissed, economy, workload, and a win bonus.
+   * A bowler who sits out a high-scoring innings loses a little. Recent innings
+   * count more; the career still counts.
    */
   const ICC_FULL_INNINGS = 20;
   const ICC_PRIOR = 500;
@@ -705,12 +710,21 @@
 
     for (const match of ordered) {
       const winner = winningSide(match);
-      const overs = Number(match.overs) || 20;
+      const overs = Math.max(1, Number(match.overs) || 8);
+      // A T20 fifty is a third of a 150-run par innings. Same share of this game.
+      const landmark = overs * 2.5;
+      const pointsPerRun = 500 / landmark;
+      const fullSpell = Math.max(1, overs * 0.25);
       for (const inn of match.innings || []) {
         const innRuns = inn.score?.runs || 0;
         const innBalls = inn.score?.balls || 0;
         const innRPO = innBalls ? (innRuns / innBalls) * 6 : ICC_PAR_RPO;
         const scoringFactor = iccClamp(ICC_PAR_RPO / (innRPO || ICC_PAR_RPO), 0.7, 1.45);
+        const squadSize = (match.squads?.[inn.batting]?.length >= 2)
+          ? match.squads[inn.batting].length
+          : 8;
+        const maxWickets = Math.max(1, squadSize - 1);
+        const wicketScale = iccClamp(10 / maxWickets, 1, 1.7);
         let atkSum = 0;
         let atkW = 0;
         for (const card of inn.bowlers || []) {
@@ -746,11 +760,11 @@
           const sr = balls ? (runs / balls) * 100 : 0;
           const innSR = innBalls ? (innRuns / innBalls) * 100 : (sr || 100);
           const srFactor = balls ? iccClamp(sr / (innSR || 100), 0.7, 1.55) : 1;
-          const scoredHighly = runs >= 20 || (innRuns > 0 && runs >= innRuns * 0.25);
+          const scoredHighly = runs >= Math.max(8, landmark * 0.5) || (innRuns > 0 && runs >= innRuns * 0.3);
           const won = !!(winner && winner === inn.batting);
           const winFactor = won && scoredHighly ? 1 + 0.1 * opp : 1;
           const notOutFactor = notOut && runs > 0 ? 1.05 : 1;
-          const perf = iccClamp(runs * 10 * srFactor * scoringFactor * opp * notOutFactor * winFactor, 0, 1000);
+          const perf = iccClamp(runs * pointsPerRun * srFactor * scoringFactor * opp * notOutFactor * winFactor, 0, 1000);
           addPerf(batState, pl.id, perf);
         }
 
@@ -764,7 +778,7 @@
           const oversBowled = balls / 6;
           const econ = (card.runs || 0) / oversBowled;
           const econRatio = econ > 0 ? innRPO / econ : 3;
-          const spell = iccClamp(oversBowled / 4, 0.25, 1);
+          const spell = iccClamp(oversBowled / fullSpell, 0.25, 1);
           const econPoints = iccClamp(econRatio, 0.4, 3) * 180 * spell;
           const known = dismissals.get(pl.id) || [];
           const wickets = card.wickets || 0;
@@ -773,11 +787,12 @@
             ? ratings.reduce((sum, r) => sum + r, 0) / ratings.length
             : ICC_PRIOR;
           while (ratings.length < wickets) ratings.push(avgWkt);
-          const wktPoints = ratings.reduce((sum, r) => sum + 140 * (r / ICC_PRIOR), 0);
-          const workload = iccClamp(oversBowled / 4, 0, 1) * 80;
+          const wktPoints = ratings.reduce((sum, r) => sum + 140 * wicketScale * (r / ICC_PRIOR), 0);
+          const workload = iccClamp(oversBowled / fullSpell, 0, 1) * 80 * iccClamp(econRatio, 0.35, 1);
           let perf = econPoints + wktPoints + workload;
           const won = !!(winner && winner === inn.bowling);
-          if (won && wickets >= 2) perf *= 1 + 0.08 * iccClamp(avgWkt / ICC_PRIOR, 0.75, 1.4);
+          const standoutHaul = wickets >= 2 || wickets >= Math.ceil(maxWickets * 0.25);
+          if (won && standoutHaul && wickets >= 1) perf *= 1 + 0.08 * iccClamp(avgWkt / ICC_PRIOR, 0.75, 1.4);
           addPerf(bowlState, pl.id, iccClamp(perf, 0, 1000));
         }
 
