@@ -742,10 +742,36 @@ function playerAvatarHtml(p, mark) {
   return `<span class="bcc-av has-photo"><img src="${src}" alt=""></span>`;
 }
 
-function capMark(playerId, emoji) {
-  const src = safePlayerPhoto(playerById(playerId));
-  if (!src) return `<span class="ssn-tr" aria-hidden="true">${emoji}</span>`;
-  return `<span class="ssn-tr ssn-ph"><img src="${src}" alt=""></span>`;
+function capMark(_playerId, emoji) {
+  return `<span class="ssn-tr" aria-hidden="true">${emoji}</span>`;
+}
+
+function photoForCard(card) {
+  if (!card) return '';
+  const own = safePlayerPhoto(card);
+  if (own) return own;
+  const id = card.playerId || card.id;
+  if (id) {
+    const byId = safePlayerPhoto(playerById(id));
+    if (byId) return byId;
+  }
+  if (card.name && window.QCPlayers?.findByName) {
+    return safePlayerPhoto(window.QCPlayers.findByName(state.players, card.name));
+  }
+  return '';
+}
+
+function faceHtml(card) {
+  const src = photoForCard(card);
+  if (!src) return '';
+  return `<img class="qc-face" src="${src}" alt="">`;
+}
+
+function scorecardName(card, extra) {
+  const face = faceHtml(card);
+  const who = `<b>${esc(card?.name || '')}</b>${extra || ''}`;
+  if (!face) return who;
+  return `<span class="qc-who">${face}<span>${who}</span></span>`;
 }
 
 function setPlayerPhoto(id, photo) {
@@ -1905,13 +1931,17 @@ function renderScorePickCards(inn, isBatter) {
       sp.pick.name?.toLowerCase() === p.name.toLowerCase()
     );
     const initial = (p.name || '?').charAt(0).toUpperCase();
+    const src = safePlayerPhoto(p);
+    const avatar = selected
+      ? '<span class="sc-av bcc-an">✓</span>'
+      : (src ? `<span class="sc-av has-photo"><img src="${src}" alt=""></span>` : `<span class="sc-av bcc-an">${esc(initial)}</span>`);
     return `
       <button type="button" class="sc-card${selected ? ' sc-sel' : ''}${reason ? ' sc-off' : ''}"
         data-action="${reason ? '' : action}"
         data-player-id="${esc(p.id)}"
         data-player-name="${esc(p.name)}"
         ${reason ? 'disabled' : ''}>
-        <span class="sc-av bcc-an">${selected ? '✓' : esc(initial)}</span>
+        ${avatar}
         <span class="sc-tx">
           <span class="sc-nm">${esc(p.name)}</span>
           <span class="sc-sub">${esc(reason || pickerCareerLine(p, mode, inn))}</span>
@@ -3133,8 +3163,8 @@ function renderHome() {
               <div><b class="bcc-an">${fmtNum(seasonBoard.wickets)}</b><small>Wickets</small></div>
             </div>
             <div class="bcc-sea-mo" aria-hidden="true">${monthBars}</div>
-            ${orange ? `<div class="bcc-sea-cap">Orange cap: <b>${esc(orange.name)}</b> · ${fmtNum(orange.batting.runs)} runs</div>` : ''}
-            ${purple ? `<div class="bcc-sea-cap is-purple">Purple cap: <b>${esc(purple.name)}</b> · ${fmtNum(purple.bowling.wickets)} wickets</div>` : ''}
+            ${orange ? `<div class="bcc-sea-cap">Orange cap: ${faceHtml(orange)}<b>${esc(orange.name)}</b> · ${fmtNum(orange.batting.runs)} runs</div>` : ''}
+            ${purple ? `<div class="bcc-sea-cap is-purple">Purple cap: ${faceHtml(purple)}<b>${esc(purple.name)}</b> · ${fmtNum(purple.bowling.wickets)} wickets</div>` : ''}
           </button>
           <div class="bcc-grid">
             <button type="button" class="bcc-tile" data-action="history">
@@ -3841,15 +3871,15 @@ function renderScore() {
             <button type="button" class="sc-rh" data-action="retire-hurt" ${canRetireHurt ? '' : 'disabled'}>Retire</button>
           </div></div>
           ${striker && !striker.out
-            ? `<div class="sc-br sc-on"><span>${esc(striker.name)} 🏏</span><b class="bcc-an">${striker.runs} <small>(${striker.balls})</small></b></div>`
+            ? `<div class="sc-br sc-on"><span>${faceHtml(striker)}${esc(striker.name)} 🏏</span><b class="bcc-an">${striker.runs} <small>(${striker.balls})</small></b></div>`
             : `<div class="sc-br sc-wait"><span>Pick next batter 🏏</span><b>—</b></div>`}
           ${nonStriker && !nonStriker.out
-            ? `<div class="sc-br"><span>${esc(nonStriker.name)}</span><b class="bcc-an">${nonStriker.runs} <small>(${nonStriker.balls})</small></b></div>`
+            ? `<div class="sc-br"><span>${faceHtml(nonStriker)}${esc(nonStriker.name)}</span><b class="bcc-an">${nonStriker.runs} <small>(${nonStriker.balls})</small></b></div>`
             : `<div class="sc-br sc-wait"><span>Pick next batter</span><b>—</b></div>`}
         </div>
         <div class="sc-cbox sc-bwx">
           <div class="sc-ch">Bowling</div>
-          <div class="sc-nm2">${esc(bowler?.name || '—')}</div>
+          <div class="sc-nm2">${faceHtml(bowler)}${esc(bowler?.name || '—')}</div>
           <div class="sc-st"><b class="bcc-an">${bowler ? fmtOvers(bowler.balls) : '0.0'}</b><small>${bowler ? `${bowler.runs}/${bowler.wickets}` : '0/0'}</small></div>
           <div class="sc-ec">Econ ${bowlEcon}</div>
         </div>
@@ -4172,7 +4202,7 @@ function renderSummaryAwards(m) {
     const cls = tone === 'green' ? 'is-g' : tone === 'blue' ? 'is-b' : '';
     const impact = awardImpact(award);
     const line = [awardFigures(award), impact ? `${impact} impact` : ''].filter(Boolean).join(' · ');
-    return `<div class="bcc-mv ${cls}"><small>${esc(m.teams[side])} MVP</small><b>${esc(award.name)}</b><span>${esc(line || award.summary)}</span></div>`;
+    return `<div class="bcc-mv ${cls}"><small>${esc(m.teams[side])} MVP</small><b>${faceHtml(award)}${esc(award.name)}</b><span>${esc(line || award.summary)}</span></div>`;
   };
   const potmImpact = a.potm ? awardImpact(a.potm) : '';
   return `
@@ -4182,7 +4212,7 @@ function renderSummaryAwards(m) {
         ${renderPotmCup()}
         <div class="bcc-potm-main">
           <small>Player of the match</small>
-          <b class="bcc-an">${esc(a.potm.name)}</b>
+          <b class="bcc-an">${faceHtml(a.potm)}${esc(a.potm.name)}</b>
           <span class="bcc-potm-line">${esc(awardFigures(a.potm) || a.potm.summary)}</span>
         </div>
         ${potmImpact ? `<div class="bcc-potm-score"><b class="bcc-an">${potmImpact}</b><small>Impact</small></div>` : ''}
@@ -4203,15 +4233,15 @@ function renderSummaryTops(m) {
   return `
     <h2>Top performers</h2>
     <div class="bcc-top2">
-      ${topBat?.balls ? `<div class="bcc-tp"><small>Top scorer</small><b>${esc(topBat.name)}</b><div class="bcc-an">${topBat.runs} <span>(${topBat.balls})</span></div></div>` : '<div></div>'}
-      ${topBowl?.balls ? `<div class="bcc-tp"><small>Best bowler</small><b>${esc(topBowl.name)}</b><div class="bcc-an">${topBowl.wickets}/${topBowl.runs}</div></div>` : ''}
+      ${topBat?.balls ? `<div class="bcc-tp"><small>Top scorer</small><b>${faceHtml(topBat)}${esc(topBat.name)}</b><div class="bcc-an">${topBat.runs} <span>(${topBat.balls})</span></div></div>` : '<div></div>'}
+      ${topBowl?.balls ? `<div class="bcc-tp"><small>Best bowler</small><b>${faceHtml(topBowl)}${esc(topBowl.name)}</b><div class="bcc-an">${topBowl.wickets}/${topBowl.runs}</div></div>` : ''}
     </div>`;
 }
 
 function renderSummaryBatting(inn) {
   const rows = (inn.batters || []).map(b => {
     const how = howOutLabel(b);
-    return `<div class="bcc-tr"><span><b>${esc(b.name)}</b><small class="${how.notOut ? 'is-no' : ''}">${esc(how.text)}</small></span><span class="bcc-rn bcc-an">${b.runs}</span><span>${b.balls}</span><span>${b.fours}</span><span>${b.sixes}</span><span class="is-dot">${batterDotBalls(inn, b.name)}</span><span>${summaryStrikeRate(b.runs, b.balls)}</span></div>`;
+    return `<div class="bcc-tr"><span>${scorecardName(b, `<small class="${how.notOut ? 'is-no' : ''}">${esc(how.text)}</small>`)}</span><span class="bcc-rn bcc-an">${b.runs}</span><span>${b.balls}</span><span>${b.fours}</span><span>${b.sixes}</span><span class="is-dot">${batterDotBalls(inn, b.name)}</span><span>${summaryStrikeRate(b.runs, b.balls)}</span></div>`;
   }).join('');
   return `
     <div class="bcc-box">
@@ -4274,7 +4304,7 @@ function bowlingSpellRows(inn) {
 function renderSummaryBowling(inn) {
   const rows = bowlingSpellRows(inn).map(b => {
     const extra = bowlerExtraCounts(inn, b.name);
-    return `<div class="bcc-tr"><span><b>${esc(b.name)}</b></span><span>${fmtOvers(b.balls)}</span><span>${b.runs}</span><span class="bcc-rn bcc-an">${b.wickets}</span><span class="is-xw">${extra.wides}</span><span class="is-xw">${extra.noBalls}</span><span>${summaryEcon(b.balls, b.runs)}</span></div>`;
+    return `<div class="bcc-tr"><span>${scorecardName(b)}</span><span>${fmtOvers(b.balls)}</span><span>${b.runs}</span><span class="bcc-rn bcc-an">${b.wickets}</span><span class="is-xw">${extra.wides}</span><span class="is-xw">${extra.noBalls}</span><span>${summaryEcon(b.balls, b.runs)}</span></div>`;
   }).join('');
   return `
     <div class="bcc-box is-bowl">
@@ -5095,7 +5125,7 @@ function renderSeasons() {
             ${capMark(board.potm.id, '🏆')}
             <span class="ssn-tx">
               <small>Player of the season</small>
-              <b class="bcc-an">${esc(board.potm.name)}</b>
+              <b class="bcc-an">${faceHtml(board.potm)}${esc(board.potm.name)}</b>
               <span>${board.potm.awards} match award${board.potm.awards === 1 ? '' : 's'}</span>
               <span>${potmView?.bowling?.wickets || 0} wkts · ${potmView?.batting?.runs || 0} runs</span>
             </span>
@@ -5107,7 +5137,7 @@ function renderSeasons() {
             ${capMark(orange.id, '🟠')}
             <span class="ssn-tx">
               <small>Orange cap</small>
-              <b class="bcc-an">${esc(orange.name)}</b>
+              <b class="bcc-an">${faceHtml(orange)}${esc(orange.name)}</b>
               <span>Avg ${esc(window.QCPlayers.batAvg(orange.batting))} · SR ${esc(window.QCPlayers.batSR(orange.batting))}</span>
             </span>
             <span class="ssn-im"><b class="bcc-an">${fmtNum(orangeRuns)}</b><small>Runs</small></span>
@@ -5118,20 +5148,20 @@ function renderSeasons() {
             ${capMark(purple.id, '🟣')}
             <span class="ssn-tx">
               <small>Purple cap</small>
-              <b class="bcc-an">${esc(purple.name)}</b>
+              <b class="bcc-an">${faceHtml(purple)}${esc(purple.name)}</b>
               <span>Econ ${esc(window.QCPlayers.bowlEcon(purple.bowling))} · Avg ${esc(window.QCPlayers.bowlAvg(purple.bowling))}</span>
             </span>
             <span class="ssn-im"><b class="bcc-an">${fmtNum(purpleWkts)}</b><small>Wickets</small></span>
           </button>
         ` : ''}
-        ${board.potm && board.impactRunners.length ? `<div class="ssn-runn">${board.impactRunners.map((p, i) => `<div><span>${i + 2} ${esc(p.name)}</span><em class="bcc-an">${Math.round(p.score).toLocaleString('en-GB')}</em></div>`).join('')}</div>` : ''}
+        ${board.potm && board.impactRunners.length ? `<div class="ssn-runn">${board.impactRunners.map((p, i) => `<div><span>${i + 2} ${faceHtml(p)}${esc(p.name)}</span><em class="bcc-an">${Math.round(p.score).toLocaleString('en-GB')}</em></div>`).join('')}</div>` : ''}
         ${spot && (spot.boundaries || spot.dotsPlayed || spot.dotsBowled || spot.share) ? `
           <div class="ssn-lab">Season numbers</div>
           <div class="ssn-aw">
-            ${spot.boundaries ? `<button type="button" data-action="view-player" data-player-id="${esc(spot.boundaries.id)}" data-from="bowling"${spot.boundaries.id ? '' : ' disabled'}><span>💥</span><small>Boundaries conceded</small><b>${esc(spot.boundaries.name)}</b><em>${spot.boundaries.n} boundaries</em></button>` : ''}
-            ${spot.dotsPlayed ? `<button type="button" data-action="view-player" data-player-id="${esc(spot.dotsPlayed.id)}" data-from="batting"${spot.dotsPlayed.id ? '' : ' disabled'}><span>⚫</span><small>Dots played</small><b>${esc(spot.dotsPlayed.name)}</b><em>${spot.dotsPlayed.n} dots</em></button>` : ''}
-            ${spot.dotsBowled ? `<button type="button" data-action="view-player" data-player-id="${esc(spot.dotsBowled.id)}" data-from="bowling"${spot.dotsBowled.id ? '' : ' disabled'}><span>🎯</span><small>Dots bowled</small><b>${esc(spot.dotsBowled.name)}</b><em>${spot.dotsBowled.n} dots</em></button>` : ''}
-            ${spot.share ? `<button type="button" data-action="view-player" data-player-id="${esc(spot.share.id)}" data-from="bowling"${spot.share.id ? '' : ' disabled'}><span>🕒</span><small>Overs to top bats</small><b>${esc(spot.share.name)}</b><em>${spot.share.pct}% · ${esc(spot.share.overs)} ov</em></button>` : ''}
+            ${spot.boundaries ? `<button type="button" data-action="view-player" data-player-id="${esc(spot.boundaries.id)}" data-from="bowling"${spot.boundaries.id ? '' : ' disabled'}><span>💥</span><small>Boundaries conceded</small><b>${faceHtml(spot.boundaries)}${esc(spot.boundaries.name)}</b><em>${spot.boundaries.n} boundaries</em></button>` : ''}
+            ${spot.dotsPlayed ? `<button type="button" data-action="view-player" data-player-id="${esc(spot.dotsPlayed.id)}" data-from="batting"${spot.dotsPlayed.id ? '' : ' disabled'}><span>⚫</span><small>Dots played</small><b>${faceHtml(spot.dotsPlayed)}${esc(spot.dotsPlayed.name)}</b><em>${spot.dotsPlayed.n} dots</em></button>` : ''}
+            ${spot.dotsBowled ? `<button type="button" data-action="view-player" data-player-id="${esc(spot.dotsBowled.id)}" data-from="bowling"${spot.dotsBowled.id ? '' : ' disabled'}><span>🎯</span><small>Dots bowled</small><b>${faceHtml(spot.dotsBowled)}${esc(spot.dotsBowled.name)}</b><em>${spot.dotsBowled.n} dots</em></button>` : ''}
+            ${spot.share ? `<button type="button" data-action="view-player" data-player-id="${esc(spot.share.id)}" data-from="bowling"${spot.share.id ? '' : ' disabled'}><span>🕒</span><small>Overs to top bats</small><b>${faceHtml(spot.share)}${esc(spot.share.name)}</b><em>${spot.share.pct}% · ${esc(spot.share.overs)} ov</em></button>` : ''}
           </div>
           ${spot.top.length && spot.share ? `<p class="ssn-spotnote">While ${esc(spot.top.map(p => p.name).join(', '))} were batting.</p>` : ''}
         ` : ''}
@@ -5155,13 +5185,13 @@ function renderSeasons() {
           </button>
           ${head ? `
             <button type="button" class="ssn-ld" data-action="view-player" data-player-id="${esc(head.id)}" data-from="${leaders.tab === 'wickets' || leaders.tab === 'econ' ? 'bowling' : 'batting'}">
-              <span><span class="ssn-cp">${esc(cap)}</span><b class="bcc-an">${esc(head.name)}</b><span class="ssn-mn">${esc(headMeta)}</span></span>
+              <span><span class="ssn-cp">${esc(cap)}</span><b class="bcc-an">${faceHtml(head)}${esc(head.name)}</b><span class="ssn-mn">${esc(headMeta)}</span></span>
               <span class="ssn-bg bcc-an">${esc(String(leaders.figure(head)))}<small>${esc(leaders.unit)}</small></span>
             </button>
             ${leaders.rows.slice(1).map((p, i) => {
               const value = Number(leaders.figure(p)) || 0;
               const width = peak ? Math.max(6, Math.round((value / peak) * 100)) : 0;
-              return `<button type="button" class="ssn-lr" data-action="view-player" data-player-id="${esc(p.id)}" data-from="${leaders.tab === 'wickets' || leaders.tab === 'econ' ? 'bowling' : 'batting'}"><span class="k bcc-an">${i + 2}</span><span><b>${esc(p.name)}</b><i><u style="width:${width}%"></u></i></span><em class="bcc-an">${esc(String(leaders.figure(p)))}</em></button>`;
+              return `<button type="button" class="ssn-lr" data-action="view-player" data-player-id="${esc(p.id)}" data-from="${leaders.tab === 'wickets' || leaders.tab === 'econ' ? 'bowling' : 'batting'}"><span class="k bcc-an">${i + 2}</span><span><b>${faceHtml(p)}${esc(p.name)}</b><i><u style="width:${width}%"></u></i></span><em class="bcc-an">${esc(String(leaders.figure(p)))}</em></button>`;
             }).join('')}
           ` : `<p class="ssn-empty">${state.seasonQualified ? 'Nobody has qualified yet.' : 'No figures yet.'}</p>`}
         </div>
@@ -5173,7 +5203,7 @@ function renderSeasons() {
         <div class="ssn-aw">
           ${awards.map(([icon, label, name, fig, id, from]) => `
             <button type="button" data-action="view-player" data-player-id="${esc(id)}" data-from="${from}">
-              <span>${icon}</span><small>${esc(label)}</small><b>${esc(name)}</b><em>${esc(fig)}</em>
+              <span>${icon}</span><small>${esc(label)}</small><b>${faceHtml({ id, name })}${esc(name)}</b><em>${esc(fig)}</em>
             </button>`).join('')}
         </div>
         <div class="ssn-lab">Records</div>
@@ -5332,7 +5362,7 @@ function renderPlayers() {
     return `
       <button type="button" class="bcc-prow ${tone}" data-action="view-player" data-player-id="${esc(p.id)}" data-from="${kind === 'bowl' ? 'bowling' : 'batting'}">
         <span class="bcc-av bcc-an">${rank}</span>
-        <span class="bcc-nm"><b>${esc(p.name)}</b><small>${esc(line)}</small></span>
+        <span class="bcc-nm${faceHtml(p) ? ' has-face' : ''}">${faceHtml(p)}<b>${esc(p.name)}</b><small>${esc(line)}</small></span>
         ${chip}
       </button>`;
   }
@@ -5356,7 +5386,7 @@ function renderPlayers() {
     return `
       <button type="button" class="bcc-prow ${tone}" data-action="view-player" data-player-id="${esc(row.id)}" data-from="${kind === 'bowl' ? 'bowl-rank' : 'bat-rank'}">
         <span class="bcc-av bcc-an">${rank}</span>
-        <span class="bcc-nm"><b>${esc(row.name)}</b><small>${esc(line)}</small></span>
+        <span class="bcc-nm${faceHtml(row) ? ' has-face' : ''}">${faceHtml(row)}<b>${esc(row.name)}</b><small>${esc(line)}</small></span>
         <span class="bcc-chip ${kind === 'bowl' ? 'is-wkts' : 'is-runs'} bcc-an" title="ICC rating">${row.rating}</span>
       </button>`;
   }
@@ -5642,7 +5672,7 @@ function renderPlayerDetail() {
       const tone = i === 0 ? 'is-r1' : i === 1 ? 'is-r2' : i === 2 ? 'is-r3' : '';
       const pct = Math.round(row.factor * 100);
       const line = pct >= 100 ? `${row.innings} inns · full rating` : `${row.innings} inns · ${pct}% weight`;
-      return `<button type="button" class="bcc-prow ${tone}${row.id === p.id ? ' is-me' : ''}" data-action="view-player" data-player-id="${esc(row.id)}" data-from="${rankKind === 'bowl' ? 'bowl-rank' : 'bat-rank'}"><span class="bcc-av bcc-an">${i + 1}</span><span class="bcc-nm"><b>${esc(row.name)}</b><small>${esc(line)}</small></span><span class="bcc-chip ${rankKind === 'bowl' ? 'is-wkts' : 'is-runs'} bcc-an">${row.rating}</span></button>`;
+      return `<button type="button" class="bcc-prow ${tone}${row.id === p.id ? ' is-me' : ''}" data-action="view-player" data-player-id="${esc(row.id)}" data-from="${rankKind === 'bowl' ? 'bowl-rank' : 'bat-rank'}"><span class="bcc-av bcc-an">${i + 1}</span><span class="bcc-nm${faceHtml(row) ? ' has-face' : ''}">${faceHtml(row)}<b>${esc(row.name)}</b><small>${esc(line)}</small></span><span class="bcc-chip ${rankKind === 'bowl' ? 'is-wkts' : 'is-runs'} bcc-an">${row.rating}</span></button>`;
     }).join('') : '<div class="bcc-bx bcc-emp">No rated players in this view yet.</div>'}</div>`;
   const body = batting
     ? (hasBat ? `
