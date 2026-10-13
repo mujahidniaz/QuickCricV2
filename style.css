@@ -5209,6 +5209,7 @@ button.sc-ball { font: inherit; cursor: pointer; }
 .ssn-rh span, .ssn-tabs button { padding: 7px 12px; border-radius: 99px; border: 1.5px solid #e5dfcf; font-size: 12px; font-weight: 800; }
 .ssn-tabs { display: flex; gap: 6px; overflow-x: auto; }
 .ssn-tabs button.is-on, .ssn-rh .is-on { background: #0a2118; color: #f3eee2; border-color: #0a2118; }
+.ssn-rh .is-on.is-purple { background: #6b3fa0; border-color: #6b3fa0; color: #fffdf7; }
 .ssn-race { display: block; width: 100%; height: auto; }
 .ssn-note { margin: 8px 0 0; font-size: 12px; font-weight: 700; color: #6b766e; }
 .ssn-two { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 10px; }

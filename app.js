@@ -4774,6 +4774,8 @@ function buildSeasonBoard(year) {
   const showed = new Map();
   const running = new Map();
   const snaps = [];
+  const wicketRunning = new Map();
+  const wktSnaps = [];
   let bestBat = null;
   let bestBowl = null;
   for (const match of played) {
@@ -4824,6 +4826,7 @@ function buildSeasonBoard(year) {
         showed.set(p.id, (showed.get(p.id) || 0) + 1);
         const line = playerRunsInMatch(match, p);
         running.set(p.id, (running.get(p.id) || 0) + line.runs);
+        wicketRunning.set(p.id, (wicketRunning.get(p.id) || 0) + (playerBowlInMatch(match, p).wickets || 0));
         try {
           const perf = QP.matchPerformanceScore(match, p.id, p.name);
           const row = impact.get(p.id) || { id: p.id, name: p.name, score: 0 };
@@ -4832,6 +4835,7 @@ function buildSeasonBoard(year) {
         } catch { /* ignore */ }
       }
       snaps.push(new Map(running));
+      wktSnaps.push(new Map(wicketRunning));
     }
   }
   const rankedImpact = [...impact.values()].sort((a, b) => b.score - a.score);
@@ -4840,33 +4844,8 @@ function buildSeasonBoard(year) {
     awards: potm.get(rankedImpact[0].id) || 0,
     view: views.find(p => p.id === rankedImpact[0].id) || null,
   } : null;
-  const topIds = [...running.entries()].sort((a, b) => b[1] - a[1]).slice(0, 3).map(([id]) => id);
-  const colors = ['#f2a900', '#1f7a4d', '#2f6fe4'];
-  const race = topIds.map((id, i) => ({
-    id,
-    name: state.players.find(p => p.id === id)?.name || 'Player',
-    color: colors[i],
-    points: snaps.map(snap => snap.get(id) || 0),
-  }));
-  let leaderId = null;
-  let flips = 0;
-  let flipAt = -1;
-  let flipName = '';
-  for (let i = 0; i < snaps.length; i++) {
-    let bestId = null;
-    let best = -1;
-    for (const [id, value] of snaps[i]) {
-      if (value > best) { best = value; bestId = id; }
-    }
-    if (bestId && bestId !== leaderId) {
-      if (leaderId) {
-        flips += 1;
-        flipAt = i;
-        flipName = state.players.find(p => p.id === bestId)?.name || '';
-      }
-      leaderId = bestId;
-    }
-  }
+  const orangeRace = buildRace(snaps, ['#f2a900', '#1f7a4d', '#2f6fe4']);
+  const purpleRace = buildRace(wktSnaps, ['#6b3fa0', '#c084fc', '#2f6fe4']);
   const prevYear = y !== 'all' ? String(Number(y) - 1) : '';
   const prevPlayed = prevYear && seasonChoices().includes(prevYear) ? completedSeasonMatches(prevYear) : [];
   let prevRuns = 0;
@@ -4914,10 +4893,14 @@ function buildSeasonBoard(year) {
     clutchWins,
     potm: potmLeader,
     impactRunners: rankedImpact.slice(1, 3),
-    race,
-    flips,
-    flipAt,
-    flipName,
+    race: orangeRace.race,
+    flips: orangeRace.flips,
+    flipAt: orangeRace.flipAt,
+    flipName: orangeRace.flipName,
+    wicketRace: purpleRace.race,
+    wicketFlips: purpleRace.flips,
+    wicketFlipAt: purpleRace.flipAt,
+    wicketFlipName: purpleRace.flipName,
     closest,
     biggest: biggestWkts || biggestRuns,
     prev: prevPlayed.length ? { matches: prevPlayed.length, runs: prevRuns, wickets: prevWickets, sixes: prevSixes } : null,
@@ -4992,8 +4975,42 @@ function seasonSpotlight(matches, batters) {
   };
 }
 
-function renderCapRace(board) {
-  const lines = board.race.filter(r => r.points.some(v => v > 0));
+function buildRace(snaps, colors) {
+  const totals = snaps.length ? snaps[snaps.length - 1] : new Map();
+  const topIds = [...totals.entries()].sort((a, b) => b[1] - a[1]).slice(0, 3).map(([id]) => id);
+  const race = topIds.map((id, i) => ({
+    id,
+    name: state.players.find(p => p.id === id)?.name || 'Player',
+    color: colors[i],
+    points: snaps.map(snap => snap.get(id) || 0),
+  }));
+  let leaderId = null;
+  let flips = 0;
+  let flipAt = -1;
+  let flipName = '';
+  for (let i = 0; i < snaps.length; i++) {
+    let bestId = null;
+    let best = -1;
+    for (const [id, value] of snaps[i]) {
+      if (value > best) { best = value; bestId = id; }
+    }
+    if (bestId && bestId !== leaderId) {
+      if (leaderId) {
+        flips += 1;
+        flipAt = i;
+        flipName = state.players.find(p => p.id === bestId)?.name || '';
+      }
+      leaderId = bestId;
+    }
+  }
+  return { race, flips, flipAt, flipName };
+}
+
+function renderCapRace(board, kind) {
+  const wickets = kind === 'wickets';
+  const lines = (wickets ? board.wicketRace : board.race).filter(r => r.points.some(v => v > 0));
+  const flipAt = wickets ? board.wicketFlipAt : board.flipAt;
+  const flipName = wickets ? board.wicketFlipName : board.flipName;
   if (lines.length < 1 || !board.played.length) return '<p class="ssn-empty">The race starts after the first match.</p>';
   const W = 320;
   const H = 168;
@@ -5002,7 +5019,7 @@ function renderCapRace(board) {
   const T = 10;
   const B = 22;
   const n = Math.max(1, board.played.length - 1);
-  const peak = Math.max(10, ...lines.flatMap(r => r.points));
+  const peak = Math.max(wickets ? 4 : 10, ...lines.flatMap(r => r.points));
   const X = i => L + ((W - L - R) * i) / n;
   const Y = v => T + (H - T - B) - (v / peak) * (H - T - B);
   let g = '';
@@ -5020,8 +5037,8 @@ function renderCapRace(board) {
   monthMarks.forEach(mark => {
     g += `<text x="${X(mark.i).toFixed(1)}" y="${H - 4}" text-anchor="middle" font-size="9" font-weight="700" fill="#74807a">${esc(mark.label)}</text>`;
   });
-  if (board.flipAt > 0) {
-    g += `<line x1="${X(board.flipAt).toFixed(1)}" x2="${X(board.flipAt).toFixed(1)}" y1="${T}" y2="${T + (H - T - B)}" stroke="#0a2118" stroke-dasharray="3 3" opacity="0.35"/>`;
+  if (flipAt > 0) {
+    g += `<line x1="${X(flipAt).toFixed(1)}" x2="${X(flipAt).toFixed(1)}" y1="${T}" y2="${T + (H - T - B)}" stroke="#0a2118" stroke-dasharray="3 3" opacity="0.35"/>`;
   }
   lines.forEach(line => {
     const d = line.points.map((v, i) => `${i ? 'L' : 'M'}${X(i).toFixed(1)} ${Y(v).toFixed(1)}`).join(' ');
@@ -5030,10 +5047,11 @@ function renderCapRace(board) {
     g += `<circle cx="${X(line.points.length - 1).toFixed(1)}" cy="${Y(end).toFixed(1)}" r="4.5" fill="${line.color}" stroke="#fffdf7" stroke-width="2"/>`;
     g += `<text x="${(X(line.points.length - 1) + 8).toFixed(1)}" y="${(Y(end) + 4).toFixed(1)}" font-size="11" font-weight="800" fill="#0a2118">${esc(line.name.split(' ')[0])} <tspan fill="#74807a" font-weight="700">${end}</tspan></text>`;
   });
-  const note = board.flipAt > 0 && board.flipName
-    ? `<p class="ssn-note">${esc(board.flipName)} took the lead at match ${board.flipAt + 1}.</p>`
+  const note = flipAt > 0 && flipName
+    ? `<p class="ssn-note">${esc(flipName)} took the lead at match ${flipAt + 1}.</p>`
     : '';
-  return `<svg class="ssn-race" viewBox="0 0 ${W} ${H}" role="img" aria-label="Runs of the top batters after each match">${g}</svg>${note}`;
+  const label = wickets ? 'Wickets of the top bowlers after each match' : 'Runs of the top batters after each match';
+  return `<svg class="ssn-race" viewBox="0 0 ${W} ${H}" role="img" aria-label="${label}">${g}</svg>${note}`;
 }
 
 function leaderRows(board) {
@@ -5173,6 +5191,11 @@ function renderSeasons() {
             <div><small>Closest finish</small><b class="bcc-an">${board.closest ? esc(board.closest.label) : '—'}</b><span>${board.closest ? esc(`${board.closest.side} · ${board.closest.when}`) : 'No result yet'}</span></div>
             <div><small>Biggest win</small><b class="bcc-an">${board.biggest ? esc(board.biggest.label) : '—'}</b><span>${board.biggest ? esc(`${board.biggest.side} · ${board.biggest.when}`) : 'No result yet'}</span></div>
           </div>
+        </div>
+        <div class="ssn-lab">Purple cap race <i>${board.wicketFlips ? `lead changed ${board.wicketFlips}×` : 'one leader so far'}</i></div>
+        <div class="ssn-box">
+          <div class="ssn-rh"><span class="is-on is-purple">Wickets</span></div>
+          ${renderCapRace(board, 'wickets')}
         </div>
         <div class="ssn-lab">Leaders</div>
         <div class="ssn-box">
