@@ -3882,19 +3882,34 @@ input { background: var(--paper); }
 .bcc-nm b { display: block; font-size: 15px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .bcc-nm small { font-size: 12px; color: #6b766e; font-weight: 600; }
 .qc-face { width: 22px; height: 22px; border-radius: 50%; object-fit: cover; display: block; flex: none; background: #e5dfcf; }
+.qc-face.is-letter {
+  display: grid; place-items: center; flex: none; background: #0a2118; color: #d9ff3f;
+  font: 800 12px/1 "Plus Jakarta Sans", system-ui, sans-serif; letter-spacing: 0; text-transform: none;
+}
 .qc-who { display: flex; align-items: center; gap: 6px; min-width: 0; }
-.qc-who > span { min-width: 0; flex: 1; }
+.qc-who > span:not(.qc-face) { min-width: 0; flex: 1; }
 .bcc-nm.has-face { display: grid; grid-template-columns: 28px minmax(0, 1fr); column-gap: 8px; align-items: center; }
 .bcc-nm.has-face .qc-face { width: 28px; height: 28px; grid-row: 1 / span 2; }
+.bcc-nm.has-face .qc-face.is-letter { font-size: 13px; }
 .bcc-nm.has-face b, .bcc-nm.has-face small { grid-column: 2; min-width: 0; }
 .ssn-tx b .qc-face, .ssn-ld b .qc-face, .bcc-potm-main b .qc-face, .bcc-mv b .qc-face, .bcc-tp b .qc-face, .ssn-aw b .qc-face {
   display: inline-block; width: 22px; height: 22px; vertical-align: -3px; margin-right: 6px;
 }
+.ssn-tx b .qc-face.is-letter, .ssn-ld b .qc-face.is-letter, .bcc-potm-main b .qc-face.is-letter, .bcc-mv b .qc-face.is-letter, .bcc-tp b .qc-face.is-letter, .ssn-aw b .qc-face.is-letter {
+  display: inline-grid; font-size: 11px;
+}
 .ssn-lr b .qc-face, .ssn-runn .qc-face, .bcc-sea-cap .qc-face {
   display: inline-block; width: 16px; height: 16px; vertical-align: -3px; margin-right: 4px;
 }
+.ssn-lr b .qc-face.is-letter, .ssn-runn .qc-face.is-letter, .bcc-sea-cap .qc-face.is-letter {
+  display: inline-grid; font-size: 8px;
+}
 .sc-br .qc-face, .sc-nm2 .qc-face {
   display: inline-block; width: 18px; height: 18px; vertical-align: -3px; margin-right: 4px;
+}
+.sc-br .qc-face.is-letter, .sc-nm2 .qc-face.is-letter { display: inline-grid; font-size: 9px; }
+.bcc-tp .qc-face.is-letter, .bcc-mv .qc-face.is-letter, .ssn-ld .qc-face.is-letter, .bcc-sea .qc-face.is-letter, .sc-br .qc-face.is-letter, .sc-nm2 .qc-face.is-letter {
+  background: #fffdf7; color: #0a2118;
 }
 .bcc-chip {
   min-width: 44px;
@@ -4462,11 +4477,11 @@ input { background: var(--paper); }
 .bcc-mv.is-g { border-top-color: #1f7a4d; background: #0e2418; }
 .bcc-mv.is-b { border-top-color: #2f6fe4; background: #101e30; border-color: #1c3358; }
 .bcc-mv small { font-size: 11px; font-weight: 800; letter-spacing: 0.1em; text-transform: uppercase; color: rgba(241, 245, 233, 0.62); }
-.bcc-mv b { display: block; font-size: 22px; margin-top: 4px; color: #f1f5e9; }
+.bcc-mv b { display: block; font-size: 22px; margin-top: 4px; color: #f1f5e9; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .bcc-mv span { font-size: 12px; color: rgba(241, 245, 233, 0.72); font-weight: 700; }
 .bcc-tp { background: #0a2118; color: #f1f5e9; border-radius: 20px; padding: 14px; }
 .bcc-tp small { font-size: 11px; font-weight: 800; letter-spacing: 0.1em; text-transform: uppercase; opacity: 0.65; }
-.bcc-tp b { display: block; font-size: 20px; margin: 4px 0 2px; }
+.bcc-tp b { display: block; font-size: 20px; margin: 4px 0 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .bcc-tp .bcc-an { font-size: 30px; color: #d9ff3f; line-height: 1; }
 .bcc-tp .bcc-an span { font-family: "Plus Jakarta Sans", system-ui, sans-serif; font-size: 16px; font-weight: 700; }
 .bcc-sum-tabs { display: flex; gap: 8px; margin-bottom: 12px; }
@@ -4507,8 +4522,10 @@ input { background: var(--paper); }
 }
 .bcc-th span:not(:first-child),
 .bcc-tr > span:not(:first-child) { text-align: right; }
+.bcc-tr > span:first-child { min-width: 0; }
+.bcc-tr .qc-who { width: 100%; }
 .bcc-tr { border-top: 1px solid #e2dac6; font-size: 13px; font-weight: 700; color: #6b766e; }
-.bcc-tr b { display: block; color: #0a2118; font-size: 15px; overflow: hidden; text-overflow: ellipsis; }
+.bcc-tr b { display: block; color: #0a2118; font-size: 15px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .bcc-tr small { font-size: 11px; font-weight: 700; color: #6b766e; }
 .bcc-tr small.is-no { color: #1f7a4d; }
 .bcc-rn { font-size: 22px; color: #0a2118; line-height: 1; }
@@ -5196,7 +5213,7 @@ button.sc-ball { font: inherit; cursor: pointer; }
 .ssn-tr { font-size: 36px; }
 .ssn-tx { flex: 1; min-width: 0; }
 .ssn-tx small, .ssn-im small { display: block; font-size: 10px; letter-spacing: 0.1em; font-weight: 800; text-transform: uppercase; }
-.ssn-tx b { display: block; font-size: 32px; line-height: 1; }
+.ssn-tx b { display: block; font-size: 32px; line-height: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .ssn-tx span { display: block; font-size: 12px; font-weight: 700; margin-top: 2px; }
 .ssn-im { text-align: center; border-left: 2px solid rgba(10, 33, 24, 0.2); padding-left: 12px; }
 .ssn-im b { display: block; font-size: 22px; line-height: 1; }
@@ -5224,7 +5241,7 @@ button.sc-ball { font: inherit; cursor: pointer; }
 .ssn-qual i.is-on:after { left: auto; right: 3px; }
 .ssn-ld { display: flex; justify-content: space-between; align-items: flex-end; width: 100%; margin-top: 12px; background: #0a2118; color: #f1f5e9; border-radius: 18px; padding: 12px 14px; text-align: left; }
 .ssn-cp { font-size: 10px; letter-spacing: 0.12em; font-weight: 800; text-transform: uppercase; background: rgba(255, 255, 255, 0.12); border-radius: 99px; padding: 4px 8px; }
-.ssn-ld b { display: block; font-size: 28px; line-height: 1; margin-top: 8px; }
+.ssn-ld b { display: block; font-size: 28px; line-height: 1; margin-top: 8px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .ssn-mn { display: block; font-size: 11px; font-weight: 700; opacity: 0.75; margin-top: 4px; }
 .ssn-bg { font-size: 42px; line-height: 0.9; color: #d9ff3f; text-align: right; }
 .ssn-bg small { display: block; font-family: "Plus Jakarta Sans", system-ui, sans-serif; font-size: 9px; letter-spacing: 0.12em; font-weight: 800; color: #fff; opacity: 0.7; margin-top: 4px; text-transform: uppercase; }

@@ -763,8 +763,11 @@ function photoForCard(card) {
 
 function faceHtml(card) {
   const src = photoForCard(card);
-  if (!src) return '';
-  return `<img class="qc-face" src="${src}" alt="">`;
+  if (src) return `<img class="qc-face" src="${src}" alt="">`;
+  const name = String(card?.name || '').trim();
+  if (!name || name === '—') return '';
+  const letter = esc(name.charAt(0).toUpperCase());
+  return `<span class="qc-face is-letter" aria-hidden="true">${letter}</span>`;
 }
 
 function scorecardName(card, extra) {
