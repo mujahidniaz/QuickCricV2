@@ -238,6 +238,7 @@
         merged.batting = mergeBatting(merged.batting, p.batting || emptyBatting());
         merged.bowling = mergeBowling(merged.bowling, p.bowling || emptyBowling());
         merged.seasons = mergeSeasons(merged.seasons, p.seasons);
+        if (!merged.photo && p.photo) merged.photo = p.photo;
         if (p.id !== winner.id) removedIds.push(p.id);
       }
       touch(merged);
@@ -546,6 +547,7 @@
     return {
       id: p.id,
       name: p.name,
+      photo: p.photo || '',
       batting: battingView(bag?.batting),
       bowling: bowlingView(bag?.bowling),
     };
