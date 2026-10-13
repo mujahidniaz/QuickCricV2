@@ -4929,6 +4929,8 @@ function renderSeasons() {
     ? `${board.first.getDate()} ${HISTORY_MONTHS[board.first.getMonth()]} – ${board.open ? 'today' : `${board.last.getDate()} ${HISTORY_MONTHS[board.last.getMonth()]}`}`
     : 'No matches yet';
   const potmView = board.potm?.view;
+  const orange = board.batters[0];
+  const orangeRuns = orange?.batting?.runs || 0;
   const awards = [
     board.bySixes[0] ? ['🏏', 'Six machine', board.bySixes[0].name, `${board.bySixes[0].batting.sixes} sixes`, board.bySixes[0].id, 'batting'] : null,
     board.byRate[0] ? ['⚡', 'Highest run rate', board.byRate[0].name, `${((board.byRate[0].batting.runs / board.byRate[0].batting.balls) * 6).toFixed(2)} per over`, board.byRate[0].id, 'batting'] : null,
@@ -4969,8 +4971,19 @@ function renderSeasons() {
             </span>
             <span class="ssn-im"><b class="bcc-an">${Math.round(board.potm.score).toLocaleString('en-GB')}</b><small>Impact</small></span>
           </button>
-          ${board.impactRunners.length ? `<div class="ssn-runn">${board.impactRunners.map((p, i) => `<div><span>${i + 2} ${esc(p.name)}</span><em class="bcc-an">${Math.round(p.score).toLocaleString('en-GB')}</em></div>`).join('')}</div>` : ''}
         ` : ''}
+        ${orange && orangeRuns > 0 ? `
+          <button type="button" class="ssn-ocap" data-action="view-player" data-player-id="${esc(orange.id)}" data-from="batting">
+            <span class="ssn-tr" aria-hidden="true">🟠</span>
+            <span class="ssn-tx">
+              <small>Orange cap</small>
+              <b class="bcc-an">${esc(orange.name)}</b>
+              <span>Avg ${esc(window.QCPlayers.batAvg(orange.batting))} · SR ${esc(window.QCPlayers.batSR(orange.batting))}</span>
+            </span>
+            <span class="ssn-im"><b class="bcc-an">${fmtNum(orangeRuns)}</b><small>Runs</small></span>
+          </button>
+        ` : ''}
+        ${board.potm && board.impactRunners.length ? `<div class="ssn-runn">${board.impactRunners.map((p, i) => `<div><span>${i + 2} ${esc(p.name)}</span><em class="bcc-an">${Math.round(p.score).toLocaleString('en-GB')}</em></div>`).join('')}</div>` : ''}
         <div class="ssn-lab">Orange cap race <i>${board.flips ? `lead changed ${board.flips}×` : 'one leader so far'}</i></div>
         <div class="ssn-box">
           <div class="ssn-rh"><span class="is-on">Runs</span></div>

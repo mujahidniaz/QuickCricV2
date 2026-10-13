@@ -5156,10 +5156,15 @@ button.sc-ball { font: inherit; cursor: pointer; }
 .ssn-st em, .ssn-kp em { display: block; font-style: normal; font-size: 10px; font-weight: 800; margin-top: 2px; }
 .ssn-st em.is-up, .ssn-kp em.is-up { color: #7fe3a8; }
 .ssn-st em.is-dn, .ssn-kp em.is-dn { color: #ffb4a8; }
-.ssn-potm {
+.ssn-potm, .ssn-ocap {
   display: flex; align-items: center; gap: 12px; width: calc(100% - 28px); margin: 14px 14px 0;
-  background: #f2a900; color: #0a2118; border-radius: 24px; padding: 14px 16px; text-align: left;
+  border-radius: 24px; padding: 14px 16px; text-align: left;
 }
+.ssn-potm { background: #f2a900; color: #0a2118; }
+.ssn-ocap { margin-top: 8px; background: #fffdf7; color: #0a2118; border: 2px solid #f2a900; }
+.ssn-hero + .ssn-ocap { margin-top: 14px; }
+.ssn-ocap .ssn-im { border-left-color: rgba(242, 169, 0, 0.45); }
+.ssn-ocap .ssn-im b { color: #c9840a; }
 .ssn-tr { font-size: 36px; }
 .ssn-tx { flex: 1; min-width: 0; }
 .ssn-tx small, .ssn-im small { display: block; font-size: 10px; letter-spacing: 0.1em; font-weight: 800; text-transform: uppercase; }
