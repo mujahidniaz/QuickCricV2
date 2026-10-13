@@ -647,9 +647,10 @@
    * the new-player discount. These matches are shorter — usually 8 overs,
    * sometimes fewer — and sides are about 8 or 9 players, not 11. A fifty is
    * one third of a 20-over par total (150). The same share of an 8-over par
-   * total (60) is 20 runs, so 20 runs here is the 500-point innings. A full
-   * bowling spell is a quarter of the overs (2 out of 8), not the T20 quota of
-   * 4. A wicket is worth more when fewer wickets exist. The new-player rule is
+   * total (60) is 20 runs, so 20 runs here is the 500-point innings. Each
+   * bowler may bowl at most 2 overs in an innings, so those 2 overs are a full
+   * spell in a 5-, 6-, 7- or 8-over game, not the T20 quota of 4. A wicket is
+   * worth more when fewer wickets exist. The new-player rule is
    * unchanged: about 40% at first, 100% after 20 innings.
    *
    * Batting weighs runs, strike rate, the bowling attack's rating, how easy
@@ -662,6 +663,7 @@
   const ICC_PRIOR = 500;
   const ICC_DECAY = 0.97;
   const ICC_PAR_RPO = 7.5;
+  const ICC_MAX_BOWL_OVERS = 2;
 
   function iccClamp(n, lo, hi) {
     return Math.min(hi, Math.max(lo, n));
@@ -714,7 +716,7 @@
       // A T20 fifty is a third of a 150-run par innings. Same share of this game.
       const landmark = overs * 2.5;
       const pointsPerRun = 500 / landmark;
-      const fullSpell = Math.max(1, overs * 0.25);
+      const fullSpell = Math.min(ICC_MAX_BOWL_OVERS, overs);
       for (const inn of match.innings || []) {
         const innRuns = inn.score?.runs || 0;
         const innBalls = inn.score?.balls || 0;

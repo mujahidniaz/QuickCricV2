@@ -5183,7 +5183,7 @@ function renderPlayers() {
       </button>`;
   }
 
-  const iccNote = 'ICC rating, 0–1000, scaled to the overs played. About 18 runs in seven overs, or 20 in eight, is a 500 innings. Recent innings weigh more. Full rating after 20 innings.';
+  const iccNote = 'ICC rating, 0–1000, scaled to the overs played. About 18 runs in seven overs, or 20 in eight, is a 500 innings. A full bowling spell is 2 overs. Recent innings weigh more. Full rating after 20 innings.';
   const emptyRank = year === 'all' ? 'Nobody has batted or bowled yet.' : `Nobody has batted or bowled in ${year}.`;
   function iccListRow(row, rank, kind) {
     const tone = rank === 1 ? 'is-r1' : rank === 2 ? 'is-r2' : rank === 3 ? 'is-r3' : '';
@@ -5470,7 +5470,7 @@ function renderPlayerDetail() {
     ? (iccPlace >= 0 ? `<span class="bcc-rkb">#${iccPlace + 1} ${rankKind === 'bowl' ? 'bowl' : 'bat'} rank</span>` : '')
     : badge;
   const rankHtml = `
-    <p class="bcc-ranknote">ICC rating, 0–1000, scaled to the overs played. About 18 runs in seven overs, or 20 in eight, is a 500 innings. Recent innings weigh more. Full rating after 20 innings.</p>
+    <p class="bcc-ranknote">ICC rating, 0–1000, scaled to the overs played. About 18 runs in seven overs, or 20 in eight, is a 500 innings. A full bowling spell is 2 overs. Recent innings weigh more. Full rating after 20 innings.</p>
     <div class="bcc-plist">${iccBoard.length ? iccBoard.map((row, i) => {
       const tone = i === 0 ? 'is-r1' : i === 1 ? 'is-r2' : i === 2 ? 'is-r3' : '';
       const pct = Math.round(row.factor * 100);
