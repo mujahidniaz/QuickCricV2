@@ -5433,13 +5433,9 @@ function renderPlayerDetail() {
               ${years.map(y => `<button type="button" class="${season === y ? 'is-on' : ''}" data-action="player-season" data-year="${esc(y)}">${esc(y)}</button>`).join('')}
               <button type="button" class="${season === 'all' ? 'is-on' : ''}" data-action="player-season" data-year="all">All-time</button>
             </div>
-            <div class="ssn-id">
-              <div>
-                <h3 class="bcc-an">${esc(p.name)}</h3>
-                <p>${bat.innings} innings · ${bowl.wickets} wickets${season === 'all' ? '' : ' this season'}</p>
-              </div>
-              <div class="bcc-pbig bcc-an" aria-hidden="true">${esc((p.name || '?').trim().charAt(0).toUpperCase())}</div>
-            </div>
+            <div class="bcc-pbig bcc-an" aria-hidden="true">${esc((p.name || '?').trim().charAt(0).toUpperCase())}</div>
+            <h3 class="bcc-an">${esc(p.name)}</h3>
+            <p>${bat.innings} innings · ${bowl.wickets} wickets${season === 'all' ? '' : ' this season'}</p>
             <div class="bcc-kp ssn-kp">
               ${cardKpis.map(([val, label, delta]) => `<div><b class="bcc-an">${esc(String(val))}</b><small>${esc(label)}</small>${delta}</div>`).join('')}
             </div>
