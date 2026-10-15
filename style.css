@@ -3836,16 +3836,17 @@ input { background: var(--paper); }
 .bcc-colhead {
   display: flex;
   justify-content: flex-end;
-  gap: 6px;
-  margin-top: 12px;
-  padding-right: 14px;
+  align-items: center;
+  gap: 12px;
+  margin-top: 10px;
+  padding-right: 13px;
   font-size: 10px;
   font-weight: 800;
   letter-spacing: 0.1em;
   text-transform: uppercase;
   color: #6b766e;
 }
-.bcc-colhead span { min-width: 44px; text-align: center; }
+.bcc-colhead span { width: 48px; min-width: 48px; flex: none; text-align: center; }
 .bcc-plist { margin-top: 6px; display: flex; flex-direction: column; gap: 8px; padding-bottom: 8px; }
 .bcc-prow {
   display: flex;
@@ -3861,14 +3862,15 @@ input { background: var(--paper); }
 }
 .bcc-prow:active { transform: scale(0.98); }
 .bcc-av {
-  width: 44px;
-  height: 44px;
-  border-radius: 14px;
+  width: 40px;
+  height: 40px;
+  border-radius: 13px;
   background: #0a2118;
   color: #d9ff3f;
   display: grid;
   place-items: center;
-  font-size: 20px;
+  font-size: 18px;
+  line-height: 1;
   flex: none;
 }
 .bcc-prow.is-top .bcc-av { background: #f2a900; color: #0a2118; }
@@ -3876,14 +3878,21 @@ input { background: var(--paper); }
 .bcc-prow.is-r2 .bcc-av { background: #8a9590; color: #fffdf7; }
 .bcc-prow.is-r3 .bcc-av { background: #b0643a; color: #fffdf7; }
 .bcc-nm { flex: 1; min-width: 0; }
-.bcc-nm b { display: block; font-size: 15px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.bcc-nm small { font-size: 12px; color: #6b766e; font-weight: 600; }
-.bcc-chip {
-  min-width: 44px;
-  text-align: center;
-  padding: 6px 8px;
-  border-radius: 10px;
+.bcc-nm b { display: block; font-size: 16px; line-height: 1.15; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.bcc-nm small { display: block; margin-top: 2px; font-size: 12px; line-height: 1.2; color: #6b766e; font-weight: 600; }
+.bcc-prow .bcc-chip {
+  width: 48px;
+  min-width: 48px;
+  height: 40px;
+  box-sizing: border-box;
+  display: grid;
+  place-items: center;
+  padding: 0 4px;
+  border: 0;
+  border-radius: 13px;
   font-size: 18px;
+  line-height: 1;
+  cursor: inherit;
 }
 .bcc-chip.is-runs { background: rgba(242, 169, 0, 0.2); color: #a56a00; }
 .bcc-chip.is-wkts { background: rgba(31, 122, 77, 0.15); color: #1f7a4d; }
@@ -4218,7 +4227,8 @@ input { background: var(--paper); }
   scrollbar-width: none;
 }
 .bcc-chips::-webkit-scrollbar { display: none; }
-.bcc-chip {
+.bcc-chips .bcc-chip,
+.bcc-loc-chips .bcc-chip {
   position: relative;
   flex: none;
   border: 1.5px solid #e2dac6;
@@ -4665,17 +4675,22 @@ input { background: var(--paper); }
   margin: 16px 16px 0;
   border-radius: 28px;
 }
-.bcc-player .bcc-pcard h3 { margin-right: 118px; }
+.bcc-player .ssn-id { display: flex; align-items: center; gap: 12px; margin-top: 16px; }
+.bcc-player .ssn-id > div:first-child { flex: 1; min-width: 0; }
+.bcc-player .bcc-pcard h3 { margin: 0; font-size: 34px; line-height: 0.95; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.bcc-player .ssn-id p { margin-top: 4px; }
 .bcc-pcard.is-bowl { background: #d8432b; }
 .bcc-player .bcc-pbig {
-  width: auto;
-  height: auto;
-  top: 22px;
-  right: 12px;
-  display: block;
-  font-size: 128px;
-  line-height: 0.8;
-  overflow: visible;
+  position: static;
+  width: 58px;
+  height: 58px;
+  border-radius: 16px;
+  background: rgba(217, 255, 63, 0.16);
+  display: grid;
+  place-items: center;
+  font-size: 30px;
+  line-height: 1;
+  flex: none;
   pointer-events: none;
 }
 .bcc-pcard.is-bowl .bcc-pbig { color: #fff; }
@@ -5219,7 +5234,7 @@ button.sc-ball { font: inherit; cursor: pointer; }
 .ssn-sw { display: flex; gap: 4px; background: rgba(255, 255, 255, 0.1); border-radius: 99px; padding: 4px; width: max-content; max-width: 100%; overflow-x: auto; position: relative; z-index: 1; }
 .ssn-sw button { padding: 8px 14px; border-radius: 99px; font-size: 13px; font-weight: 800; color: #f1f5e9; }
 .ssn-sw button.is-on { background: #d9ff3f; color: #0a2118; }
-.bcc-player .bcc-pbig { top: 58px; font-size: 96px; }
+.bcc-player .bcc-pbig { width: 58px; height: 58px; font-size: 30px; }
 .bcc-player .ssn-kp { grid-template-columns: repeat(4, 1fr); }
 .ssn-form { display: flex; align-items: flex-end; gap: 3px; height: 104px; overflow-x: auto; }
 .ssn-form div { flex: 1; min-width: 16px; display: flex; flex-direction: column; justify-content: flex-end; align-items: center; height: 100%; font-size: 9px; font-weight: 800; gap: 2px; }
