@@ -728,6 +728,101 @@ function playerName(id) {
   return playerById(id)?.name || '';
 }
 
+function safePlayerPhoto(p) {
+  const src = typeof p?.photo === 'string' ? p.photo.trim() : '';
+  if (!/^data:image\/(?:jpeg|png|webp);base64,[a-z0-9+/=]+$/i.test(src)) return '';
+  if (src.length > 150000) return '';
+  return src;
+}
+
+function playerAvatarHtml(p, mark, cls = 'bcc-av') {
+  const src = safePlayerPhoto(p);
+  const letter = esc(String(mark || p?.name || '?').trim().charAt(0).toUpperCase() || '?');
+  if (!src) return `<span class="${cls} bcc-an">${letter}</span>`;
+  return `<span class="${cls} has-photo"><img src="${src}" alt=""></span>`;
+}
+
+function photoForCard(card) {
+  if (!card) return '';
+  const own = safePlayerPhoto(card);
+  if (own) return own;
+  const id = card.playerId || card.id;
+  if (id) {
+    const byId = safePlayerPhoto(playerById(id));
+    if (byId) return byId;
+  }
+  if (card.name && window.QCPlayers?.findByName) {
+    return safePlayerPhoto(window.QCPlayers.findByName(state.players, card.name));
+  }
+  return '';
+}
+
+function faceHtml(card) {
+  const src = photoForCard(card);
+  if (src) return `<img class="qc-face" src="${src}" alt="">`;
+  const name = String(card?.name || '').trim();
+  if (!name || name === '—') return '';
+  const letter = esc(name.charAt(0).toUpperCase());
+  return `<span class="qc-face is-letter" aria-hidden="true">${letter}</span>`;
+}
+
+function scorecardName(card, extra) {
+  const face = faceHtml(card);
+  const who = `<b>${esc(card?.name || '')}</b>${extra || ''}`;
+  if (!face) return who;
+  return `<span class="qc-who">${face}<span>${who}</span></span>`;
+}
+
+function portraitHtml(card) {
+  const src = photoForCard(card);
+  if (!src) return '';
+  return `<span class="ssn-ph"><img src="${src}" alt=""></span>`;
+}
+
+function setPlayerPhoto(id, photo) {
+  const p = playerById(id);
+  if (!p) return;
+  if (photo) p.photo = photo;
+  else delete p.photo;
+  p.updatedAt = Date.now();
+  if (state.playerDetail?.id === id) state.playerDetail = p;
+  savePlayersList(state.players);
+  showToast(photo ? 'Photo saved' : 'Photo removed');
+  render();
+}
+
+function compressPlayerPhoto(file) {
+  return new Promise((resolve, reject) => {
+    if (!file || !String(file.type || '').startsWith('image/')) {
+      reject(new Error('type'));
+      return;
+    }
+    const url = URL.createObjectURL(file);
+    const img = new Image();
+    img.onload = () => {
+      const size = 160;
+      const canvas = document.createElement('canvas');
+      canvas.width = size;
+      canvas.height = size;
+      const ctx = canvas.getContext('2d');
+      const side = Math.min(img.width, img.height) || 1;
+      ctx.drawImage(img, Math.max(0, (img.width - side) / 2), Math.max(0, (img.height - side) / 2), side, side, 0, 0, size, size);
+      URL.revokeObjectURL(url);
+      const out = canvas.toDataURL('image/jpeg', 0.72);
+      if (!out || out.length > 120000) {
+        reject(new Error('size'));
+        return;
+      }
+      resolve(out);
+    };
+    img.onerror = () => {
+      URL.revokeObjectURL(url);
+      reject(new Error('load'));
+    };
+    img.src = url;
+  });
+}
+
 function resolvePlayerId(name) {
   if (!window.QCPlayers) return null;
   return window.QCPlayers.findByName(state.players, name)?.id || null;
@@ -1840,14 +1935,13 @@ function renderScorePickCards(inn, isBatter) {
       (sp.pick.id && sp.pick.id === p.id) ||
       sp.pick.name?.toLowerCase() === p.name.toLowerCase()
     );
-    const initial = (p.name || '?').charAt(0).toUpperCase();
     return `
       <button type="button" class="sc-card${selected ? ' sc-sel' : ''}${reason ? ' sc-off' : ''}"
         data-action="${reason ? '' : action}"
         data-player-id="${esc(p.id)}"
         data-player-name="${esc(p.name)}"
         ${reason ? 'disabled' : ''}>
-        <span class="sc-av bcc-an">${selected ? '✓' : esc(initial)}</span>
+        ${selected ? '<span class="sc-av bcc-an">✓</span>' : playerAvatarHtml(p, '', 'sc-av')}
         <span class="sc-tx">
           <span class="sc-nm">${esc(p.name)}</span>
           <span class="sc-sub">${esc(reason || pickerCareerLine(p, mode, inn))}</span>
@@ -3068,7 +3162,7 @@ function renderHome() {
               <div><b class="bcc-an">${fmtNum(seasonBoard.wickets)}</b><small>Wickets</small></div>
             </div>
             <div class="bcc-sea-mo" aria-hidden="true">${monthBars}</div>
-            ${orange ? `<div class="bcc-sea-cap">Orange cap: <b>${esc(orange.name)}</b> · ${fmtNum(orange.batting.runs)} runs</div>` : ''}
+            ${orange ? `<div class="bcc-sea-cap">${portraitHtml(orange)}<span>Orange cap: <b>${esc(orange.name)}</b> · ${fmtNum(orange.batting.runs)} runs</span></div>` : ''}
           </button>
           <div class="bcc-grid">
             <button type="button" class="bcc-tile" data-action="history">
@@ -3186,15 +3280,15 @@ function renderTerms() {
         <p>QuickCric lets you keep score of informal cricket matches. There is no account, no sign-up, and no profile. You type team names, tap ball outcomes, and the app records the match.</p>
 
         <h2>2. No personal data collection</h2>
-        <p>We do not ask for, and we do not want, any personal data. We do not collect your name, email address, phone number, location, contacts, photos, or any identifier tied to you as a person.</p>
-        <p>You may type anything you like into team and player name fields while scoring &mdash; nicknames, jokes, single letters. We treat whatever you type as throwaway match labels, not as real-world identities, and we do not verify, profile, or contact anyone based on it. Please do not enter anyone&rsquo;s personal information that they have not agreed to share.</p>
+        <p>There is no account and no sign-up. We do not ask for your email address, phone number, location, or contacts.</p>
+        <p>You may type anything you like into team and player name fields while scoring &mdash; nicknames, jokes, single letters. A player can also add a photo on their profile. That photo is stored with the player name and anyone who opens this copy of the app can see it. Please do not add a photo of someone who has not agreed to it.</p>
 
         <h2>3. What gets stored, and where</h2>
         <p>To make the app work, the following is stored:</p>
         <ul>
           <li><strong>On your device</strong> &mdash; your current match and a cached list of recent matches are saved in your browser&rsquo;s local storage so you can close and reopen the app and pick up where you left off.</li>
           <li><strong>A device identifier</strong> &mdash; a random ID generated by your browser the first time you open the app. It is not linked to you, your hardware, or any account. It is only used so the app knows which device originally started a match, so that the &ldquo;Resume&rdquo; button on that device works correctly.</li>
-          <li><strong>In the cloud (optional)</strong> &mdash; if the person who deployed this copy of QuickCric has configured a Supabase backend, the match scorecard (teams, runs, balls, wickets, the names you typed in) is sent there so the match can be opened on another device or shared via a link. No identifiers about you are sent &mdash; only the match data itself plus the random device ID described above.</li>
+          <li><strong>In the cloud (optional)</strong> &mdash; if the person who deployed this copy of QuickCric has configured a Supabase backend, the match scorecard (teams, runs, balls, wickets, the names you typed in) and player profiles, including an optional photo, are sent there so the match can be opened on another device or shared via a link.</li>
         </ul>
         <p>You can clear everything stored on your device at any time by clearing your browser&rsquo;s site data for this app, or by uninstalling the PWA. Doing so will end any in-progress match on this device.</p>
 
@@ -3775,15 +3869,15 @@ function renderScore() {
             <button type="button" class="sc-rh" data-action="retire-hurt" ${canRetireHurt ? '' : 'disabled'}>Retire</button>
           </div></div>
           ${striker && !striker.out
-            ? `<div class="sc-br sc-on"><span>${esc(striker.name)} 🏏</span><b class="bcc-an">${striker.runs} <small>(${striker.balls})</small></b></div>`
+            ? `<div class="sc-br sc-on"><span>${faceHtml(striker)}${esc(striker.name)} 🏏</span><b class="bcc-an">${striker.runs} <small>(${striker.balls})</small></b></div>`
             : `<div class="sc-br sc-wait"><span>Pick next batter 🏏</span><b>—</b></div>`}
           ${nonStriker && !nonStriker.out
-            ? `<div class="sc-br"><span>${esc(nonStriker.name)}</span><b class="bcc-an">${nonStriker.runs} <small>(${nonStriker.balls})</small></b></div>`
+            ? `<div class="sc-br"><span>${faceHtml(nonStriker)}${esc(nonStriker.name)}</span><b class="bcc-an">${nonStriker.runs} <small>(${nonStriker.balls})</small></b></div>`
             : `<div class="sc-br sc-wait"><span>Pick next batter</span><b>—</b></div>`}
         </div>
         <div class="sc-cbox sc-bwx">
           <div class="sc-ch">Bowling</div>
-          <div class="sc-nm2">${esc(bowler?.name || '—')}</div>
+          <div class="sc-nm2">${faceHtml(bowler)}${esc(bowler?.name || '—')}</div>
           <div class="sc-st"><b class="bcc-an">${bowler ? fmtOvers(bowler.balls) : '0.0'}</b><small>${bowler ? `${bowler.runs}/${bowler.wickets}` : '0/0'}</small></div>
           <div class="sc-ec">Econ ${bowlEcon}</div>
         </div>
@@ -4137,15 +4231,15 @@ function renderSummaryTops(m) {
   return `
     <h2>Top performers</h2>
     <div class="bcc-top2">
-      ${topBat?.balls ? `<div class="bcc-tp"><small>Top scorer</small><b>${esc(topBat.name)}</b><div class="bcc-an">${topBat.runs} <span>(${topBat.balls})</span></div></div>` : '<div></div>'}
-      ${topBowl?.balls ? `<div class="bcc-tp"><small>Best bowler</small><b>${esc(topBowl.name)}</b><div class="bcc-an">${topBowl.wickets}/${topBowl.runs}</div></div>` : ''}
+      ${topBat?.balls ? `<div class="bcc-tp">${portraitHtml(topBat)}<div><small>Top scorer</small><b>${esc(topBat.name)}</b><div class="bcc-an">${topBat.runs} <span>(${topBat.balls})</span></div></div></div>` : '<div></div>'}
+      ${topBowl?.balls ? `<div class="bcc-tp">${portraitHtml(topBowl)}<div><small>Best bowler</small><b>${esc(topBowl.name)}</b><div class="bcc-an">${topBowl.wickets}/${topBowl.runs}</div></div></div>` : ''}
     </div>`;
 }
 
 function renderSummaryBatting(inn) {
   const rows = (inn.batters || []).map(b => {
     const how = howOutLabel(b);
-    return `<div class="bcc-tr"><span><b>${esc(b.name)}</b><small class="${how.notOut ? 'is-no' : ''}">${esc(how.text)}</small></span><span class="bcc-rn bcc-an">${b.runs}</span><span>${b.balls}</span><span>${b.fours}</span><span>${b.sixes}</span><span class="is-dot">${batterDotBalls(inn, b.name)}</span><span>${summaryStrikeRate(b.runs, b.balls)}</span></div>`;
+    return `<div class="bcc-tr"><span>${scorecardName(b, `<small class="${how.notOut ? 'is-no' : ''}">${esc(how.text)}</small>`)}</span><span class="bcc-rn bcc-an">${b.runs}</span><span>${b.balls}</span><span>${b.fours}</span><span>${b.sixes}</span><span class="is-dot">${batterDotBalls(inn, b.name)}</span><span>${summaryStrikeRate(b.runs, b.balls)}</span></div>`;
   }).join('');
   return `
     <div class="bcc-box">
@@ -4208,7 +4302,7 @@ function bowlingSpellRows(inn) {
 function renderSummaryBowling(inn) {
   const rows = bowlingSpellRows(inn).map(b => {
     const extra = bowlerExtraCounts(inn, b.name);
-    return `<div class="bcc-tr"><span><b>${esc(b.name)}</b></span><span>${fmtOvers(b.balls)}</span><span>${b.runs}</span><span class="bcc-rn bcc-an">${b.wickets}</span><span class="is-xw">${extra.wides}</span><span class="is-xw">${extra.noBalls}</span><span>${summaryEcon(b.balls, b.runs)}</span></div>`;
+    return `<div class="bcc-tr"><span>${scorecardName(b)}</span><span>${fmtOvers(b.balls)}</span><span>${b.runs}</span><span class="bcc-rn bcc-an">${b.wickets}</span><span class="is-xw">${extra.wides}</span><span class="is-xw">${extra.noBalls}</span><span>${summaryEcon(b.balls, b.runs)}</span></div>`;
   }).join('');
   return `
     <div class="bcc-box is-bowl">
@@ -4427,7 +4521,7 @@ function renderMatchAvailability() {
               <label class="bcc-prow${on ? ' is-on' : ''}">
                 <input type="checkbox" class="avail-check" data-player-id="${esc(p.id)}" ${on ? 'checked' : ''} />
                 <span class="bcc-cb" aria-hidden="true">✓</span>
-                <span class="bcc-av bcc-an">${esc(p.name.charAt(0).toUpperCase())}</span>
+                ${playerAvatarHtml(p)}
                 <span class="bcc-nm"><b>${esc(p.name)}</b><small>${p.batting.runs} runs · ${p.bowling.wickets} wkts · SR ${QP.batSR(p.batting)}</small></span>
               </label>`;
           }).join('') || '<p class="bcc-empty">No players match that search.</p>'}
@@ -4511,7 +4605,7 @@ function renderTeamPick() {
             const side = sideOf.get(p.id) || '';
             return `
               <div class="bcc-prow">
-                <span class="bcc-av bcc-an">${esc(p.name.charAt(0).toUpperCase())}</span>
+                ${playerAvatarHtml(p)}
                 <span class="bcc-nm"><b>${esc(p.name)}</b><small>${p.batting.runs} runs · ${p.bowling.wickets} wkts</small></span>
                 <span class="bcc-seg">
                   <button type="button" class="is-a${side === 'A' ? ' is-on' : ''}" data-action="assign-squad" data-player-id="${esc(p.id)}" data-side="A">${esc(markA)}</button>
@@ -4943,16 +5037,16 @@ function renderSeasons() {
         </div>
         ${board.potm ? `
           <button type="button" class="ssn-potm" data-action="view-player" data-player-id="${esc(board.potm.id)}" data-from="batting">
-            <span class="ssn-tr" aria-hidden="true">🏆</span>
+            ${portraitHtml(board.potm) || '<span class="ssn-tr" aria-hidden="true">🏆</span>'}
             <span class="ssn-tx">
               <small>Player of the season</small>
-              <b class="bcc-an">${esc(board.potm.name)}</b>
+              <b class="bcc-an">${faceHtml(board.potm)}${esc(board.potm.name)}</b>
               <span>${board.potm.awards} match award${board.potm.awards === 1 ? '' : 's'}</span>
               <span>${potmView?.bowling?.wickets || 0} wkts · ${potmView?.batting?.runs || 0} runs</span>
             </span>
             <span class="ssn-im"><b class="bcc-an">${Math.round(board.potm.score).toLocaleString('en-GB')}</b><small>Impact</small></span>
           </button>
-          ${board.impactRunners.length ? `<div class="ssn-runn">${board.impactRunners.map((p, i) => `<div><span>${i + 2} ${esc(p.name)}</span><em class="bcc-an">${Math.round(p.score).toLocaleString('en-GB')}</em></div>`).join('')}</div>` : ''}
+          ${board.impactRunners.length ? `<div class="ssn-runn">${board.impactRunners.map((p, i) => `<div><span>${i + 2} ${faceHtml(p)}${esc(p.name)}</span><em class="bcc-an">${Math.round(p.score).toLocaleString('en-GB')}</em></div>`).join('')}</div>` : ''}
         ` : ''}
         <div class="ssn-lab">Orange cap race <i>${board.flips ? `lead changed ${board.flips}×` : 'one leader so far'}</i></div>
         <div class="ssn-box">
@@ -4974,13 +5068,13 @@ function renderSeasons() {
           </button>
           ${head ? `
             <button type="button" class="ssn-ld" data-action="view-player" data-player-id="${esc(head.id)}" data-from="${leaders.tab === 'wickets' || leaders.tab === 'econ' ? 'bowling' : 'batting'}">
-              <span><span class="ssn-cp">${esc(cap)}</span><b class="bcc-an">${esc(head.name)}</b><span class="ssn-mn">${esc(headMeta)}</span></span>
+              ${portraitHtml(head)}<span><span class="ssn-cp">${esc(cap)}</span><b class="bcc-an">${faceHtml(head)}${esc(head.name)}</b><span class="ssn-mn">${esc(headMeta)}</span></span>
               <span class="ssn-bg bcc-an">${esc(String(leaders.figure(head)))}<small>${esc(leaders.unit)}</small></span>
             </button>
             ${leaders.rows.slice(1).map((p, i) => {
               const value = Number(leaders.figure(p)) || 0;
               const width = peak ? Math.max(6, Math.round((value / peak) * 100)) : 0;
-              return `<button type="button" class="ssn-lr" data-action="view-player" data-player-id="${esc(p.id)}" data-from="${leaders.tab === 'wickets' || leaders.tab === 'econ' ? 'bowling' : 'batting'}"><span class="k bcc-an">${i + 2}</span><span><b>${esc(p.name)}</b><i><u style="width:${width}%"></u></i></span><em class="bcc-an">${esc(String(leaders.figure(p)))}</em></button>`;
+              return `<button type="button" class="ssn-lr" data-action="view-player" data-player-id="${esc(p.id)}" data-from="${leaders.tab === 'wickets' || leaders.tab === 'econ' ? 'bowling' : 'batting'}"><span class="k bcc-an">${i + 2}</span><span><b>${faceHtml(p)}${esc(p.name)}</b><i><u style="width:${width}%"></u></i></span><em class="bcc-an">${esc(String(leaders.figure(p)))}</em></button>`;
             }).join('')}
           ` : '<p class="ssn-empty">Nobody has qualified yet.</p>'}
         </div>
@@ -4992,7 +5086,7 @@ function renderSeasons() {
         <div class="ssn-aw">
           ${awards.map(([icon, label, name, fig, id, from]) => `
             <button type="button" data-action="view-player" data-player-id="${esc(id)}" data-from="${from}">
-              <span>${icon}</span><small>${esc(label)}</small><b>${esc(name)}</b><em>${esc(fig)}</em>
+              <span>${icon}</span><small>${esc(label)}</small><b>${faceHtml({ id, name })}${esc(name)}</b><em>${esc(fig)}</em>
             </button>`).join('')}
         </div>
         <div class="ssn-lab">Records</div>
@@ -5157,7 +5251,7 @@ function renderPlayers() {
   function rosterRow(p) {
     return `
       <button type="button" class="bcc-prow" data-action="view-player" data-player-id="${esc(p.id)}" data-from="batting">
-        <span class="bcc-av bcc-an">${esc(p.name.charAt(0).toUpperCase())}</span>
+        ${playerAvatarHtml(p)}
         <span class="bcc-nm"><b>${esc(p.name)}</b><small>SR ${QP.batSR(p.batting)} · ${QP.fmtOvers(p.bowling.balls)} ov</small></span>
         <span class="bcc-chip is-runs bcc-an" title="Runs">${p.batting.runs}</span>
         <span class="bcc-chip is-wkts bcc-an" title="Wickets">${p.bowling.wickets}</span>
@@ -5433,9 +5527,15 @@ function renderPlayerDetail() {
               ${years.map(y => `<button type="button" class="${season === y ? 'is-on' : ''}" data-action="player-season" data-year="${esc(y)}">${esc(y)}</button>`).join('')}
               <button type="button" class="${season === 'all' ? 'is-on' : ''}" data-action="player-season" data-year="all">All-time</button>
             </div>
-            <div class="bcc-pbig bcc-an" aria-hidden="true">${esc((p.name || '?').trim().charAt(0).toUpperCase())}</div>
-            <h3 class="bcc-an">${esc(p.name)}</h3>
-            <p>${bat.innings} innings · ${bowl.wickets} wickets${season === 'all' ? '' : ' this season'}</p>
+            <div class="ssn-id">
+              <div>
+                <h3 class="bcc-an">${esc(p.name)}</h3>
+                <p>${bat.innings} innings · ${bowl.wickets} wickets${season === 'all' ? '' : ' this season'}</p>
+              </div>
+              ${safePlayerPhoto(p)
+                ? `<div class="bcc-ph"><img src="${safePlayerPhoto(p)}" alt=""></div>`
+                : `<div class="bcc-pbig bcc-an" aria-hidden="true">${esc((p.name || '?').trim().charAt(0).toUpperCase())}</div>`}
+            </div>
             <div class="bcc-kp ssn-kp">
               ${cardKpis.map(([val, label, delta]) => `<div><b class="bcc-an">${esc(String(val))}</b><small>${esc(label)}</small>${delta}</div>`).join('')}
             </div>
@@ -5452,6 +5552,9 @@ function renderPlayerDetail() {
         <div class="bcc-wrap bcc-statbody">
           ${body}
           <div class="bcc-player-actions">
+            <button type="button" data-action="player-photo" data-player-id="${esc(p.id)}">${safePlayerPhoto(p) ? 'Change photo' : 'Add photo'}</button>
+            ${safePlayerPhoto(p) ? `<button type="button" data-action="player-photo-clear" data-player-id="${esc(p.id)}">Remove photo</button>` : ''}
+            <input id="player-photo-input" type="file" accept="image/*" hidden />
             <button type="button" data-action="edit-player-name" data-player-id="${esc(p.id)}">Edit name</button>
             <button type="button" class="is-danger" data-action="delete-player" data-player-id="${esc(p.id)}">Remove player</button>
           </div>
@@ -6146,6 +6249,12 @@ function handle(action, dataset) {
       render();
       break;
     }
+    case 'player-photo':
+      $('player-photo-input')?.click();
+      break;
+    case 'player-photo-clear':
+      setPlayerPhoto(dataset.playerId, '');
+      break;
     case 'edit-player-name': {
       const p = playerById(dataset.playerId);
       if (!p) break;
@@ -7188,6 +7297,16 @@ document.addEventListener('DOMContentLoaded', () => {
   });
 
   app.addEventListener('change', (e) => {
+    if (e.target?.id === 'player-photo-input') {
+      const file = e.target.files && e.target.files[0];
+      e.target.value = '';
+      const id = state.playerDetail?.id;
+      if (!file || !id) return;
+      compressPlayerPhoto(file)
+        .then(url => setPlayerPhoto(id, url))
+        .catch(() => showToast('Could not use that photo'));
+      return;
+    }
     if (e.target.classList?.contains('avail-check')) {
       const id = e.target.dataset.playerId;
       if (!id) return;
