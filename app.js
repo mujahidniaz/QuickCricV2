@@ -773,6 +773,20 @@ function scorecardName(card, extra) {
   return `<span class="qc-who">${face}<span>${who}</span></span>`;
 }
 
+function scorecardFaceName(card) {
+  const face = faceHtml(card);
+  const who = `<b>${esc(card?.name || '')}</b>`;
+  if (!face) return who;
+  return `<span class="qc-who">${face}<span>${who}</span></span>`;
+}
+
+function seasonLeaderFaceName(p) {
+  const face = faceHtml(p);
+  const who = `<b>${esc(p.name)}</b>`;
+  if (!face) return who;
+  return `<span class="qc-who">${face}<span>${who}</span></span>`;
+}
+
 function portraitHtml(card) {
   const src = photoForCard(card);
   if (!src) return '';
@@ -4311,7 +4325,7 @@ function bowlingSpellRows(inn) {
 function renderSummaryBowling(inn) {
   const rows = bowlingSpellRows(inn).map(b => {
     const extra = bowlerExtraCounts(inn, b.name);
-    return `<div class="bcc-tr"><span>${scorecardName(b)}</span><span>${fmtOvers(b.balls)}</span><span>${b.runs}</span><span class="bcc-rn bcc-an">${b.wickets}</span><span class="is-xw">${extra.wides}</span><span class="is-xw">${extra.noBalls}</span><span>${summaryEcon(b.balls, b.runs)}</span></div>`;
+    return `<div class="bcc-tr bcc-tr--bowl"><span>${scorecardFaceName(b)}</span><span>${fmtOvers(b.balls)}</span><span>${b.runs}</span><span class="bcc-rn bcc-an">${b.wickets}</span><span class="is-xw">${extra.wides}</span><span class="is-xw">${extra.noBalls}</span><span>${summaryEcon(b.balls, b.runs)}</span></div>`;
   }).join('');
   return `
     <div class="bcc-box is-bowl">
@@ -5046,16 +5060,22 @@ function renderSeasons() {
         </div>
         ${board.potm ? `
           <button type="button" class="ssn-potm" data-action="view-player" data-player-id="${esc(board.potm.id)}" data-from="batting">
-            ${portraitHtml(board.potm) || '<span class="ssn-tr" aria-hidden="true">🏆</span>'}
+            ${summaryPortraitHtml(board.potm) || '<span class="ssn-tr" aria-hidden="true">🏆</span>'}
             <span class="ssn-tx">
               <small>Player of the season</small>
-              <b class="bcc-an">${faceHtml(board.potm)}${esc(board.potm.name)}</b>
+              <b class="bcc-an">${esc(board.potm.name)}</b>
               <span>${board.potm.awards} match award${board.potm.awards === 1 ? '' : 's'}</span>
               <span>${potmView?.bowling?.wickets || 0} wkts · ${potmView?.batting?.runs || 0} runs</span>
             </span>
             <span class="ssn-im"><b class="bcc-an">${Math.round(board.potm.score).toLocaleString('en-GB')}</b><small>Impact</small></span>
           </button>
-          ${board.impactRunners.length ? `<div class="ssn-runn">${board.impactRunners.map((p, i) => `<div><span>${i + 2} ${faceHtml(p)}${esc(p.name)}</span><em class="bcc-an">${Math.round(p.score).toLocaleString('en-GB')}</em></div>`).join('')}</div>` : ''}
+          ${board.impactRunners.length ? `<div class="ssn-runners-stack">${board.impactRunners.map((p, i) => `
+            <button type="button" class="ssn-runner" data-action="view-player" data-player-id="${esc(p.id)}" data-from="batting">
+              <span class="ssn-runner-r bcc-an">${i + 2}</span>
+              ${summaryPortraitHtml(p)}
+              <span class="ssn-runner-tx"><b class="bcc-an">${esc(p.name)}</b><small>Season impact</small></span>
+              <em class="bcc-an">${Math.round(p.score).toLocaleString('en-GB')}</em>
+            </button>`).join('')}</div>` : ''}
         ` : ''}
         <div class="ssn-lab">Orange cap race <i>${board.flips ? `lead changed ${board.flips}×` : 'one leader so far'}</i></div>
         <div class="ssn-box">
@@ -5077,13 +5097,13 @@ function renderSeasons() {
           </button>
           ${head ? `
             <button type="button" class="ssn-ld" data-action="view-player" data-player-id="${esc(head.id)}" data-from="${leaders.tab === 'wickets' || leaders.tab === 'econ' ? 'bowling' : 'batting'}">
-              ${portraitHtml(head)}<span><span class="ssn-cp">${esc(cap)}</span><b class="bcc-an">${faceHtml(head)}${esc(head.name)}</b><span class="ssn-mn">${esc(headMeta)}</span></span>
+              ${summaryPortraitHtml(head)}<span class="ssn-ld-tx"><span class="ssn-cp">${esc(cap)}</span><b class="bcc-an">${esc(head.name)}</b><span class="ssn-mn">${esc(headMeta)}</span></span>
               <span class="ssn-bg bcc-an">${esc(String(leaders.figure(head)))}<small>${esc(leaders.unit)}</small></span>
             </button>
             ${leaders.rows.slice(1).map((p, i) => {
               const value = Number(leaders.figure(p)) || 0;
               const width = peak ? Math.max(6, Math.round((value / peak) * 100)) : 0;
-              return `<button type="button" class="ssn-lr" data-action="view-player" data-player-id="${esc(p.id)}" data-from="${leaders.tab === 'wickets' || leaders.tab === 'econ' ? 'bowling' : 'batting'}"><span class="k bcc-an">${i + 2}</span><span><b>${faceHtml(p)}${esc(p.name)}</b><i><u style="width:${width}%"></u></i></span><em class="bcc-an">${esc(String(leaders.figure(p)))}</em></button>`;
+              return `<button type="button" class="ssn-lr" data-action="view-player" data-player-id="${esc(p.id)}" data-from="${leaders.tab === 'wickets' || leaders.tab === 'econ' ? 'bowling' : 'batting'}"><span class="k bcc-an">${i + 2}</span><span class="ssn-lr-body">${seasonLeaderFaceName(p)}<i><u style="width:${width}%"></u></i></span><em class="bcc-an">${esc(String(leaders.figure(p)))}</em></button>`;
             }).join('')}
           ` : '<p class="ssn-empty">Nobody has qualified yet.</p>'}
         </div>
