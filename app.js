@@ -779,6 +779,14 @@ function portraitHtml(card) {
   return `<span class="ssn-ph"><img src="${src}" alt=""></span>`;
 }
 
+function summaryPortraitHtml(card) {
+  const src = photoForCard(card);
+  if (src) return `<span class="ssn-ph"><img src="${src}" alt=""></span>`;
+  const name = String(card?.name || '').trim();
+  if (!name || name === '—') return '';
+  return `<span class="ssn-ph is-letter bcc-an" aria-hidden="true">${esc(name.charAt(0).toUpperCase())}</span>`;
+}
+
 function setPlayerPhoto(id, photo) {
   const p = playerById(id);
   if (!p) return;
@@ -4231,8 +4239,8 @@ function renderSummaryTops(m) {
   return `
     <h2>Top performers</h2>
     <div class="bcc-top2">
-      ${topBat?.balls ? `<div class="bcc-tp">${portraitHtml(topBat)}<div><small>Top scorer</small><b>${esc(topBat.name)}</b><div class="bcc-an">${topBat.runs} <span>(${topBat.balls})</span></div></div></div>` : '<div></div>'}
-      ${topBowl?.balls ? `<div class="bcc-tp">${portraitHtml(topBowl)}<div><small>Best bowler</small><b>${esc(topBowl.name)}</b><div class="bcc-an">${topBowl.wickets}/${topBowl.runs}</div></div></div>` : ''}
+      ${topBat?.balls ? `<div class="bcc-tp">${summaryPortraitHtml(topBat)}<div><small>Top scorer</small><b>${esc(topBat.name)}</b><div class="bcc-an">${topBat.runs} <span>(${topBat.balls})</span></div></div></div>` : '<div></div>'}
+      ${topBowl?.balls ? `<div class="bcc-tp">${summaryPortraitHtml(topBowl)}<div><small>Best bowler</small><b>${esc(topBowl.name)}</b><div class="bcc-an">${topBowl.wickets}/${topBowl.runs}</div></div></div>` : ''}
     </div>`;
 }
 
