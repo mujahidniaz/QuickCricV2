@@ -4742,6 +4742,23 @@ function playerRunsInMatch(match, player) {
   return { faced, runs, sixes };
 }
 
+function playerBowlInMatch(match, player) {
+  let wickets = 0;
+  let runs = 0;
+  let balls = 0;
+  let bowled = false;
+  for (const inn of match.innings || []) {
+    for (const b of inn.bowlers || []) {
+      if (!samePlayerCard(b, player)) continue;
+      bowled = true;
+      wickets += Number(b.wickets) || 0;
+      runs += Number(b.runs) || 0;
+      balls += Number(b.balls) || 0;
+    }
+  }
+  return { bowled, wickets, runs, balls };
+}
+
 function seasonDelta(now, prev, asPercent) {
   if (prev == null || Number.isNaN(Number(prev))) return '';
   const d = Number(now) - Number(prev);
@@ -5250,6 +5267,7 @@ function renderPlayers() {
   const tab = state.playersTab || 'roster';
   const batRanked = QP.battingRankings(list);
   const bowlRanked = QP.bowlingRankings(list);
+  const icc = QP.iccRankings ? QP.iccRankings(state.players, completedSeasonMatches(year)) : { batting: [], bowling: [] };
   const rosterSorted = [...list].sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }));
 
   const tabs = [
@@ -5257,6 +5275,12 @@ function renderPlayers() {
     { id: 'batting', label: 'Batting', count: batRanked.length },
     { id: 'bowling', label: 'Bowling', count: bowlRanked.length },
   ];
+  const rankTabs = [
+    { id: 'bat-rank', label: 'Bat rank', count: icc.batting.length },
+    { id: 'bowl-rank', label: 'Bowl rank', count: icc.bowling.length },
+  ];
+  const iccNote = 'ICC rating, 0–1000, scaled to the overs played. About 18 runs in seven overs, or 20 in eight, is a 500 innings. A full bowling spell is 2 overs. Recent innings weigh more. Full rating after 20 innings.';
+  const emptyRank = year === 'all' ? 'Nobody has batted or bowled yet.' : `Nobody has batted or bowled in ${year}.`;
 
   function statRow(p, rank, kind) {
     const qualified = kind === 'bowl' ? QP.bowlingQualifies(p.bowling) : QP.battingQualifies(p.batting);
@@ -5287,6 +5311,18 @@ function renderPlayers() {
       </button>`;
   }
 
+  function iccListRow(row, rank, kind) {
+    const tone = rank === 1 ? 'is-r1' : rank === 2 ? 'is-r2' : rank === 3 ? 'is-r3' : '';
+    const pct = Math.round(row.factor * 100);
+    const line = pct >= 100 ? `${row.innings} inns · full rating` : `${row.innings} inns · ${pct}% weight`;
+    return `
+      <button type="button" class="bcc-prow ${tone}" data-action="view-player" data-player-id="${esc(row.id)}" data-from="${kind === 'bowl' ? 'bowl-rank' : 'bat-rank'}">
+        <span class="bcc-av bcc-an">${rank}</span>
+        <span class="bcc-nm${faceHtml(row) ? ' has-face' : ''}">${faceHtml(row)}<b>${esc(row.name)}</b><small>${esc(line)}</small></span>
+        <span class="bcc-chip ${kind === 'bowl' ? 'is-wkts' : 'is-runs'} bcc-an" title="ICC rating">${row.rating}</span>
+      </button>`;
+  }
+
   let tableBody = '';
   if (tab === 'roster') {
     tableBody = rosterSorted.length
@@ -5295,11 +5331,19 @@ function renderPlayers() {
   } else if (tab === 'batting') {
     tableBody = batRanked.length
       ? batRanked.map((p, i) => statRow(p, i + 1, 'bat')).join('')
-      : `<div class="players-empty players-empty--compact"><p>No batting stats — finish a match first</p></div>`;
-  } else {
+      : `<div class="players-empty players-empty--compact"><p>${emptyRank}</p></div>`;
+  } else if (tab === 'bowling') {
     tableBody = bowlRanked.length
       ? bowlRanked.map((p, i) => statRow(p, i + 1, 'bowl')).join('')
-      : `<div class="players-empty players-empty--compact"><p>No bowling stats — finish a match first</p></div>`;
+      : `<div class="players-empty players-empty--compact"><p>${emptyRank}</p></div>`;
+  } else if (tab === 'bat-rank') {
+    tableBody = icc.batting.length
+      ? icc.batting.map((row, i) => iccListRow(row, i + 1, 'bat')).join('')
+      : '<div class="players-empty players-empty--compact"><p>No batting ratings in this view yet.</p></div>';
+  } else {
+    tableBody = icc.bowling.length
+      ? icc.bowling.map((row, i) => iccListRow(row, i + 1, 'bowl')).join('')
+      : '<div class="players-empty players-empty--compact"><p>No bowling ratings in this view yet.</p></div>';
   }
 
   return `
@@ -5325,9 +5369,19 @@ function renderPlayers() {
               </button>
             `).join('')}
           </div>
+          <div class="bcc-seg is-rank" role="tablist">
+            ${rankTabs.map(t => `
+              <button type="button" role="tab" aria-selected="${tab === t.id}"
+                class="${tab === t.id ? 'is-on' : ''}"
+                data-action="players-tab" data-tab="${t.id}">
+                ${esc(t.label)}<small>${t.count}</small>
+              </button>
+            `).join('')}
+          </div>
           ${tab === 'roster' && rosterSorted.length ? `<div class="bcc-colhead"><span>Runs</span><span>Wkts</span></div>` : ''}
           ${tab === 'batting' && batRanked.length ? `<div class="bcc-colhead"><span>Runs</span></div>` : ''}
           ${tab === 'bowling' && bowlRanked.length ? `<div class="bcc-colhead"><span>Wkts</span></div>` : ''}
+          ${(tab === 'bat-rank' && icc.batting.length) || (tab === 'bowl-rank' && icc.bowling.length) ? `<p class="bcc-ranknote">${esc(iccNote)}</p><div class="bcc-colhead"><span>Pts</span></div>` : ''}
           <div class="bcc-plist">${tableBody}</div>
         </div>
       </div>
@@ -5453,16 +5507,13 @@ function renderPlayerDetail() {
   const share = bat.teamRuns ? Math.round(Math.min(1, bat.runs / bat.teamRuns) * 100) : 0;
   const stood = bowl.innings ? Math.round(((bowl.stoodUp || 0) / bowl.innings) * 100) : 0;
   const bestPos = QP.bestBattingPosition(bat);
-  const clubRuns = rankedPool.reduce((s, pl) => s + (pl.batting?.runs || 0), 0);
-  const clubWkts = rankedPool.reduce((s, pl) => s + (pl.bowling?.wickets || 0), 0);
-  const runPct = clubRuns ? Math.round((bat.runs / clubRuns) * 100) : 0;
-  const wktPct = clubWkts ? Math.round((bowl.wickets / clubWkts) * 100) : 0;
-  const batRank = rankedPool.filter(pl => (pl.batting?.runs || 0) > bat.runs).length + 1;
-  const bowlRank = rankedPool.filter(pl => (pl.bowling?.wickets || 0) > bowl.wickets).length + 1;
-  const statTab = state.playerStatTab === 'bowl' ? 'bowl' : 'bat';
-  const batting = statTab !== 'bowl';
-  const hasBat = (bat.runs || 0) > 0;
-  const hasBowl = (bowl.wickets || 0) > 0;
+  const statTab = state.playerStatTab === 'bowl' || state.playerStatTab === 'bat-rank' || state.playerStatTab === 'bowl-rank'
+    ? state.playerStatTab
+    : 'bat';
+  const rankKind = statTab === 'bat-rank' ? 'bat' : statTab === 'bowl-rank' ? 'bowl' : '';
+  const batting = !rankKind && statTab !== 'bowl';
+  const hasBat = (bat.innings || 0) > 0 || (bat.runs || 0) > 0;
+  const hasBowl = (bowl.innings || 0) > 0 || (bowl.balls || 0) > 0;
   const hiPos = bestPos ? positions.findIndex(item => String(item.label) === String(bestPos.pos)) : -1;
   const hiOver = overs.reduce((best, item, i) => (item.value > (overs[best]?.value || 0) ? i : best), 0);
   const kpis = batting
@@ -5494,9 +5545,42 @@ function renderPlayerDetail() {
   const capPool = season !== 'all' && QP.playerInSeason ? state.players.map(pl => QP.playerInSeason(pl, season)) : state.players;
   const capLeader = QP.battingRankings(capPool)[0];
   const holdsCap = season !== 'all' && capLeader && capLeader.id === p.id && (capLeader.batting?.runs || 0) > 0;
+  const purpleLeader = QP.bowlingRankings(capPool)[0];
+  const holdsPurple = season !== 'all' && purpleLeader && purpleLeader.id === p.id && (purpleLeader.bowling?.wickets || 0) > 0;
+  const batBoard = QP.battingRankings(rankedPool);
+  const bowlBoard = QP.bowlingRankings(rankedPool);
+  const batPlace = batBoard.findIndex(pl => pl.id === p.id);
+  const bowlPlace = bowlBoard.findIndex(pl => pl.id === p.id);
   const badge = batting
-    ? (hasBat ? `<span class="bcc-rkb">#${batRank} run scorer</span>` : '')
-    : (hasBowl ? `<span class="bcc-rkb">#${bowlRank} wicket taker</span>` : '');
+    ? (batPlace >= 0
+      ? `<span class="bcc-rkb">#${batPlace + 1} batting</span>`
+      : (hasBat ? `<span class="bcc-rkb">${bat.innings}/${QP.MIN_QUALIFY_INNINGS} inns to rank</span>` : ''))
+    : (bowlPlace >= 0
+      ? `<span class="bcc-rkb">#${bowlPlace + 1} bowling</span>`
+      : (hasBowl ? `<span class="bcc-rkb">${bowl.innings}/${QP.MIN_QUALIFY_INNINGS} inns to rank</span>` : ''));
+  const icc = QP.iccRankings ? QP.iccRankings(state.players, completedSeasonMatches(season)) : { batting: [], bowling: [] };
+  const iccBoard = rankKind === 'bowl' ? icc.bowling : icc.batting;
+  const iccPlace = iccBoard.findIndex(row => row.id === p.id);
+  const iccRow = iccPlace >= 0 ? iccBoard[iccPlace] : null;
+  const headerKpis = rankKind
+    ? [
+      [iccRow ? iccRow.rating : '—', 'Rating', ''],
+      [iccPlace >= 0 ? iccPlace + 1 : '—', 'Rank', ''],
+      [iccRow ? iccRow.innings : 0, 'Inns', ''],
+      [iccRow ? `${Math.round(iccRow.factor * 100)}%` : '—', 'Weight', ''],
+    ]
+    : cardKpis;
+  const shownBadge = rankKind
+    ? (iccPlace >= 0 ? `<span class="bcc-rkb">#${iccPlace + 1} ${rankKind === 'bowl' ? 'bowl' : 'bat'} rank</span>` : '')
+    : badge;
+  const rankHtml = `
+    <p class="bcc-ranknote">ICC rating, 0–1000, scaled to the overs played. About 18 runs in seven overs, or 20 in eight, is a 500 innings. A full bowling spell is 2 overs. Recent innings weigh more. Full rating after 20 innings.</p>
+    <div class="bcc-plist">${iccBoard.length ? iccBoard.map((row, i) => {
+      const tone = i === 0 ? 'is-r1' : i === 1 ? 'is-r2' : i === 2 ? 'is-r3' : '';
+      const pct = Math.round(row.factor * 100);
+      const line = pct >= 100 ? `${row.innings} inns · full rating` : `${row.innings} inns · ${pct}% weight`;
+      return `<button type="button" class="bcc-prow ${tone}${row.id === p.id ? ' is-me' : ''}" data-action="view-player" data-player-id="${esc(row.id)}" data-from="${rankKind === 'bowl' ? 'bowl-rank' : 'bat-rank'}"><span class="bcc-av bcc-an">${i + 1}</span><span class="bcc-nm${faceHtml(row) ? ' has-face' : ''}">${faceHtml(row)}<b>${esc(row.name)}</b><small>${esc(line)}</small></span><span class="bcc-chip ${rankKind === 'bowl' ? 'is-wkts' : 'is-runs'} bcc-an">${row.rating}</span></button>`;
+    }).join('') : '<div class="bcc-bx bcc-emp">No rated players in this view yet.</div>'}</div>`;
   const body = batting
     ? (hasBat ? `
         ${renderCssRings([
@@ -5525,7 +5609,7 @@ function renderPlayerDetail() {
           </div>` : ''}
         ${balls ? `<div class="bcc-bx"><h4>Balls faced</h4>${renderStatDonut(ballMix, 'Balls')}</div>` : ''}
         ${positions.length ? `<div class="bcc-bx"><h4>Runs by batting position</h4><div class="bcc-sub">Highlighted = their best slot</div>${renderHighlightBars(positions, hiPos, '#f2a900', 'Batting position')}</div>` : ''}
-      ` : `<div class="bcc-bx bcc-emp">No runs yet — get out there!</div>`)
+      ` : `<div class="bcc-bx bcc-emp">No batting yet.</div>`)
     : (hasBowl ? `
         ${renderFactTiles([
           [QP.bowlAvg(bowl), 'Average'],
@@ -5541,7 +5625,8 @@ function renderPlayerDetail() {
           { pct: bowlWin, color: '#1f7a4d', label: `${bowl.wins || 0} of ${bowl.innings} spells won` },
           { pct: stood, color: '#d8432b', label: `${bowl.stoodUp || 0} spells led the attack` },
         ])}
-      ` : `<div class="bcc-bx bcc-emp">No wickets yet — get out there!</div>`);
+      ` : `<div class="bcc-bx bcc-emp">No bowling yet.</div>`);
+  const photo = safePlayerPhoto(p);
   return `
     <div class="screen bcc-player">
       <div class="bcc-top">
@@ -5550,7 +5635,7 @@ function renderPlayerDetail() {
       </div>
       <div class="bcc-art"></div>
       <div class="bcc-scroll">
-        <div class="bcc-pcard">
+        <div class="bcc-pcard${statTab === 'bowl' || statTab === 'bowl-rank' ? ' is-bowl' : ''}${photo ? ' is-photo' : ''}">
           <div class="bcc-pcard-in">
             <div class="ssn-sw">
               ${years.map(y => `<button type="button" class="${season === y ? 'is-on' : ''}" data-action="player-season" data-year="${esc(y)}">${esc(y)}</button>`).join('')}
@@ -5560,29 +5645,35 @@ function renderPlayerDetail() {
               <div>
                 <h3 class="bcc-an">${esc(p.name)}</h3>
                 <p>${bat.innings} innings · ${bowl.wickets} wickets${season === 'all' ? '' : ' this season'}</p>
+                ${shownBadge}
               </div>
-              ${safePlayerPhoto(p)
-                ? `<div class="bcc-ph"><img src="${safePlayerPhoto(p)}" alt=""></div>`
+              ${photo
+                ? `<div class="bcc-ph"><img src="${photo}" alt=""></div>`
                 : `<div class="bcc-pbig bcc-an" aria-hidden="true">${esc((p.name || '?').trim().charAt(0).toUpperCase())}</div>`}
             </div>
             <div class="bcc-kp ssn-kp">
-              ${cardKpis.map(([val, label, delta]) => `<div><b class="bcc-an">${esc(String(val))}</b><small>${esc(label)}</small>${delta}</div>`).join('')}
+              ${headerKpis.map(([val, label, delta]) => `<div><b class="bcc-an">${esc(String(val))}</b><small>${esc(label)}</small>${delta}</div>`).join('')}
             </div>
           </div>
           <div class="bcc-art"></div>
         </div>
-        ${formHtml}
-        ${seasonTable ? `<div class="bcc-bx ssn-table"><h4>Season by season</h4><div class="ssn-tb is-head"><span>Season</span><span>Inn</span><span>Runs</span><span>Avg</span><span>SR</span><span>Wkt</span></div>${seasonTable}<div class="ssn-tb is-all"><b>All-time</b><span>${QP.battingView(raw.batting).innings}</span><span class="r bcc-an">${QP.battingView(raw.batting).runs}</span><span>${esc(String(QP.batAvg(raw.batting)))}</span><span>${esc(String(QP.batSR(raw.batting)))}</span><span>${QP.bowlingView(raw.bowling).wickets}</span></div></div>` : ''}
-        ${holdsCap ? `<div class="ssn-capnote"><span>🟠</span><span><b>Orange cap ${esc(season)}</b>Top run-scorer of the season so far</span></div>` : ''}
         <div class="bcc-tabs2">
-          <button type="button" class="${batting ? 'is-on' : ''}" data-action="player-stat-tab" data-tab="bat">🏏 Batting</button>
-          <button type="button" class="${batting ? '' : 'is-on'}" data-action="player-stat-tab" data-tab="bowl">🔴 Bowling</button>
+          <button type="button" class="${statTab === 'bat' ? 'is-on' : ''}" data-action="player-stat-tab" data-tab="bat">🏏 Batting</button>
+          <button type="button" class="${statTab === 'bowl' ? 'is-on' : ''}" data-action="player-stat-tab" data-tab="bowl">🔴 Bowling</button>
+        </div>
+        <div class="bcc-tabs2 is-rank">
+          <button type="button" class="${statTab === 'bat-rank' ? 'is-on' : ''}" data-action="player-stat-tab" data-tab="bat-rank">Bat rank</button>
+          <button type="button" class="${statTab === 'bowl-rank' ? 'is-on' : ''}" data-action="player-stat-tab" data-tab="bowl-rank">Bowl rank</button>
         </div>
         <div class="bcc-wrap bcc-statbody">
-          ${body}
+          ${!rankKind && batting && holdsCap ? `<div class="ssn-capnote"><span>🟠</span><span><b>Orange cap ${esc(season)}</b>Top run-scorer of the season so far</span></div>` : ''}
+          ${!rankKind && !batting && holdsPurple ? `<div class="ssn-capnote is-purple"><span>🟣</span><span><b>Purple cap ${esc(season)}</b>Leads the bowling board this season</span></div>` : ''}
+          ${rankKind ? '' : formHtml}
+          ${rankKind ? '' : (seasonTable ? `<div class="bcc-bx ssn-table"><h4>Season by season</h4><div class="ssn-tb is-head"><span>Season</span><span>Inn</span><span>Runs</span><span>Avg</span><span>SR</span><span>Wkt</span></div>${seasonTable}<div class="ssn-tb is-all"><b>All-time</b><span>${QP.battingView(raw.batting).innings}</span><span class="r bcc-an">${QP.battingView(raw.batting).runs}</span><span>${esc(String(QP.batAvg(raw.batting)))}</span><span>${esc(String(QP.batSR(raw.batting)))}</span><span>${QP.bowlingView(raw.bowling).wickets}</span></div></div>` : '')}
+          ${rankKind ? rankHtml : body}
           <div class="bcc-player-actions">
-            <button type="button" data-action="player-photo" data-player-id="${esc(p.id)}">${safePlayerPhoto(p) ? 'Change photo' : 'Add photo'}</button>
-            ${safePlayerPhoto(p) ? `<button type="button" data-action="player-photo-clear" data-player-id="${esc(p.id)}">Remove photo</button>` : ''}
+            <button type="button" data-action="player-photo" data-player-id="${esc(p.id)}">${photo ? 'Change photo' : 'Add photo'}</button>
+            ${photo ? `<button type="button" data-action="player-photo-clear" data-player-id="${esc(p.id)}">Remove photo</button>` : ''}
             <input id="player-photo-input" type="file" accept="image/*" hidden />
             <button type="button" data-action="edit-player-name" data-player-id="${esc(p.id)}">Edit name</button>
             <button type="button" class="is-danger" data-action="delete-player" data-player-id="${esc(p.id)}">Remove player</button>
@@ -6259,7 +6350,10 @@ function handle(action, dataset) {
       const p = playerById(dataset.playerId);
       if (p) {
         state.playerDetail = p;
-        state.playerStatTab = dataset.from === 'bowling' ? 'bowl' : 'bat';
+        state.playerStatTab = dataset.from === 'bowling' ? 'bowl'
+          : dataset.from === 'bat-rank' ? 'bat-rank'
+          : dataset.from === 'bowl-rank' ? 'bowl-rank'
+          : 'bat';
         state.playerFrom = state.view === 'seasons' ? 'seasons' : 'players';
         state.playerSeason = activeSeason();
         state.view = 'player-detail';
@@ -6268,7 +6362,9 @@ function handle(action, dataset) {
       break;
     }
     case 'player-stat-tab':
-      state.playerStatTab = dataset.tab === 'bowl' ? 'bowl' : 'bat';
+      state.playerStatTab = dataset.tab === 'bowl' || dataset.tab === 'bat-rank' || dataset.tab === 'bowl-rank'
+        ? dataset.tab
+        : 'bat';
       render();
       break;
     case 'delete-player': {
