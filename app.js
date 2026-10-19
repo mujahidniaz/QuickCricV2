@@ -5513,9 +5513,6 @@ function renderPlayerDetail() {
   const hasBowl = (bowl.innings || 0) > 0 || (bowl.balls || 0) > 0;
   const hiPos = bestPos ? positions.findIndex(item => String(item.label) === String(bestPos.pos)) : -1;
   const hiOver = overs.reduce((best, item, i) => (item.value > (overs[best]?.value || 0) ? i : best), 0);
-  const kpis = batting
-    ? [[bat.runs, 'Runs'], [QP.batSR(bat), 'Strike rate'], [`${runPct}%`, 'Of club runs']]
-    : [[bowl.wickets, 'Wickets'], [QP.fmtOvers(bowl.balls), 'Overs'], [`${wktPct}%`, 'Of club wkts']];
   const prevYear = season !== 'all' ? String(Number(season) - 1) : '';
   const prevView = prevYear && years.includes(prevYear) && QP.playerInSeason ? QP.playerInSeason(raw, prevYear) : null;
   const prevBat = prevView && QP.battingView ? QP.battingView(prevView.batting) : null;
