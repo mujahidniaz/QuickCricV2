@@ -2,8 +2,8 @@
 name: quickcric-push
 description: >-
   QuickCricV2 (BCC cricket PWA) architecture, file map, state, stats APIs, and
-  GitHub push workflow. Use for any QuickCric feature work, UI fixes, season or
-  player stats, ICC ranks, photos, scoring, or when the user says push/deploy.
+  GitHub push workflow. Use for any QuickCric work; always commit and push to
+  main when done — never wait for the user to ask.
 ---
 
 # QuickCric (QuickCricV2 / BCC)
@@ -91,8 +91,8 @@ Player objects: `{ id, name, data?, batting: {...}, bowling: {...}, photo? }` �
 ## Players list tabs (`state.playersTab`)
 
 1. **Roster** — alphabetical, avatars  
-2. **Batting** / **Bowling** — qualified leaderboard (min innings)  
-3. **Bat rank** / **Bowl rank** — second row `bcc-seg is-rank`; ICC list + `bcc-ranknote`
+2. **Batting** / **Bowling** — sorted by **total runs** / **total wickets**; row number = list position (avg/SR or econ/avg subtitle). No min-innings gate.  
+3. **Bat rank** / **Bowl rank** — second row `bcc-seg is-rank`; **ICC** rating order only
 
 ## Player detail tabs (`state.playerStatTab`)
 
@@ -136,10 +136,12 @@ Player objects: `{ id, name, data?, batting: {...}, bowling: {...}, photo? }` �
 
 ## Push & deploy
 
-### When the user asks to push
+**Always push** after finishing QuickCric work in a session when there are shippable changes — do **not** wait for the user to say “push”. (This repo overrides the generic “commit only when asked” rule.)
+
+### End-of-task push (default)
 
 1. **Inspect** — `git status`, `git diff`, `git log -5 --oneline` (parallel).
-2. **Commit** in this turn (user requested push).
+2. **Commit** when `app.js`, `style.css`, `players.js`, `sw.js`, `index.html`, or this skill changed.
 3. **Stage** app sources + `.cursor/skills/` when updated. **Never** commit:
    - `.DS_Store`
    - `data/*upload*`, `data/*.fixed.json`, local CSV/JSON dumps
@@ -168,5 +170,6 @@ When architecture, remotes, or push steps change, update this file and add a **C
 
 ## Changelog
 
+- 2026-10-20 — Auto-push after every completed task; no need to ask user.
 - 2026-10-20 — App map: views, QCPlayers, ICC rank tabs, photos, data/sync, UI conventions.
 - 2026-10-20 — Initial skill: SSH push, SW cache bump, commit exclusions.

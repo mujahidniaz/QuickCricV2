@@ -5283,20 +5283,17 @@ function renderPlayers() {
   const emptyRank = year === 'all' ? 'Nobody has batted or bowled yet.' : `Nobody has batted or bowled in ${year}.`;
 
   function statRow(p, rank, kind) {
-    const qualified = kind === 'bowl' ? QP.bowlingQualifies(p.bowling) : QP.battingQualifies(p.batting);
-    const inns = kind === 'bowl' ? (p.bowling.innings || 0) : (p.batting.innings || 0);
     const line = kind === 'bowl'
-      ? `${QP.bowlingWicketsPerInnings(p.bowling).toFixed(2)} wkts/inns · Econ ${QP.bowlEcon(p.bowling)}`
-      : `${QP.battingRunsPerInnings(p.batting).toFixed(1)} runs/inns · SR ${QP.batSR(p.batting)}`;
-    const note = qualified ? line : `Not ranked yet · ${inns}/${QP.MIN_QUALIFY_INNINGS} inns`;
+      ? `Econ ${QP.bowlEcon(p.bowling)} · Avg ${QP.bowlAvg(p.bowling)}`
+      : `Avg ${QP.batAvg(p.batting)} · SR ${QP.batSR(p.batting)}`;
     const chip = kind === 'bowl'
       ? `<span class="bcc-chip is-wkts bcc-an" title="Wickets">${p.bowling.wickets}</span>`
       : `<span class="bcc-chip is-runs bcc-an" title="Runs">${p.batting.runs}</span>`;
-    const tone = !qualified ? '' : rank === 1 ? 'is-r1' : rank === 2 ? 'is-r2' : rank === 3 ? 'is-r3' : '';
+    const tone = rank === 1 ? 'is-r1' : rank === 2 ? 'is-r2' : rank === 3 ? 'is-r3' : '';
     return `
       <button type="button" class="bcc-prow ${tone}" data-action="view-player" data-player-id="${esc(p.id)}" data-from="${kind === 'bowl' ? 'bowling' : 'batting'}">
-        <span class="bcc-av bcc-an">${qualified ? rank : '–'}</span>
-        <span class="bcc-nm"><b>${esc(p.name)}</b><small>${esc(note)}</small></span>
+        <span class="bcc-av bcc-an">${rank}</span>
+        <span class="bcc-nm"><b>${esc(p.name)}</b><small>${esc(line)}</small></span>
         ${chip}
       </button>`;
   }
@@ -5552,12 +5549,8 @@ function renderPlayerDetail() {
   const batPlace = batBoard.findIndex(pl => pl.id === p.id);
   const bowlPlace = bowlBoard.findIndex(pl => pl.id === p.id);
   const badge = batting
-    ? (batPlace >= 0
-      ? `<span class="bcc-rkb">#${batPlace + 1} batting</span>`
-      : (hasBat ? `<span class="bcc-rkb">${bat.innings}/${QP.MIN_QUALIFY_INNINGS} inns to rank</span>` : ''))
-    : (bowlPlace >= 0
-      ? `<span class="bcc-rkb">#${bowlPlace + 1} bowling</span>`
-      : (hasBowl ? `<span class="bcc-rkb">${bowl.innings}/${QP.MIN_QUALIFY_INNINGS} inns to rank</span>` : ''));
+    ? (batPlace >= 0 && hasBat ? `<span class="bcc-rkb">#${batPlace + 1} by runs</span>` : '')
+    : (bowlPlace >= 0 && hasBowl ? `<span class="bcc-rkb">#${bowlPlace + 1} by wickets</span>` : '');
   const icc = QP.iccRankings ? QP.iccRankings(state.players, completedSeasonMatches(season)) : { batting: [], bowling: [] };
   const iccBoard = rankKind === 'bowl' ? icc.bowling : icc.batting;
   const iccPlace = iccBoard.findIndex(row => row.id === p.id);
